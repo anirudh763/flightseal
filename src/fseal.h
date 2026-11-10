@@ -1,0 +1,71 @@
+// FlightSeal: an evidence seal for drone flight logs.
+// Append-only records, each with a CRC-32 (catches accidental damage) and a SHA-256 link
+// to the previous record (catches deliberate edits). Signed receipts (see below) catch a
+// holder who rewrites the whole file.
+#pragma once
+#include <array>
+#include <cstddef>
+#include <cstdint>
+#include <map>
+#include <string>
+#include <string_view>
+
+namespace fseal {
+
+using Hash = std::array<uint8_t, 32>;
+
+uint32_t crc32(const void* data, size_t n, uint32_t crc = 0);  // IEEE 802.3, same as zlib
+Hash sha256(std::string_view data);
+// link(i) = SHA-256(link(i-1) || seq || timestamp || length || payload), integers little-endian.
+Hash link(const Hash& prev, uint64_t seq, uint64_t timestamp_us, std::string_view payload);
+std::string hex(const uint8_t* p, size_t n);
+
+// File layout: "FLTSEAL1", then records. Each record (integers little-endian):
+//   u32 length | u64 seq | u64 timestamp_us | payload | link (32 bytes) | u32 crc32 of everything before it
+constexpr std::string_view kMagic = "FLTSEAL1";
+constexpr size_t kRecordHeader = 4 + 8 + 8;
+constexpr size_t kRecordTrailer = 32 + 4;
+constexpr uint32_t kMaxPayload = 1u << 20;
+
+enum class Status { Ok, TornTail, BadHeader, BadLength, BadCrc, BadSeq, BadLink, IoError };
+const char* describe(Status s);
+
+struct ScanResult {
+  Status status = Status::Ok;
+  uint64_t records = 0;         // records that passed every check, counted from the start
+  uint64_t good_bytes = 0;      // file offset just past the last good record
+  Hash head{};                  // link of the last good record (all zero for an empty log)
+  uint64_t time_reversals = 0;  // timestamps lower than the previous one: reported, never trusted
+};
+
+// Reads the log from the start and stops at the first problem. If `links_at` is given, each key
+// is a record count and gets the link of the record that brings the log to that count.
+ScanResult scan(const std::string& path, std::map<uint64_t, Hash>* links_at = nullptr);
+
+// Trims a torn final record left by a crash. Anything else (a bad record in the middle, a
+// complete final record with a bad checksum) is evidence: it is reported and never truncated.
+ScanResult recover(const std::string& path, uint64_t* trimmed_bytes);
+
+class Writer {
+ public:
+  // Creates the log, or opens it after recover(); throws if the log has any other problem.
+  explicit Writer(const std::string& path);
+  ~Writer();
+  Writer(const Writer&) = delete;
+  Writer& operator=(const Writer&) = delete;
+
+  void append(uint64_t timestamp_us, std::string_view payload);
+  void sync();  // writes buffered records, then fsync: records appended before sync() survive a crash
+  uint64_t count() const { return count_; }
+  const Hash& head() const { return head_; }
+  uint64_t trimmed_bytes() const { return trimmed_; }
+
+ private:
+  int fd_ = -1;
+  std::string buf_;
+  uint64_t count_ = 0;
+  Hash head_{};
+  uint64_t trimmed_ = 0;
+};
+
+}  // namespace fseal
