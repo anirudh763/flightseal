@@ -124,3 +124,12 @@ def test_px4_flight_seals_and_an_altitude_edit_is_caught(fseal_bin, sample_ulg, 
     tamper.edit_field(log, tmp_path / "t.fseal", record=n, field="z", delta=10.0, fix_crc=True)
     r = verify(fseal_bin, tmp_path / "t.fseal", rec, pub)
     assert r.returncode == 1 and first_problem(r.stdout) == ("bad-link", n)
+
+
+def test_receipts_past_a_damaged_record_are_not_blamed_on_deletion(fseal_bin, tmp_path):
+    log, rec, pub = seal(fseal_bin, tmp_path)
+    tamper.flip_bit(log, tmp_path / "t.fseal", record=2)
+    r = verify(fseal_bin, tmp_path / "t.fseal", rec, pub)
+    assert r.returncode == 1 and first_problem(r.stdout) == ("bad-crc", 2)
+    assert "removed from the end" not in r.stdout
+    assert "cannot be checked past the first problem" in r.stdout

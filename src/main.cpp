@@ -146,8 +146,12 @@ int verify(const std::string& log, const std::vector<std::pair<std::string, std:
     std::cout << "  first problem  record " << s.records << ", byte " << s.good_bytes << ": " << describe(s.status) << " ["
               << token(s.status) << "]\n";
   if (!list.empty()) {
-    uint64_t covered = 0, failed = 0;
+    uint64_t covered = 0, failed = 0, unchecked = 0;
     for (size_t i = 0; i < list.size(); ++i) {
+      if (s.status != Status::Ok && list[i].count > s.records) {  // the log is already broken before this point
+        ++unchecked;
+        continue;
+      }
       ReceiptCheck c = check_receipt(list[i], trusted, s, links);
       if (c == ReceiptCheck::Ok) {
         covered = std::max(covered, list[i].count);
@@ -156,8 +160,9 @@ int verify(const std::string& log, const std::vector<std::pair<std::string, std:
       if (failed++ == 0)
         std::cout << "  receipt " << (i + 1) << " (count " << list[i].count << "): " << describe(c) << "\n";
     }
-    std::cout << "  receipts     " << list.size() - failed << " of " << list.size() << " match";
-    if (failed == 0) std::cout << "; " << s.records - covered << " record(s) after the last receipt are not covered";
+    std::cout << "  receipts     " << list.size() - failed - unchecked << " of " << list.size() << " match";
+    if (unchecked) std::cout << "; " << unchecked << " cannot be checked past the first problem";
+    else if (failed == 0) std::cout << "; " << s.records - covered << " record(s) after the last receipt are not covered";
     std::cout << "\n";
     bad = bad || failed > 0;
   }
