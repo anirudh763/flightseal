@@ -20,6 +20,10 @@ add_library(fseal src/fseal.cpp)
 target_include_directories(fseal PUBLIC src)
 target_link_libraries(fseal PUBLIC OpenSSL::Crypto)
 
+add_executable(fseal-cli src/main.cpp)
+set_target_properties(fseal-cli PROPERTIES OUTPUT_NAME fseal)
+target_link_libraries(fseal-cli fseal)
+
 enable_testing()
 add_executable(fseal-tests tests/test_fseal.cpp)
 target_link_libraries(fseal-tests fseal)

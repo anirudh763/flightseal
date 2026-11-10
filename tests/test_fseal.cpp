@@ -330,6 +330,47 @@ TEST(full_rewrite_passes_the_chain_but_fails_the_receipt) {
   CHECK(check(r, public_key(key), forged) == ReceiptCheck::HeadMismatch);
 }
 
+// ---- crashes -------------------------------------------------------------------------------
+#include <signal.h>
+#include <sys/wait.h>
+
+#include <random>
+
+// A child process appends and syncs records, acknowledging each one through a pipe. The parent
+// kills it with SIGKILL at a random moment. Every acknowledged record must survive, and the log
+// must open cleanly afterwards (recovery may trim at most the record that was in flight).
+TEST(kill_9_never_loses_an_acknowledged_record) {
+  std::mt19937 rng(20261110);
+  for (int round = 0; round < 25; ++round) {
+    std::string p = temp_path("kill");
+    int fds[2];
+    CHECK(pipe(fds) == 0);
+    pid_t child = fork();
+    if (child == 0) {
+      close(fds[0]);
+      Writer w(p);
+      for (uint64_t i = 0;; ++i) {
+        w.append(i, std::string(64 + i % 200, 'x'));
+        w.sync();
+        if (write(fds[1], &i, sizeof i) != sizeof i) _exit(1);
+      }
+    }
+    close(fds[1]);
+    uint64_t target = std::uniform_int_distribution<uint64_t>(1, 150)(rng), acked = 0, i = 0;
+    while (acked < target && read(fds[0], &i, sizeof i) == sizeof i) acked = i + 1;
+    kill(child, SIGKILL);
+    waitpid(child, nullptr, 0);
+    while (read(fds[0], &i, sizeof i) == sizeof i) acked = i + 1;  // acks already in the pipe
+    close(fds[0]);
+    uint64_t trimmed = 0;
+    ScanResult r = recover(p, &trimmed);
+    CHECK(r.status == Status::Ok);
+    CHECK(r.records >= acked && r.records <= acked + 1);
+    { Writer again(p); again.append(1, "after the crash"); }
+    CHECK(scan(p).status == Status::Ok);
+  }
+}
+
 int main(int argc, char** argv) {
   for (const Test& t : registry()) {
     if (argc > 1 && std::string(argv[1]) != t.name) continue;
