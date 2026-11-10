@@ -7,3 +7,4 @@ __pycache__/
 .pytest_cache/
 demo-out/
 tests/.data/
+build-release/

@@ -1,0 +1,29 @@
+name: ci
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libssl-dev libsqlite3-dev
+          pip install pyulog==1.3.0 pytest
+      - name: Build with AddressSanitizer and UndefinedBehaviorSanitizer
+        run: |
+          cmake -S . -B build -DFSEAL_SANITIZE=ON -DCMAKE_BUILD_TYPE=Debug
+          cmake --build build -j
+      - name: C++ tests (format, tampering, receipts, kill -9 crashes)
+        run: ctest --test-dir build --output-on-failure
+      - name: Python tests (CLI, independent reader, real PX4 flight)
+        run: python -m pytest -q
+      - name: Demo on a real PX4 flight
+        run: tools/demo.sh
