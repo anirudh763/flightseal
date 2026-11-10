@@ -68,4 +68,33 @@ class Writer {
   uint64_t trimmed_ = 0;
 };
 
+// ---- Receipts ------------------------------------------------------------------------------
+// The holder of a log can rewrite it and recompute every link, so the chain alone proves little.
+// A receipt is a signed statement "after N records the head link was H". It is handed to someone
+// else (an investigator, the operator's company, a regulator) when it is made; their copy is what
+// a later rewrite cannot match.
+using PublicKey = std::array<uint8_t, 32>;  // Ed25519
+using Signature = std::array<uint8_t, 64>;
+
+struct Receipt {
+  uint64_t count = 0;
+  Hash head{};
+  PublicKey key{};
+  Signature sig{};
+};
+
+void generate_key(const std::string& pem_path);  // Ed25519 private key, PEM, file mode 0600
+PublicKey public_key(const std::string& pem_path);
+Receipt sign_receipt(const std::string& pem_path, uint64_t count, const Hash& head);
+bool signature_ok(const Receipt& r);  // checks the signature against the key inside the receipt
+std::string to_line(const Receipt& r);
+bool parse_line(const std::string& line, Receipt* out);
+bool parse_hex(std::string_view text, uint8_t* out, size_t n);
+
+enum class ReceiptCheck { Ok, WrongKey, BadSignature, LogShorter, HeadMismatch };
+const char* describe(ReceiptCheck c);
+// `links` comes from scan(path, &links) with the receipt's count as a key.
+ReceiptCheck check_receipt(const Receipt& r, const PublicKey& trusted, const ScanResult& log,
+                           const std::map<uint64_t, Hash>& links);
+
 }  // namespace fseal

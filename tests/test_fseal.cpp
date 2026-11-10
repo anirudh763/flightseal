@@ -258,6 +258,78 @@ TEST(timestamps_going_backwards_are_counted_not_rejected) {
   CHECK(r.time_reversals == 1);
 }
 
+// ---- receipts ------------------------------------------------------------------------------
+
+static std::string key_path(const char* tag) {
+  std::string p = temp_path(tag) + ".pem";
+  generate_key(p);
+  return p;
+}
+static ReceiptCheck check(const Receipt& r, const PublicKey& trusted, const std::string& log) {
+  std::map<uint64_t, Hash> links{{r.count, {}}};
+  ScanResult s = scan(log, &links);
+  return check_receipt(r, trusted, s, links);
+}
+
+TEST(receipt_round_trips_through_its_text_line) {
+  std::string key = key_path("rt");
+  Receipt r = sign_receipt(key, 7, sha256("head"));
+  Receipt back;
+  CHECK(parse_line(to_line(r), &back));
+  CHECK(back.count == 7 && back.head == r.head && back.key == r.key && back.sig == r.sig);
+  CHECK(!parse_line("fseal-receipt v1 count=7", &back));
+}
+
+TEST(signature_breaks_if_any_field_changes) {
+  std::string key = key_path("sig");
+  Receipt r = sign_receipt(key, 7, sha256("head"));
+  CHECK(signature_ok(r));
+  Receipt c = r; c.count = 8; CHECK(!signature_ok(c));
+  Receipt h = r; h.head[0] ^= 1; CHECK(!signature_ok(h));
+  Receipt s = r; s.sig[5] ^= 1; CHECK(!signature_ok(s));
+}
+
+TEST(receipt_from_another_key_is_rejected) {
+  std::string mine = key_path("mine"), theirs = key_path("theirs");
+  std::string log = make_log("otherkey", 3);
+  Receipt r = sign_receipt(theirs, 3, scan(log).head);
+  CHECK(check(r, public_key(mine), log) == ReceiptCheck::WrongKey);
+  CHECK(check(r, public_key(theirs), log) == ReceiptCheck::Ok);
+}
+
+TEST(untouched_log_matches_receipts_taken_along_the_way) {
+  std::string key = key_path("along");
+  std::string log = make_log("along", 10);
+  std::map<uint64_t, Hash> links{{4, {}}, {10, {}}};
+  scan(log, &links);
+  CHECK(check(sign_receipt(key, 4, links[4]), public_key(key), log) == ReceiptCheck::Ok);
+  CHECK(check(sign_receipt(key, 10, links[10]), public_key(key), log) == ReceiptCheck::Ok);
+}
+
+TEST(tail_deletion_passes_the_chain_but_fails_the_receipt) {
+  std::string key = key_path("tail");
+  std::string log = make_log("tail", 10);
+  Receipt r = sign_receipt(key, 10, scan(log).head);
+  std::string s = read_file(log);
+  write_file(log, s.substr(0, record_offsets(s)[7]));  // drop the last 3 whole records
+  CHECK(scan(log).status == Status::Ok);             // the chain alone cannot see this
+  CHECK(check(r, public_key(key), log) == ReceiptCheck::LogShorter);
+}
+
+TEST(full_rewrite_passes_the_chain_but_fails_the_receipt) {
+  std::string key = key_path("rewrite");
+  std::string log = make_log("rewrite", 10);
+  Receipt r = sign_receipt(key, 10, scan(log).head);
+  std::string forged = temp_path("forged");
+  {
+    Writer w(forged);  // the holder rebuilds the log with one altitude lowered
+    for (int i = 0; i < 10; ++i)
+      w.append(1000u * (i + 1), "{\"t\":\"vehicle_local_position\",\"z\":-" + std::to_string(i == 4 ? 4 : 10 + i) + ".5}");
+  }
+  CHECK(scan(forged).status == Status::Ok);
+  CHECK(check(r, public_key(key), forged) == ReceiptCheck::HeadMismatch);
+}
+
 int main(int argc, char** argv) {
   for (const Test& t : registry()) {
     if (argc > 1 && std::string(argv[1]) != t.name) continue;

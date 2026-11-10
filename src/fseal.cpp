@@ -2,13 +2,17 @@
 
 #include <fcntl.h>
 #include <openssl/evp.h>
+#include <openssl/pem.h>
 #include <sys/stat.h>
 #include <unistd.h>
 
 #include <cerrno>
+#include <cstdio>
 #include <cstring>
 #include <fstream>
 #include <iterator>
+#include <memory>
+#include <sstream>
 #include <stdexcept>
 
 namespace fseal {
@@ -210,6 +214,132 @@ void Writer::sync() {
   write_all(fd_, buf_.data(), buf_.size());
   buf_.clear();
   if (::fsync(fd_) != 0) throw std::runtime_error(std::string("fsync failed: ") + std::strerror(errno));
+}
+
+// ---- receipts ----------------------------------------------------------------------------
+
+namespace {
+struct PkeyDeleter { void operator()(EVP_PKEY* k) const { EVP_PKEY_free(k); } };
+struct MdCtxDeleter { void operator()(EVP_MD_CTX* c) const { EVP_MD_CTX_free(c); } };
+using Pkey = std::unique_ptr<EVP_PKEY, PkeyDeleter>;
+using MdCtx = std::unique_ptr<EVP_MD_CTX, MdCtxDeleter>;
+
+Pkey load_private_key(const std::string& pem_path) {
+  FILE* f = std::fopen(pem_path.c_str(), "r");
+  if (!f) throw std::runtime_error(pem_path + ": " + std::strerror(errno));
+  Pkey k(PEM_read_PrivateKey(f, nullptr, nullptr, nullptr));
+  std::fclose(f);
+  if (!k || EVP_PKEY_id(k.get()) != EVP_PKEY_ED25519) throw std::runtime_error(pem_path + ": not an Ed25519 private key");
+  return k;
+}
+
+// The signed bytes: a fixed label, then count and head, so a signature can't be reused elsewhere.
+std::string signed_message(uint64_t count, const Hash& head) {
+  std::string m = "fseal-receipt v1";
+  put_le(m, count, 8);
+  m.append(reinterpret_cast<const char*>(head.data()), head.size());
+  return m;
+}
+}  // namespace
+
+void generate_key(const std::string& pem_path) {
+  EVP_PKEY_CTX* ctx = EVP_PKEY_CTX_new_id(EVP_PKEY_ED25519, nullptr);
+  EVP_PKEY* raw = nullptr;
+  bool ok = ctx && EVP_PKEY_keygen_init(ctx) == 1 && EVP_PKEY_keygen(ctx, &raw) == 1;
+  EVP_PKEY_CTX_free(ctx);
+  Pkey k(raw);
+  if (!ok) throw std::runtime_error("Ed25519 key generation failed");
+  int fd = ::open(pem_path.c_str(), O_WRONLY | O_CREAT | O_EXCL, 0600);  // never overwrite a key
+  if (fd < 0) throw std::runtime_error(pem_path + ": " + std::strerror(errno));
+  FILE* f = ::fdopen(fd, "w");
+  ok = f && PEM_write_PrivateKey(f, k.get(), nullptr, nullptr, 0, nullptr, nullptr) == 1;
+  if (f) std::fclose(f); else ::close(fd);
+  if (!ok) throw std::runtime_error(pem_path + ": could not write key");
+}
+
+PublicKey public_key(const std::string& pem_path) {
+  Pkey k = load_private_key(pem_path);
+  PublicKey pub{};
+  size_t len = pub.size();
+  EVP_PKEY_get_raw_public_key(k.get(), pub.data(), &len);
+  return pub;
+}
+
+Receipt sign_receipt(const std::string& pem_path, uint64_t count, const Hash& head) {
+  Pkey k = load_private_key(pem_path);
+  Receipt r;
+  r.count = count;
+  r.head = head;
+  size_t len = r.key.size();
+  EVP_PKEY_get_raw_public_key(k.get(), r.key.data(), &len);
+  std::string m = signed_message(count, head);
+  MdCtx ctx(EVP_MD_CTX_new());
+  size_t sig_len = r.sig.size();
+  if (!ctx || EVP_DigestSignInit(ctx.get(), nullptr, nullptr, nullptr, k.get()) != 1 ||
+      EVP_DigestSign(ctx.get(), r.sig.data(), &sig_len, reinterpret_cast<const uint8_t*>(m.data()), m.size()) != 1)
+    throw std::runtime_error("signing failed");
+  return r;
+}
+
+bool signature_ok(const Receipt& r) {
+  Pkey k(EVP_PKEY_new_raw_public_key(EVP_PKEY_ED25519, nullptr, r.key.data(), r.key.size()));
+  MdCtx ctx(EVP_MD_CTX_new());
+  std::string m = signed_message(r.count, r.head);
+  return k && ctx && EVP_DigestVerifyInit(ctx.get(), nullptr, nullptr, nullptr, k.get()) == 1 &&
+         EVP_DigestVerify(ctx.get(), r.sig.data(), r.sig.size(), reinterpret_cast<const uint8_t*>(m.data()), m.size()) == 1;
+}
+
+std::string to_line(const Receipt& r) {
+  return "fseal-receipt v1 count=" + std::to_string(r.count) + " head=" + hex(r.head.data(), r.head.size()) +
+         " key=" + hex(r.key.data(), r.key.size()) + " sig=" + hex(r.sig.data(), r.sig.size());
+}
+
+bool parse_hex(std::string_view text, uint8_t* out, size_t n) {
+  if (text.size() != 2 * n) return false;
+  auto nibble = [](char c) { return c >= '0' && c <= '9' ? c - '0' : c >= 'a' && c <= 'f' ? c - 'a' + 10 : -1; };
+  for (size_t i = 0; i < n; ++i) {
+    int hi = nibble(text[2 * i]), lo = nibble(text[2 * i + 1]);
+    if (hi < 0 || lo < 0) return false;
+    out[i] = static_cast<uint8_t>(hi << 4 | lo);
+  }
+  return true;
+}
+
+bool parse_line(const std::string& line, Receipt* out) {
+  std::istringstream in(line);
+  std::string tag, version, count, head, key, sig;
+  if (!(in >> tag >> version >> count >> head >> key >> sig) || tag != "fseal-receipt" || version != "v1") return false;
+  auto value = [](const std::string& field, const char* name) -> std::string_view {
+    std::string_view f(field), n(name);
+    return f.substr(0, n.size()) == n ? f.substr(n.size()) : std::string_view();
+  };
+  std::string_view c = value(count, "count=");
+  if (c.empty() || c.find_first_not_of("0123456789") != std::string_view::npos) return false;
+  out->count = std::stoull(std::string(c));
+  return parse_hex(value(head, "head="), out->head.data(), out->head.size()) &&
+         parse_hex(value(key, "key="), out->key.data(), out->key.size()) &&
+         parse_hex(value(sig, "sig="), out->sig.data(), out->sig.size());
+}
+
+const char* describe(ReceiptCheck c) {
+  switch (c) {
+    case ReceiptCheck::Ok: return "matches the log";
+    case ReceiptCheck::WrongKey: return "signed by a different key than the one you trust";
+    case ReceiptCheck::BadSignature: return "signature invalid (the receipt itself was altered)";
+    case ReceiptCheck::LogShorter: return "log is shorter than the receipt (records were removed from the end)";
+    case ReceiptCheck::HeadMismatch: return "log does not match the receipt (it was rewritten after the receipt was issued)";
+  }
+  return "unknown";
+}
+
+ReceiptCheck check_receipt(const Receipt& r, const PublicKey& trusted, const ScanResult& log,
+                           const std::map<uint64_t, Hash>& links) {
+  if (r.key != trusted) return ReceiptCheck::WrongKey;
+  if (!signature_ok(r)) return ReceiptCheck::BadSignature;
+  if (r.count > log.records) return ReceiptCheck::LogShorter;
+  auto it = links.find(r.count);
+  Hash at = r.count == 0 ? Hash{} : (it == links.end() ? Hash{} : it->second);
+  return at == r.head ? ReceiptCheck::Ok : ReceiptCheck::HeadMismatch;
 }
 
 std::string hex(const uint8_t* p, size_t n) {
