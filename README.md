@@ -50,6 +50,30 @@ RESULT: TAMPERED
 Attack 2 is the reason receipts exist: whoever holds the file can always rebuild a self-consistent chain. What they
 cannot change is the receipts someone else already holds.
 
+## Check a log in your browser
+
+**[Open the verifier](https://anirudh763.github.io/flightseal/)**: drop a sealed log, and optionally its receipts and
+the public key you trust. It runs in the page with the browser's WebCrypto (SHA-256, Ed25519); files are read
+locally and never uploaded.
+
+![The verifier on the tampered sample: the chain breaks at record 150, expected and stored link side by side](docs/screenshots/verifier-tampered.png)
+
+- It opens on a built-in sample with one altitude changed by 10 m. It shows the first record where the chain breaks,
+  the expected and stored link, and a paged list of every record checked. Three more samples: the intact log, a full
+  rewrite that only the receipts catch, and a log with its last 150 records deleted that only the receipts catch.
+  They are a synthetic 8-second flight (800 records) sealed by the real CLI with
+  [`tools/make_web_samples.py`](tools/make_web_samples.py).
+- It reports three things separately: whether the hash chain is consistent (no key needed), which records are
+  covered by receipts signed by the key you trust, and which records come after the last such receipt and are not
+  protected. A hash chain pinpoints the first record where the chain breaks, not every altered record; a receipt
+  mismatch narrows an edit to the records between two receipts but cannot say which one. Truncation of the tail is
+  only caught with receipts, and the page says so when none are loaded.
+- If the browser's WebCrypto has no Ed25519, receipts are reported as not authenticated (neither proof of tampering
+  nor of integrity) and the chain is still verified.
+- [`docs/verifier.js`](docs/verifier.js) is plain JavaScript with no dependencies and no build step. On the
+  64,542-record PX4 flight (30 MB) the page verified the chain in 0.90 to 1.27 s in headless Chromium on the
+  benchmark VM (5 runs). The scan runs in a Web Worker, so the page stays responsive and Cancel stops it at once.
+
 ## What it proves, and what it does not
 
 | Change made after sealing | Caught by | Reported at |
@@ -78,8 +102,11 @@ receipt  = fseal-receipt v1 count=N head=link[N-1] key=<Ed25519 public key> sig=
 ```
 
 - **Checks, in order:** checksum, then sequence number, then link. The first failure names the record and the reason.
-- **Receipts** are issued only after the records they cover are on disk (`fsync`), so a crash can never make an honest
-  log look tampered.
+- **Receipts** are issued only after the records they cover are on disk (`fsync`), so a crash never leaves an honest
+  log shorter than its receipts. A crash can leave a torn final record: `fseal verify` reports that as INCOMPLETE
+  without receipts, and as TAMPERED when receipts are given (it reports any problem as tampering then) until
+  `fseal recover` trims the torn record. If `append` cannot write a receipt, it stops with an error instead of
+  reporting the receipt as issued.
 - **Recovery** trims a final record that a crash cut short, and nothing else. A bad record in the middle, or a complete
   final record with a bad checksum, is reported and left in place: truncating it would destroy evidence.
 - **Durability:** records are buffered and made durable every 1,000 records (or after every record with
@@ -95,6 +122,8 @@ pip install pyulog pytest
 cmake -S . -B build && cmake --build build -j
 ctest --test-dir build && python -m pytest -q    # C++ and Python tests
 tools/demo.sh                                    # the demo above
+node --test tests/web/verifier.test.mjs          # browser verifier against the CLI and the Python reader (Node 22)
+(cd tests/web && npm ci && npx playwright install chromium) && node tests/web/e2e.mjs   # the page itself
 ```
 
 Seal your own PX4 log:
@@ -137,7 +166,40 @@ Measured with `build-release/fseal-bench records.tsv <dir> 5` on the PX4 flight 
   against a deliberately broken `sync()`: it failed all 25 rounds.
 - **Python** ([tests/test_tools.py](tests/test_tools.py)): an independent reader written from the format description
   ([tools/fseal_py.py](tools/fseal_py.py), no shared code) must agree with the CLI on 7 attacks; the real PX4 flight
-  is sealed and an altitude edit is found at the right record.
+  is sealed and an altitude edit is found at the right record. `append` must refuse a receipts path it cannot open
+  (before sealing anything) and fail when a receipt cannot be written (`/dev/full`).
+- **JavaScript** ([tests/web/verifier.test.mjs](tests/web/verifier.test.mjs), 85 tests): the browser verifier must
+  print exactly the same report as `fseal verify` and find the same first problem, record, byte and head as the
+  Python reader. The cases are the 7 attacks with and without receipts, a full rewrite, a deleted tail, receipts
+  from another key, an altered signature and count, edits at the edges of the verifier's 256-record hashing batches,
+  13 hostile files, 9 malformed receipt files, the shipped samples and the real PX4 flight (skipped, with a
+  message, until `python3 tools/fetch_sample.py tests/.data` has downloaded it). Unsigned and forged receipts are
+  checked with Ed25519 switched off: they must never yield INTACT, and a mismatch must not be called tampering.
+  Deliberate bugs in the verifier (skipping the CRC, sequence, key or truncation check, or the link check at the
+  start of each hashing batch) each make tests fail. These checks compare three readers with each other, so they
+  cannot catch a mistake that all of them share, such as a misreading of the format description itself.
+- **Browser** ([tests/web/e2e.mjs](tests/web/e2e.mjs), Playwright, 32 checks): every sample shows the same broken
+  record or receipt as the CLI; hostile, empty and torn files, a forged signature, an empty receipts file, a
+  network failure, no Ed25519 and no Web Workers each give the right result; keyboard-only use works; a 1,000,000-record log has
+  no task over 200 ms and Cancel answers within 200 ms; no horizontal scroll at 375 and 320 px or at 200% text. The
+  page passes automated axe-core checks with 0 violations in light and dark themes. A manual screen-reader check
+  has not been done.
+
+## Security review
+
+Scanned with semgrep (rule packs from semgrep/semgrep-rules for C, JavaScript, Python, HTML, Bash, GitHub Actions
+and secrets), `npm audit` (0 vulnerabilities) and the AddressSanitizer/UBSan build, and the code that reads files
+was reviewed by hand for hostile input. No high-severity findings. Fixed:
+
+- `parse_line()` threw `std::out_of_range` on a receipt count above 2^64-1 instead of rejecting the line.
+- `scan()` and `recover()` threw on a path that cannot be read (a directory) instead of returning `IoError`.
+- `fseal append` ignored failures writing the receipts file and still counted the receipts as issued; it now checks
+  the path before sealing and every write, and exits with an error.
+- The CI workflow pins its GitHub Actions to commit SHAs and runs with read-only permissions.
+
+The browser page treats dropped files as hostile: it reads the log in 16 MB slices, never trusts a length field over
+1 MiB, caps receipts files at 16 MB and the table at 2,000,000 records, shows file contents only as text, and has a
+Content-Security-Policy with no inline script and no network access beyond its own files.
 
 ## Why not immudb, Trillian or Sigstore Rekor?
 
@@ -163,5 +225,6 @@ README comes from a run of the commands above.
 
 ## License
 
-MIT. The PX4 sample flight log used by the tests and the demo is downloaded at run time from
+MIT. The verifier page uses the Atkinson Hyperlegible font (Braille Institute), under the SIL Open Font License 1.1
+([docs/OFL-atkinson-hyperlegible.txt](docs/OFL-atkinson-hyperlegible.txt)). The PX4 sample flight log used by the tests and the demo is downloaded at run time from
 [PX4/pyulog](https://github.com/PX4/pyulog) (BSD-3-Clause), pinned by commit and SHA-256, and is not included here.
