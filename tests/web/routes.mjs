@@ -177,6 +177,26 @@ try {
     await c.close();
   });
 
+  await check("leaving a screen while its check finishes: the new route wins (no bounce back to the old screen)", async () => {
+    // A slow main thread runs the hashchange handler late. Here it is delayed on purpose, and the sample files are
+    // held, so the check finishes (and re-syncs the URL) after the user chose Trust help but before its handler ran.
+    const c = await browser.newContext({ viewport: { width: 1280, height: 900 }, serviceWorkers: "block" });
+    const p = await c.newPage();
+    await p.addInitScript(() => {
+      const add = window.addEventListener.bind(window);
+      window.addEventListener = (type, fn, ...rest) => add(type, type === "hashchange" ? (e) => (window.__hashDelay ? setTimeout(() => fn(e), window.__hashDelay) : fn(e)) : fn, ...rest);
+    });
+    await p.route("**/samples/**", async (r) => { await new Promise((ok) => setTimeout(ok, 600)); await r.continue(); });
+    await p.goto(url + "#/findings?sample=intact");
+    await waitH1(p, "Findings");
+    await p.evaluate(() => { window.__hashDelay = 2500; location.hash = "#/help"; });
+    await p.waitForFunction(() => document.querySelector("#verdict-line").textContent.trim() === "Intact", null, { timeout: 10000 });
+    await waitH1(p, "Trust help");
+    assert.match(await p.evaluate(() => location.hash), /^#\/help/);
+    assert.equal(await p.getAttribute('nav a[aria-current="page"]', "href"), "#/help");
+    await c.close();
+  });
+
   await check("Findings is focused: verdict, coverage and one next action to the first break", async () => {
     const c = await browser.newContext({ viewport: { width: 1280, height: 900 } });
     const p = await c.newPage();

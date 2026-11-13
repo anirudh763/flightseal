@@ -16,7 +16,7 @@ The file format, the C++ core and every verdict are unchanged; `docs/verifier.js
   made by `tools/make_px4_samples.py`.
 - Light by default, also under an OS dark preference; dark only through the "Dark theme" button. FlightSeal primary
   #174b5a, 16px text, 44px controls, a 216px rail on wide screens and a Menu sheet below 1000px.
-- Service worker cache version 0.1.0-3-ui (adds theme.js and the PX4 examples). CSP unchanged.
+- Service worker cache version 0.1.0-4-ui (adds theme.js and the PX4 examples). CSP unchanged.
 - tests/web/routes.mjs: 24 checks for the screens (23 of them fail on the previous page).
 
 ## 0.1.0 – 2026-11-13

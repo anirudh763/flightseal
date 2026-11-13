@@ -109,9 +109,13 @@ function navigate(hash) {
   else location.hash = hash;
 }
 // The URL always names the loaded example (or none) for the current screen; replaced, not a new history entry.
+// Only the query of the screen already in the URL is rewritten: if the URL names another screen, a navigation is
+// on its way to onRoute (its hashchange has not run yet) and must not be overwritten by a check that just finished.
 function syncUrl() {
   const r = state.route;
   if (!r || r.screen === "notfound") return;
+  const cur = parseHash();
+  if (cur && (cur.screen !== r.screen || cur.id !== r.id)) return;
   const want = hrefFor(r.screen, r.id);
   if (location.hash !== want) history.replaceState(history.state, "", want);
 }
