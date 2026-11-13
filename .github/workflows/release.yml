@@ -1,0 +1,53 @@
+name: release
+
+# Runs only when a version tag (v0.1.0, ...) is pushed. CI runs the same tools/release_build.sh on every push as a
+# dry run, without publishing anything.
+on:
+  push:
+    tags: ["v*"]
+
+permissions: {}
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libssl-dev
+      - name: Build, test, check in a clean ubuntu:24.04 container, write the SHA-256 file
+        run: tools/release_build.sh dist
+      - name: The tag matches the version the binary prints
+        run: test "$(dist/fseal-linux-x86_64 --version)" = "fseal ${GITHUB_REF_NAME#v}"
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: dist
+          path: dist/
+          if-no-files-found: error
+
+  publish:
+    needs: build
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: dist
+          path: dist
+      - name: Create the release with the binary and its SHA-256 file
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          cd dist && sha256sum -c fseal-linux-x86_64.sha256 && cd ..
+          gh release create "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" --title "FlightSeal $GITHUB_REF_NAME" \
+            --notes-file .github/release-notes.md dist/fseal-linux-x86_64 dist/fseal-linux-x86_64.sha256

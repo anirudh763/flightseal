@@ -12,3 +12,4 @@ build-release/
 !docs/samples/*.receipts
 tests/web/node_modules/
 build-asan/
+dist/

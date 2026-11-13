@@ -63,6 +63,7 @@ function code(text, cls = "hash") {
 }
 
 // ---- inputs ---------------------------------------------------------------------------------
+const NO_FILE = "No file chosen";
 // A file of the user's own replaces every input that came from a sample, so a sample's receipts and key are
 // never checked against the user's log (an honest log sealed with another key would look rewritten).
 function clearSampleInputs() {
@@ -74,13 +75,13 @@ function clearSampleInputs() {
 function clearLog() {
   state.log = null;
   $("log-file").value = "";
-  $("log-name").textContent = "";
+  $("log-name").textContent = NO_FILE;
   $("log-clear").hidden = true;
 }
 function clearReceipts() {
   state.receipts = null;
   $("rec-file").value = "";
-  $("rec-name").textContent = "";
+  $("rec-name").textContent = NO_FILE;
   $("rec-clear").hidden = true;
 }
 async function setLog(blob, name, fromSample = false) {
@@ -239,7 +240,7 @@ async function verify() {
   const source = blobSource(state.log.blob);
   const abort = new AbortController();
   state.abort = abort;
-  $("progress-wrap").hidden = state.log.blob.size < (4 << 20);
+  $("progress-wrap").hidden = state.log.blob.size < (4 << 20) && !(receipts && key && receipts.length > 1000);
   $("progress").value = 0;
   let last = 0;
   try {
@@ -255,8 +256,9 @@ async function verify() {
         }
       },
     });
-    const check = receipts && key ? await checkReceipts(receipts, key, scan) : null;
+    const check = receipts && key ? await checkReceipts(receipts, key, scan, abort.signal) : null;
     if (run !== state.run) return;
+    if (abort.signal.aborted) throw new DOMException("verification cancelled", "AbortError"); // never a verdict after Cancel
     const summary = summarize(scan, check);
     state.result = { scan, check, summary, source, receiptError, emptyReceipts };
     render();
@@ -327,7 +329,7 @@ function verdictFor(r) {
     const prevOk = check.results.filter((x) => x.result === "ok" && x.count < f.count).reduce((m, x) => (x.count > m ? x.count : m), 0n);
     const body = {
       "head-mismatch": `Every record passes its own checks, but receipt ${f.index}, signed by the key you trust after ${plural(f.count, "record")}, pins a different chain head: the log was rewritten after the receipt was issued, or these receipts belong to another log sealed with the same key. If they are this log's receipts, something in records ${n(prevOk)} to ${n(f.count - 1n)} changed${prevOk ? ` (the receipt after ${plural(prevOk, "record")} still matches)` : ""}. A receipt mismatch cannot say which record in that range was edited.`,
-      "log-shorter": `Every record passes its own checks, but receipt ${f.index}, signed by the key you trust, says ${plural(f.count, "record")} had been written and this log has ${n(scan.records)}: records were removed from the end.`,
+      "log-shorter": `Every record passes its own checks, but receipt ${f.index}, signed by the key you trust, says ${plural(f.count, "record")} had been written and this log has ${n(scan.records)}: records were removed from the end, or these receipts belong to another log sealed with the same key.`,
     }[f.result];
     return { kind: "bad", head: `Tampered: receipt ${f.index} does not match the log`, body: [body] };
   }
@@ -625,6 +627,9 @@ async function showDetail(record) {
 
 // ---- events ---------------------------------------------------------------------------------
 function wire() {
+  // The native file inputs stay hidden: their own text says "No file chosen" even while a sample is loaded.
+  $("log-choose").addEventListener("click", () => $("log-file").click());
+  $("rec-choose").addEventListener("click", () => $("rec-file").click());
   $("log-file").addEventListener("change", (e) => e.target.files[0] && addFiles([e.target.files[0]]));
   $("rec-file").addEventListener("change", async (e) => {
     const f = e.target.files[0];
@@ -635,12 +640,12 @@ function wire() {
   });
   $("pubkey").addEventListener("change", () => { setKey($("pubkey").value); state.sample = null; syncUrl(); verify(); });
   $("log-clear").addEventListener("click", () => {
-    state.log = null; state.sample = null; $("log-file").value = ""; $("log-name").textContent = ""; $("log-clear").hidden = true;
-    syncUrl(); verify(); $("log-file").focus();
+    state.log = null; state.sample = null; $("log-file").value = ""; $("log-name").textContent = NO_FILE; $("log-clear").hidden = true;
+    syncUrl(); verify(); $("log-choose").focus();
   });
   $("rec-clear").addEventListener("click", () => {
-    state.receipts = null; state.sample = null; $("rec-file").value = ""; $("rec-name").textContent = ""; $("rec-clear").hidden = true;
-    syncUrl(); verify(); $("rec-file").focus();
+    state.receipts = null; state.sample = null; $("rec-file").value = ""; $("rec-name").textContent = NO_FILE; $("rec-clear").hidden = true;
+    syncUrl(); verify(); $("rec-choose").focus();
   });
   for (const b of document.querySelectorAll("[data-sample]")) b.addEventListener("click", () => loadSample(b.dataset.sample));
   $("cancel").addEventListener("click", () => state.abort && state.abort.abort());
@@ -702,6 +707,8 @@ function focusRow(record) {
 
 wire();
 ed25519Supported(); // start the probe early
+// Offline use after one visit (sw.js). Scope is this folder; a failure only means no offline copy.
+if ("serviceWorker" in navigator) navigator.serviceWorker.register("sw.js").catch(() => {});
 const params = new URLSearchParams(location.search);
 const sample = ["intact", "tampered", "rewritten", "truncated"].includes(params.get("sample")) ? params.get("sample") : "tampered";
 const rec = /^\d{1,15}$/.test(params.get("record") || "") ? Number(params.get("record")) : null;

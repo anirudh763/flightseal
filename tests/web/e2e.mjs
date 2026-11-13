@@ -21,7 +21,9 @@ const { chromium } = require("playwright");
 const AXE = readFileSync(process.env.AXE_PATH || require.resolve("axe-core/axe.min.js"), "utf8");
 
 let failures = 0, passed = 0;
+const ONLY = process.env.E2E_ONLY ? new RegExp(process.env.E2E_ONLY) : null; // run only matching checks
 async function check(name, fn) {
+  if (ONLY && !ONLY.test(name)) return;
   try {
     await fn();
     passed++;
@@ -83,6 +85,75 @@ try {
 
   await check("axe-core: 0 violations, light, tampered sample", async () => {
     assert.deepEqual(await axe(page), []);
+  });
+
+  await check("a loaded sample shows its file names, not the browser's 'No file chosen'", async () => {
+    // The native file inputs (whose own text would say "No file chosen") are not shown; a Choose file button is.
+    for (const id of ["log", "rec"]) {
+      assert.equal(await page.isVisible(`#${id}-file`), false, `#${id}-file is visible`);
+      assert.equal((await page.textContent(`#${id}-choose`)).trim(), "Choose file");
+    }
+    assert.match(await page.textContent("#log-name"), /^tampered\.fseal \(sample\), [\d,]+ bytes$/);
+    assert.match(await page.textContent("#rec-name"), /^flight\.receipts \(sample\), [\d,]+ bytes$/);
+    assert.doesNotMatch(await page.innerText("#inputs-h + *"), /No file chosen/);
+    // Its accessible name keeps the field label, and the button opens the file chooser.
+    const name = await page.evaluate(() => [...document.querySelector("#log-choose").getAttribute("aria-labelledby").split(" ")].map((i) => document.getElementById(i).textContent).join(" "));
+    assert.match(name, /Choose file Sealed log/);
+    const [chooser] = await Promise.all([page.waitForEvent("filechooser"), page.click("#log-choose")]);
+    assert.equal(await chooser.element().getAttribute("id"), "log-file");
+  });
+
+  await check("the favicon loads (200, SVG) with no console errors", async () => {
+    const p = await ctx.newPage();
+    const errs = [];
+    p.on("console", (m) => m.type() === "error" && errs.push(m.text()));
+    await p.goto(url);
+    await p.waitForSelector("#report-wrap:not([hidden])");
+    const href = await p.evaluate(() => document.querySelector('link[rel="icon"]').href);
+    const r = await p.evaluate(async (h) => { const x = await fetch(h); return [x.status, x.headers.get("content-type")]; }, href);
+    assert.equal(r[0], 200);
+    assert.match(r[1], /image\/svg\+xml/);
+    assert.deepEqual(errs, []);
+    await p.close();
+  });
+
+  await check("with JavaScript disabled the page says it needs JavaScript and points to the CLI", async () => {
+    const c = await browser.newContext({ javaScriptEnabled: false });
+    const p = await c.newPage();
+    await p.goto(url);
+    const msg = p.locator("noscript .noscript, .noscript");
+    assert.equal(await msg.count(), 1);
+    assert.ok(await msg.isVisible(), "noscript message is not visible");
+    assert.match(await msg.innerText(), /needs JavaScript/);
+    assert.match(await msg.innerText(), /fseal verify/);
+    await c.close();
+  });
+
+  await check("offline: after one visit the page reloads and verifies a sample with the network off", async () => {
+    const c = await browser.newContext({ viewport: { width: 1280, height: 900 } });
+    const p = await c.newPage();
+    const errs = [];
+    p.on("pageerror", (e) => errs.push(String(e)));
+    await p.goto(url);
+    await loaded(p);
+    // The service worker is installed, has cached the files and controls this page.
+    await p.waitForFunction(() => navigator.serviceWorker.controller !== null, null, { timeout: 15000 });
+    const scope = await p.evaluate(async () => (await navigator.serviceWorker.getRegistration()).scope);
+    assert.equal(scope, url);
+    const manifest = await p.evaluate(async () => (await fetch(document.querySelector('link[rel="manifest"]').href)).json());
+    assert.equal(manifest.start_url, "./");
+    assert.deepEqual(manifest.icons.map((i) => i.sizes).sort(), ["192x192", "512x512", "any"]);
+    await c.setOffline(true);
+    await p.reload();
+    await loaded(p);
+    assert.equal((await p.textContent("#verdict-line")).trim(), "Tampered: the chain breaks at record 150");
+    await p.click("text=Load intact sample");
+    await p.waitForFunction(() => document.querySelector("#verdict-line").textContent.trim() === "Intact");
+    await p.goto(url + "?sample=rewritten"); // a shared link with a query also opens offline
+    await loaded(p);
+    assert.match(await p.textContent("#verdict-line"), /receipt 2 does not match/);
+    assert.deepEqual(errs, []);
+    await c.close();
   });
 
   await check("intact sample: Intact, all receipts match", async () => {
@@ -230,7 +301,7 @@ try {
     await page.setInputFiles("#log-file", join(tmp, "own.fseal"));
     await page.waitForFunction(() => document.querySelector("#verdict-line").textContent.trim() === "Chain intact; no receipts checked");
     assert.equal(await page.inputValue("#pubkey"), "");
-    assert.equal(await page.textContent("#rec-name"), "");
+    assert.equal(await page.textContent("#rec-name"), "No file chosen");
     assert.equal(await page.isHidden("#rec-clear"), true);
     await page.setInputFiles("#rec-file", join(tmp, "own.receipts"));
     await page.fill("#pubkey", ownPub);
@@ -306,14 +377,18 @@ try {
     await page.click("#log-clear");
     await page.waitForFunction(() => document.querySelector("#verdict-line").textContent.trim() === "Load a sealed log or a sample to check it.");
     assert.equal(await page.isHidden("#records-area"), true);
+    assert.equal((await page.textContent("#log-name")).trim(), "No file chosen");
+    assert.equal(await page.evaluate(() => document.activeElement.id), "log-choose");
   });
 
   await check("a network failure loading a sample is reported in text", async () => {
-    const p = await ctx.newPage();
+    // A first visit with nothing cached: service workers blocked, since page.route cannot see a worker's requests.
+    const c = await browser.newContext({ serviceWorkers: "block" });
+    const p = await c.newPage();
     await p.route("**/samples/**", (r) => r.abort());
     await p.goto(url + "?sample=intact");
     await p.waitForFunction(() => document.querySelector("#verdict-line").textContent.includes("Could not load the intact sample"));
-    await p.close();
+    await c.close();
   });
 
   await check("keyboard only: skip link, then load a sample and reach the first break", async () => {
@@ -381,6 +456,36 @@ try {
     assert.ok(worst < 200, `longest task ${worst.toFixed(0)} ms`);
   });
 
+  await check("Cancel during the receipt stage: checks stop and no verdict is shown (10,000 receipts)", async () => {
+    const lastReceipt = readFileSync(join(SAMPLES, "flight.receipts"), "utf8").trim().split("\n").pop();
+    const many = hostile("many.receipts", `${lastReceipt}\n`.repeat(10000));
+    const p = await ctx.newPage();
+    // Press Cancel the moment the first signature is checked, and count every signature check after that.
+    await p.addInitScript(() => {
+      const real = crypto.subtle.verify.bind(crypto.subtle);
+      window.__verifies = 0;
+      crypto.subtle.verify = (...a) => {
+        if (window.__armed && ++window.__verifies === 1) document.querySelector("#cancel").click();
+        return real(...a);
+      };
+    });
+    await p.goto(url + "?sample=intact");
+    await loaded(p);
+    await p.setInputFiles("#log-file", join(SAMPLES, "intact.fseal")); // your own files replace the sample's log and key
+    await p.setInputFiles("#rec-file", many);
+    await p.evaluate(() => { window.__armed = true; });
+    await p.fill("#pubkey", PUB);
+    await p.press("#pubkey", "Tab");
+    await p.waitForFunction(() => document.querySelector("#verdict-line").textContent.includes("cancelled"));
+    assert.equal(await p.isVisible("#cancel"), false); // progress and Cancel are hidden again after cancelling
+    await p.waitForTimeout(2500); // the 10,000 checks took about 1.5 s when Cancel did not reach them
+    assert.equal((await p.textContent("#verdict-line")).trim(), "Verification cancelled.");
+    assert.equal(await p.isHidden("#report-wrap"), true);
+    const calls = await p.evaluate(() => window.__verifies);
+    assert.ok(calls < 10, `${calls} signatures checked after Cancel`);
+    await p.close();
+  });
+
   await check("without Web Workers the page verifies on the main thread", async () => {
     const p = await ctx.newPage();
     await p.addInitScript(() => { delete window.Worker; });
@@ -416,7 +521,7 @@ try {
     assert.equal((await p2.textContent("#verdict-line")).trim(), "Chain intact; receipts not authenticated");
     report = await p2.textContent("#report");
     assert.doesNotMatch(report, /RESULT: (TAMPERED|INTACT)/);
-    assert.doesNotMatch(await p2.textContent("#verdict"), /removed from the end\./);
+    assert.doesNotMatch(await p2.textContent("#verdict"), /records were removed from the end/);
     // A receipt naming a random key, unsigned, with Ed25519 off: not evidence, so not Tampered.
     await p2.setInputFiles("#log-file", join(SAMPLES, "intact.fseal"));
     await p2.setInputFiles("#rec-file", hostile("randkey.receipts", `fseal-receipt v1 count=800 head=${"0".repeat(64)} key=${"ab".repeat(32)} sig=${"0".repeat(128)}\n`));

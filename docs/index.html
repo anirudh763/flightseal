@@ -6,6 +6,9 @@
 <title>FlightSeal verifier</title>
 <meta name="description" content="Check a sealed drone flight log, its receipts and public key in your browser. Files are read locally and never uploaded.">
 <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; font-src 'self'; connect-src 'self'; object-src 'none'; base-uri 'none'; form-action 'none'">
+<link rel="icon" href="favicon.svg" type="image/svg+xml">
+<link rel="manifest" href="manifest.webmanifest">
+<meta name="theme-color" content="#24292f">
 <link rel="stylesheet" href="ui.css">
 <link rel="stylesheet" href="app.css">
 <script type="module" src="app.js"></script>
@@ -19,32 +22,35 @@
 </header>
 
 <main id="main">
+  <noscript><p class="noscript">This verifier needs JavaScript: it checks the log in your browser with WebCrypto. With JavaScript off, use the command-line tool instead: <code>fseal verify LOG --receipts FILE --pubkey HEX</code> (build it from the <a href="https://github.com/anirudh763/flightseal">source</a>).</p></noscript>
   <div class="top">
     <section class="box inputs" aria-labelledby="inputs-h">
       <h2 class="box-header" id="inputs-h">Files</h2>
       <div class="inputs-body" id="dropzone">
         <div class="field">
-          <label for="log-file">Sealed log <span class="muted">(.fseal)</span></label>
+          <label for="log-file" id="log-label">Sealed log <span class="muted">(.fseal)</span></label>
           <div class="file-row">
-            <input type="file" id="log-file" aria-describedby="log-name">
+            <input type="file" id="log-file" hidden>
+            <button type="button" class="btn small" id="log-choose" aria-labelledby="log-choose log-label" aria-describedby="log-name">Choose file</button>
+            <span class="file-name mono" id="log-name">No file chosen</span>
             <button type="button" class="btn small" id="log-clear" hidden>Remove</button>
           </div>
-          <p class="file-name mono" id="log-name"></p>
         </div>
         <div class="field">
-          <label for="rec-file">Receipts <span class="muted">(.receipts, optional)</span></label>
+          <label for="rec-file" id="rec-label">Receipts <span class="muted">(.receipts, optional)</span></label>
           <div class="file-row">
-            <input type="file" id="rec-file" aria-describedby="rec-name">
+            <input type="file" id="rec-file" hidden>
+            <button type="button" class="btn small" id="rec-choose" aria-labelledby="rec-choose rec-label" aria-describedby="rec-name">Choose file</button>
+            <span class="file-name mono" id="rec-name">No file chosen</span>
             <button type="button" class="btn small" id="rec-clear" hidden>Remove</button>
           </div>
-          <p class="file-name mono" id="rec-name"></p>
         </div>
         <div class="field">
           <label for="pubkey">Public key you trust <span class="muted">(64 hex digits, needed with receipts)</span></label>
           <input type="text" id="pubkey" class="input mono" spellcheck="false" autocomplete="off" aria-describedby="pubkey-help">
           <p class="help" id="pubkey-help">Get it from the operator independently, not from whoever sent you the log.</p>
         </div>
-        <p class="drop-hint muted">You can also drop the log and receipts anywhere on this page. Get the public key from the operator separately, never from whoever sent you the log.</p>
+        <p class="drop-hint muted">You can also drop the log and receipts anywhere on this page.</p>
 
         <h3 class="samples-h">Samples</h3>
         <ul class="samples" aria-describedby="samples-note">
