@@ -6,7 +6,7 @@ import { fileURLToPath } from "node:url";
 
 const DOCS = resolve(dirname(fileURLToPath(import.meta.url)), "../../docs");
 const TYPES = { ".html": "text/html; charset=utf-8", ".js": "text/javascript", ".css": "text/css", ".woff2": "font/woff2",
-  ".txt": "text/plain", ".json": "application/json", ".png": "image/png" };
+  ".txt": "text/plain", ".json": "application/json", ".png": "image/png", ".svg": "image/svg+xml", ".webmanifest": "application/manifest+json" };
 
 export function serve(port = 0) {
   const server = createServer(async (req, res) => {

@@ -3,6 +3,10 @@
 // to the previous record (catches deliberate edits). Signed receipts (see below) catch a
 // holder who rewrites the whole file.
 #pragma once
+
+// Release version; CMakeLists.txt project(VERSION) and the top CHANGELOG.md entry must match (tests/test_release.py).
+#define FSEAL_VERSION "0.1.0"
+
 #include <array>
 #include <cstddef>
 #include <cstdint>

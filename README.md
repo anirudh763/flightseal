@@ -1,17 +1,26 @@
 # FlightSeal
 
-**An evidence seal for drone flight logs: edit, delete or reorder one record and verification fails.**
+**A post-download seal and reference file format for drone flight logs: edit, delete or reorder one record and
+verification fails when checked against receipts held elsewhere.**
 
 ![ci](https://github.com/anirudh763/flightseal/actions/workflows/ci.yml/badge.svg)
 
-Drone flight logs end up as evidence: after a crash, an airspace violation, an insurance claim or a delivery dispute,
-someone has to decide whether the log in front of them is the log the drone wrote. The usual practice is to hash the
-file when an investigator receives it, which says nothing about what happened to it before that.
+Status: public beta (0.1.0), maintained by one student on a best-effort basis. To report a way to fool verification,
+see [SECURITY.md](SECURITY.md), which also lists what is in and out of scope; contributions:
+[CONTRIBUTING.md](CONTRIBUTING.md).
 
-FlightSeal seals the log while it is being written. Every record is chained to the one before it, and every few
-thousand records a signed receipt goes to someone else (an investigator, the operator's company, an insurer). Later,
-anyone with the log, the receipts and the drone's public key can check that nothing was changed, removed or
-reordered, and find the exact record where tampering starts.
+Drone flight logs end up as evidence: after a crash, an airspace violation, an insurance claim or a delivery dispute,
+someone has to decide whether the log in front of them is the log the drone wrote. A hash of the whole file only
+shows that it changed since the hash was taken, not where, and whoever holds both the file and the hash can replace
+both.
+
+FlightSeal chains every record to the one before it, and every few thousand records a signed receipt goes to someone
+else (an investigator, the operator's company, an insurer). Later, anyone with the log, the receipts and the drone's
+public key can check that nothing was changed, removed or reordered since sealing, and find the exact record where
+tampering starts. In this repository a log is sealed after it is downloaded from the drone (a PX4 `.ulg` file is
+converted to records); nothing before that moment is covered. The format is append-only and `fseal append` reads any
+`timestamp<TAB>payload` stream, so sealing on the drone or ground station while the log is written is possible, but it
+has not been tried.
 
 C++17 core (OpenSSL SHA-256 and Ed25519), Python tools for PX4 flight logs, tests under AddressSanitizer and UBSan.
 
@@ -43,7 +52,7 @@ RESULT: TAMPERED
 
 # Attack 3: delete the last 2000 records (the end of the flight)
 $ fseal verify short.fseal --receipts flight.receipts --pubkey eed39ebf…681397
-  receipt 13 (count 64542): log is shorter than the receipt (records were removed from the end)
+  receipt 13 (count 64542): log is shorter than the receipt: records were removed from the end, or these receipts belong to another log sealed with the same key
 RESULT: TAMPERED
 ```
 
@@ -54,7 +63,8 @@ cannot change is the receipts someone else already holds.
 
 **[Open the verifier](https://anirudh763.github.io/flightseal/)**: drop a sealed log, and optionally its receipts and
 the public key you trust. It runs in the page with the browser's WebCrypto (SHA-256, Ed25519); files are read
-locally and never uploaded.
+locally and never uploaded. After one visit it also opens offline (a service worker keeps the page and the samples;
+files you check are never cached), and it can be installed as an app from the browser menu.
 
 ![The verifier on the tampered sample: the chain breaks at record 150, expected and stored link side by side](docs/screenshots/verifier-tampered.png)
 
@@ -125,11 +135,27 @@ receipt  = fseal-receipt v1 count=N head=link[N-1] key=<Ed25519 public key> sig=
 
 Every design choice, the alternative that was rejected and why, is in [DECISIONS.md](DECISIONS.md).
 
+## Install
+
+Build and install `fseal` (needs CMake, a C++17 compiler and OpenSSL):
+
+```
+sudo apt-get install cmake g++ libssl-dev
+cmake -S . -B build -DCMAKE_BUILD_TYPE=Release && cmake --build build -j
+cmake --install build --prefix ~/.local          # installs ~/.local/bin/fseal
+fseal --version                                  # fseal 0.1.0; fseal --help lists the commands
+```
+
+Each tagged version (`v*`) also gets a Linux x86_64 binary and its SHA-256 file on the Releases page, built and
+checked in a clean `ubuntu:24.04` container by [`.github/workflows/release.yml`](.github/workflows/release.yml). The
+binary is dynamically linked and needs OpenSSL 3 (`libssl3t64` on Ubuntu 24.04). Changes are listed in
+[CHANGELOG.md](CHANGELOG.md).
+
 ## Quick start
 
 ```
 sudo apt-get install cmake g++ libssl-dev libsqlite3-dev
-pip install pyulog pytest
+pip install pyulog pytest pyyaml
 cmake -S . -B build && cmake --build build -j
 ctest --test-dir build && python -m pytest -q    # C++ and Python tests
 tools/demo.sh                                    # the demo above
@@ -184,7 +210,7 @@ Measured with `build-release/fseal-bench records.tsv <dir> 5` on the PX4 flight 
   ([tools/fseal_py.py](tools/fseal_py.py), no shared code) must agree with the CLI on 7 attacks; the real PX4 flight
   is sealed and an altitude edit is found at the right record. `append` must refuse a receipts path it cannot open
   (before sealing anything) and fail when a receipt cannot be written (`/dev/full`).
-- **JavaScript** ([tests/web/verifier.test.mjs](tests/web/verifier.test.mjs), 98 tests): the browser verifier must
+- **JavaScript** ([tests/web/verifier.test.mjs](tests/web/verifier.test.mjs), 101 tests): the browser verifier must
   print exactly the same report as `fseal verify` and find the same first problem, record, byte and head as the
   Python reader. The cases are the 7 attacks with and without receipts, a full rewrite, a deleted tail, receipts
   from another key, an altered signature and count, edits at the edges of the verifier's 256-record hashing batches,
@@ -194,11 +220,18 @@ Measured with `build-release/fseal-bench records.tsv <dir> 5` on the PX4 flight 
   Deliberate bugs in the verifier (skipping the CRC, sequence, key or truncation check, or the link check at the
   start of each hashing batch) each make tests fail. These checks compare three readers with each other, so they
   cannot catch a mistake that all of them share, such as a misreading of the format description itself.
+- **Release** ([tests/test_release.py](tests/test_release.py) and ctest): `--help` and `--version` exit 0 on stdout;
+  the version in `src/fseal.h`, CMakeLists.txt, `fseal --version` and the top CHANGELOG entry match; an `fseal`
+  installed with `cmake --install` verifies the samples exactly as the build tree does; the release workflow runs
+  only on `v*` tags, pins every action to a commit SHA and gives write access to its publishing job only. CI runs the
+  release build and the clean-container check ([`tools/release_build.sh`](tools/release_build.sh)) on every push.
 - **Copy** ([tests/web/copy.test.mjs](tests/web/copy.test.mjs)): fails if the limits listed above are removed from
   this README or from the verifier page.
-- **Browser** ([tests/web/e2e.mjs](tests/web/e2e.mjs), Playwright, 37 checks): every sample shows the same broken
+- **Browser** ([tests/web/e2e.mjs](tests/web/e2e.mjs), Playwright, 42 checks): every sample shows the same broken
   record or receipt as the CLI; hostile, empty and torn files, a forged signature, an empty receipts file, a
-  network failure, no Ed25519 and no Web Workers each give the right result; keyboard-only use works; a 1,000,000-record log has
+  network failure, no Ed25519, no Web Workers and JavaScript turned off each give the right result; after one visit
+  the page reloads with the network off and still verifies a sample; Cancel during the receipt checks stops them and
+  shows no verdict; keyboard-only use works; a 1,000,000-record log has
   no task over 200 ms and Cancel answers within 200 ms; no horizontal scroll at 375 and 320 px or at 200% text. The
   page passes automated axe-core checks with 0 violations in light and dark themes, at 1280 and 375 px wide. A manual screen-reader check
   has not been done.
@@ -219,6 +252,11 @@ was reviewed by hand for hostile input. No high-severity findings. Fixed:
   receipts file and printed INTACT (now exit 2); `append` could leave sealed records without a receipt when the key
   was missing or a line was bad (the key is checked first, and a receipt is issued before stopping); receipts from
   another flight sealed with the same key were called a rewrite (the message now names both causes).
+- From a second review: Cancel did not stop the receipt checks, and the page could still show a verdict after Cancel
+  (10,000 receipts kept being checked for about 1.5 s); a receipts file with a 16-million-digit count blocked the page
+  for about 3 s before it was rejected (counts with more than 20 significant digits are now rejected at once, as the
+  CLI does); a receipt past the end of the log now says it may belong to another log sealed with the same key, as a
+  head mismatch already did.
 
 The browser page treats dropped files as hostile: it reads the log in 16 MB slices, never trusts a length field over
 1 MiB, caps receipts files at 16 MB and the table at 2,000,000 records, shows file contents only as text, and has a

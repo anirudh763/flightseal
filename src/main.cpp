@@ -25,7 +25,8 @@ const char* kUsage =
     "      exit status: 0 intact, 1 tampered or incomplete, 2 usage or read error,\n"
     "      3 unverified (receipts not validly signed by the key you trust)\n"
     "  fseal recover LOG\n"
-    "      trim a torn final record left by a crash (and nothing else)\n";
+    "      trim a torn final record left by a crash (and nothing else)\n"
+    "  fseal --help | --version\n";
 
 int usage() {
   std::fputs(kUsage, stderr);
@@ -242,6 +243,14 @@ int recover_cmd(const std::string& log) {
 }  // namespace
 
 int main(int argc, char** argv) {
+  if (argc == 2 && (std::strcmp(argv[1], "--help") == 0 || std::strcmp(argv[1], "-h") == 0)) {
+    std::fputs(kUsage, stdout);
+    return 0;
+  }
+  if (argc == 2 && std::strcmp(argv[1], "--version") == 0) {
+    std::puts("fseal " FSEAL_VERSION);
+    return 0;
+  }
   if (argc < 3) return usage();
   std::string cmd = argv[1], path = argv[2];
   std::vector<std::pair<std::string, std::string>> opts;

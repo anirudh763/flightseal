@@ -358,7 +358,9 @@ const char* describe(ReceiptCheck c) {
     case ReceiptCheck::Ok: return "matches the log";
     case ReceiptCheck::WrongKey: return "signed by a different key than the one you trust";
     case ReceiptCheck::BadSignature: return "signature invalid (the receipt itself was altered)";
-    case ReceiptCheck::LogShorter: return "log is shorter than the receipt (records were removed from the end)";
+    case ReceiptCheck::LogShorter:
+      return "log is shorter than the receipt: records were removed from the end, or these receipts belong to another log "
+             "sealed with the same key";
     case ReceiptCheck::HeadMismatch:
       return "log does not match this receipt: it was rewritten after the receipt was issued, or these receipts belong to "
              "another log sealed with the same key";

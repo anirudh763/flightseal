@@ -4,7 +4,7 @@
 import { test, after } from "node:test";
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { mkdtempSync, readFileSync, existsSync, openSync, readSync, closeSync, fstatSync, rmSync } from "node:fs";
+import { mkdtempSync, readFileSync, writeFileSync, existsSync, openSync, readSync, closeSync, fstatSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -302,4 +302,56 @@ test("Cancel stops a big log within 200 ms, and the scan completes otherwise", a
   ac.abort();
   await assert.rejects(run, /cancelled/);
   assert.ok(performance.now() - t0 < 200, `cancel took ${(performance.now() - t0).toFixed(0)} ms`);
+});
+
+// ---- review findings on 791eaad (cancel during receipts, unbounded count parse, shorter-log wording) ------------
+
+const SAMPLES = join(ROOT, "docs", "samples");
+const SAMPLE_PUB = readFileSync(join(SAMPLES, "pubkey.txt"), "utf8").trim();
+const lastReceipt = readFileSync(join(SAMPLES, "flight.receipts"), "utf8").trim().split("\n").pop(); // count=800
+
+test("Cancel during the receipt stage stops checking at once (10,000 valid receipts)", async () => {
+  const text = `${lastReceipt}\n`.repeat(10000);
+  const { receipts } = parseReceipts(text);
+  assert.equal(receipts.length, 10000);
+  const scan = await scanLog(bytesSource(new Uint8Array(readFileSync(join(SAMPLES, "intact.fseal")))), { linksAt: [800n] });
+  assert.ok(await ed25519Supported());
+  const abort = new AbortController();
+  const real = crypto.subtle.verify.bind(crypto.subtle);
+  let calls = 0;
+  crypto.subtle.verify = (...a) => { if (++calls === 1) abort.abort(); return real(...a); };
+  try {
+    await assert.rejects(checkReceipts(receipts, parseHex(SAMPLE_PUB, 32), scan, abort.signal), { name: "AbortError" });
+  } finally {
+    crypto.subtle.verify = real;
+  }
+  assert.ok(calls < 10, `checked ${calls} signatures after Cancel`);
+});
+
+test("an overlong receipt count is rejected fast, like the CLI; leading zeros are accepted by both", () => {
+  const [, , , ...rest] = lastReceipt.split(" ");
+  const long = `fseal-receipt v1 count=${"9".repeat(16_000_000)} ${rest.join(" ")}\n`;
+  const t0 = performance.now();
+  const r = parseReceipts(long);
+  const ms = performance.now() - t0;
+  assert.deepEqual(r.error, { line: 1, message: "not a receipt" });
+  assert.ok(ms < 200, `took ${ms.toFixed(0)} ms`);
+  const zeros = `fseal-receipt v1 count=${"0".repeat(100_000)}800 ${rest.join(" ")}\n`;
+  assert.equal(parseReceipts(zeros).receipts[0].count, 800n);
+  assert.equal(parseReceipts(`fseal-receipt v1 count=18446744073709551616 ${rest.join(" ")}\n`).error.line, 1); // 2^64
+  assert.equal(parseReceipts(`fseal-receipt v1 count=018446744073709551615 ${rest.join(" ")}\n`).receipts[0].count, (1n << 64n) - 1n);
+  for (const [name, body, code, out] of [["long", long, 2, /:1: not a receipt/], ["zeros", zeros, 0, /RESULT: INTACT/]]) {
+    const p = join(dir, `count-${name}.receipts`);
+    writeFileSync(p, body);
+    const c = spawnSync(FSEAL, ["verify", join(SAMPLES, "intact.fseal"), "--receipts", p, "--pubkey", SAMPLE_PUB], { encoding: "utf8" });
+    assert.equal(c.status, code, c.stderr);
+    assert.match(c.stdout + c.stderr, out);
+  }
+});
+
+test("a receipt past the end of the log names both causes, in the CLI and the JS", async () => {
+  const c = { log: join(SAMPLES, "truncated.fseal"), receipts: join(SAMPLES, "flight.receipts"), pubkey: SAMPLE_PUB };
+  const want = /log is shorter than the receipt: records were removed from the end, or these receipts belong to another log sealed with the same key/;
+  assert.match(cli(c).stdout, want);
+  assert.match((await js(c)).report, want);
 });

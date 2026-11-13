@@ -42,7 +42,7 @@ export const RECEIPT_TEXT = {
   ok: "matches the log",
   "wrong-key": "signed by a different key than the one you trust",
   "bad-signature": "signature invalid (the receipt itself was altered)",
-  "log-shorter": "log is shorter than the receipt (records were removed from the end)",
+  "log-shorter": "log is shorter than the receipt: records were removed from the end, or these receipts belong to another log sealed with the same key",
   "head-mismatch": "log does not match this receipt: it was rewritten after the receipt was issued, or these receipts belong to another log sealed with the same key",
 };
 
@@ -315,7 +315,11 @@ export function parseReceipts(text) {
     const value = (f, name) => (f.startsWith(name) ? f.slice(name.length) : "");
     const c = value(fields[2], "count=");
     if (!/^[0-9]+$/.test(c)) return fail("not a receipt");
-    const count = BigInt(c);
+    // Like the CLI: any number of leading zeros, at most 2^64-1. More than 20 significant digits is out of range
+    // before BigInt() is called, so a huge count cannot block the page.
+    const digits = c.replace(/^0+(?=.)/, "");
+    if (digits.length > 20) return fail("not a receipt");
+    const count = BigInt(digits);
     if (count > MAX_U64) return fail("not a receipt");
     const head = parseHex(value(fields[3], "head="), 32);
     const key = parseHex(value(fields[4], "key="), 32);
@@ -356,8 +360,12 @@ function signedMessage(count, head) {
  * Receipts past the first problem in a broken log are "unchecked". If Ed25519 is unavailable, signatures are
  * reported as not checked (sigChecked: false) and the other checks still run.
  */
-export async function checkReceipts(receipts, trustedKey, scan) {
+export async function checkReceipts(receipts, trustedKey, scan, signal = null) {
+  // Cancel (or a new run) stops the checks between signatures, and no result is returned after it.
+  const stop = () => { if (signal && signal.aborted) throw new DOMException("verification cancelled", "AbortError"); };
+  stop();
   const canVerify = await ed25519Supported();
+  stop();
   const keys = new Map();
   const results = [];
   for (let i = 0; i < receipts.length; i++) {
@@ -371,8 +379,11 @@ export async function checkReceipts(receipts, trustedKey, scan) {
     if (canVerify) {
       const k = hex(rc.key);
       if (!keys.has(k)) keys.set(k, subtle().importKey("raw", rc.key, { name: "Ed25519" }, false, ["verify"]).catch(() => null));
+      stop();
       const key = await keys.get(k);
+      stop();
       const ok = key ? await subtle().verify({ name: "Ed25519" }, key, rc.sig, signedMessage(rc.count, rc.head)) : false;
+      stop();
       out.sigChecked = true;
       if (!ok) {
         out.result = "bad-signature";
@@ -396,6 +407,7 @@ export async function checkReceipts(receipts, trustedKey, scan) {
     if (!equal(at, rc.head)) out.result = "head-mismatch";
     results.push(out);
   }
+  stop();
   return { results, signaturesChecked: canVerify };
 }
 
