@@ -1,0 +1,10 @@
+{
+  "name": "flightseal-web-tests",
+  "private": true,
+  "description": "Browser test dependencies for docs/ (the verifier page itself has no dependencies or build step)",
+  "type": "module",
+  "devDependencies": {
+    "axe-core": "4.14.0",
+    "playwright": "1.63.0"
+  }
+}

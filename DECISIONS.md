@@ -68,3 +68,11 @@ licensing clean, and it means the tests always use the same bytes.
 ### 14. Known shortcut: `scan` reads the whole file into memory
 That is fine for flight logs of tens or hundreds of megabytes and keeps the code short. Logs measured in gigabytes
 would need a streaming reader; the code marks this with a `shortcut:` comment.
+
+### 15. Receipts not validly signed by the trusted key are UNVERIFIED, not TAMPERED
+A receipt that names another key, or carries a signature that does not verify, can be written by anyone, so it is
+no evidence that the log was or was not changed. `fseal verify` reports such receipts and ends with
+`RESULT: UNVERIFIED` and exit status 3, unless the chain itself is broken or a validly signed receipt disagrees with
+the log (TAMPERED, exit 1). The browser verifier follows the same rule, and when it cannot check Ed25519 at all it
+treats every receipt as unauthenticated. **Rejected:** calling a forged receipt tampering (it would let anyone make
+an honest log look tampered by sending a bad receipts file).

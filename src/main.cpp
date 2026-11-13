@@ -22,6 +22,8 @@ const char* kUsage =
     "      seal records read from stdin, one per line: timestamp_us<TAB>payload\n"
     "  fseal verify LOG [--receipts FILE --pubkey HEX]\n"
     "      check every record, and every receipt against the key you trust\n"
+    "      exit status: 0 intact, 1 tampered or incomplete, 2 usage or read error,\n"
+    "      3 unverified (receipts not validly signed by the key you trust)\n"
     "  fseal recover LOG\n"
     "      trim a torn final record left by a crash (and nothing else)\n";
 
@@ -69,16 +71,23 @@ int append(const std::string& log, const std::vector<std::pair<std::string, std:
   uint64_t every = option(opts, "every").empty() ? 1000 : std::strtoull(option(opts, "every").c_str(), nullptr, 10);
   if (every == 0) return usage();
 
+  // Open the receipts file before touching the log: sealing without anywhere to put receipts would leave
+  // records that no witness ever covered.
+  std::ofstream out;
+  if (!receipts.empty()) {
+    out.open(receipts, std::ios::app);
+    if (!out) throw std::runtime_error("cannot write receipts to " + receipts);
+  }
   Writer w(log);
   if (w.trimmed_bytes() > 0)
     std::cerr << "recovered: trimmed " << w.trimmed_bytes() << " bytes of a torn final record\n";
   uint64_t start = w.count(), receipted = w.count(), issued = 0;
-  std::ofstream out;
-  if (!receipts.empty()) out.open(receipts, std::ios::app);
-  // A receipt is issued only after the records it covers are on disk.
+  // A receipt is issued only after the records it covers are on disk, and counted only once it was written.
   auto issue = [&] {
     w.sync();
     out << to_line(sign_receipt(key, w.count(), w.head())) << "\n" << std::flush;
+    if (!out) throw std::runtime_error("cannot write receipts to " + receipts + " (receipt for " + std::to_string(w.count()) +
+                                       " records not saved)");
     receipted = w.count();
     ++issued;
   };
@@ -145,14 +154,22 @@ int verify(const std::string& log, const std::vector<std::pair<std::string, std:
   if (bad)
     std::cout << "  first problem  record " << s.records << ", byte " << s.good_bytes << ": " << describe(s.status) << " ["
               << token(s.status) << "]\n";
+  uint64_t untrusted = 0;
   if (!list.empty()) {
     uint64_t covered = 0, failed = 0, unchecked = 0;
+    size_t first_untrusted = 0;
+    ReceiptCheck untrusted_check = ReceiptCheck::WrongKey;
     for (size_t i = 0; i < list.size(); ++i) {
+      ReceiptCheck c = check_receipt(list[i], trusted, s, links);
+      // A receipt that is not validly signed by the key you trust is not evidence either way: anyone can make one.
+      if (c == ReceiptCheck::WrongKey || c == ReceiptCheck::BadSignature) {
+        if (untrusted++ == 0) first_untrusted = i, untrusted_check = c;
+        continue;
+      }
       if (s.status != Status::Ok && list[i].count > s.records) {  // the log is already broken before this point
         ++unchecked;
         continue;
       }
-      ReceiptCheck c = check_receipt(list[i], trusted, s, links);
       if (c == ReceiptCheck::Ok) {
         covered = std::max(covered, list[i].count);
         continue;
@@ -160,14 +177,24 @@ int verify(const std::string& log, const std::vector<std::pair<std::string, std:
       if (failed++ == 0)
         std::cout << "  receipt " << (i + 1) << " (count " << list[i].count << "): " << describe(c) << "\n";
     }
-    std::cout << "  receipts     " << list.size() - failed - unchecked << " of " << list.size() << " match";
+    if (untrusted)
+      std::cout << "  receipt " << (first_untrusted + 1) << " (count " << list[first_untrusted].count
+                << "): " << describe(untrusted_check) << " (not evidence either way)\n";
+    std::cout << "  receipts     " << list.size() - failed - unchecked - untrusted << " of " << list.size() << " match";
+    if (untrusted) std::cout << "; " << untrusted << " not validly signed by the key you trust";
     if (unchecked) std::cout << "; " << unchecked << " cannot be checked past the first problem";
-    else if (failed == 0) std::cout << "; " << s.records - covered << " record(s) after the last receipt are not covered";
+    else if (failed == 0 && untrusted == 0) std::cout << "; " << s.records - covered << " record(s) after the last receipt are not covered";
     std::cout << "\n";
     bad = bad || failed > 0;
   }
+  if (!bad && untrusted) {  // exit status 3: nothing wrong was proved, but the receipts prove nothing either
+    std::cout << "RESULT: UNVERIFIED (receipts not validly signed by the key you trust)\n";
+    return 3;
+  }
+  // A torn final record is reported as tampering only when an authenticated receipt is present.
+  bool authenticated = list.size() > untrusted;
   std::cout << "RESULT: "
-            << (!bad ? "INTACT" : s.status == Status::TornTail && list.empty() ? "INCOMPLETE (if the writer crashed, run: fseal recover)"
+            << (!bad ? "INTACT" : s.status == Status::TornTail && !authenticated ? "INCOMPLETE (if the writer crashed, run: fseal recover)"
                                                                                : "TAMPERED")
             << "\n";
   return bad ? 1 : 0;

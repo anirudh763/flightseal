@@ -1,0 +1,115 @@
+/* FlightSeal verifier: app styles on top of ui.css (tokens come from there). */
+/* Atkinson Hyperlegible without its digits: its slashed zero reads oddly in prose, so numbers fall through to the
+   system font. Hashes and offsets stay in the monospace font. */
+@font-face{font-family:"Atkinson Text";font-weight:400;font-display:swap;src:url(atkinson-hyperlegible-latin-400-normal.woff2) format("woff2");unicode-range:U+0000-002F,U+003A-FFFF}
+@font-face{font-family:"Atkinson Text";font-weight:700;font-display:swap;src:url(atkinson-hyperlegible-latin-700-normal.woff2) format("woff2");unicode-range:U+0000-002F,U+003A-FFFF}
+[hidden]{display:none!important} /* .btn and others set display, which would otherwise override hidden */
+:root{--font:"Atkinson Text",system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
+body.dragging main{outline:2px dashed var(--accent);outline-offset:-6px}
+h2,h3{margin:0;font-size:1rem;line-height:1.4}
+h3{font-size:.95rem}
+p{margin:0}
+.app-header{flex-wrap:wrap;row-gap:4px}
+.app-header nav{margin-left:auto}
+.app-header h1.name{margin:0;font-size:1rem;line-height:1.4}
+.tagline{font-size:.9rem}
+main{max-width:1440px;margin:0 auto;padding:16px 20px 40px;display:grid;gap:16px}
+.box-header{display:block}
+main>*,.top>*,.split>*{min-width:0}
+
+.top{display:grid;grid-template-columns:minmax(300px,380px) minmax(0,1fr);gap:16px;align-items:start}
+.inputs-body,.verdict-body,.detail-body{padding:14px;display:grid;gap:12px}
+.field{display:grid;gap:4px}
+.field label{font-weight:700}
+.file-row{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+input[type=file]{font:inherit;width:100%;max-width:100%;min-width:0;min-height:32px}
+.inputs-body>*,.verdict-body>*,.field>*{min-width:0}
+.file-row>input{flex:1 1 200px}
+input[type=file]::file-selector-button{font:inherit;font-weight:700;min-height:32px;padding:4px 12px;margin-right:8px;border:1px solid var(--border);border-radius:var(--radius);background:var(--bg-subtle);color:var(--fg);cursor:pointer}
+.file-name{font-size:.85rem;color:var(--fg-muted);word-break:break-all;min-height:0}
+.file-name:empty{display:none}
+.input.mono{width:100%;font-size:.85rem}
+.input[aria-invalid=true]{border-color:var(--bad)}
+.help,.small-print,.drop-hint{font-size:.85rem}
+.btn.small{min-height:28px;padding:2px 10px;font-size:.9rem}
+.samples-h{padding-top:4px;border-top:1px solid var(--border);margin-top:4px;padding-top:12px}
+.samples{list-style:none;margin:0;padding:0;display:grid;gap:8px}
+.samples li{display:grid;gap:2px}
+.samples li span{font-size:.85rem;color:var(--fg-muted)}
+.samples .btn{justify-self:start}
+
+/* Verdict */
+.verdict:focus{outline:none}
+.verdict-line{display:flex;align-items:center;gap:8px;font-size:1.35rem;font-weight:700;line-height:1.3}
+.verdict-line.ok{color:var(--ok)} .verdict-line.bad{color:var(--bad)} .verdict-line.warn{color:var(--warn)}
+.verdict-line .icon{width:22px;height:22px;flex:none}
+.icon{fill:none;stroke:currentColor;stroke-width:2;stroke-linecap:round;stroke-linejoin:round;flex:none}
+#verdict-detail{display:grid;gap:6px;max-width:80ch}
+#progress-wrap:not([hidden]){display:flex;gap:8px;align-items:center}
+progress{width:200px;height:12px;accent-color:var(--accent)}
+
+/* The chain strip: verified bytes, the break, what was never checked, and where each receipt sits. */
+.strip-wrap{display:grid;gap:4px}
+.strip{position:relative;display:flex;height:14px;margin-top:10px;border:1px solid var(--border-strong);border-radius:3px;background:var(--bg-inset)}
+.seg{display:block;height:100%}
+.seg.verified{background:var(--fg-muted)}
+.seg.unchecked{background:repeating-linear-gradient(135deg,var(--bg-inset) 0 4px,var(--border) 4px 6px)}
+.break-mark{position:absolute;top:-8px;bottom:-4px;width:3px;margin-left:-1px;background:var(--bad)}
+.tick{position:absolute;top:-9px;height:7px;width:1px;background:var(--fg)}
+.tick.bad{width:3px;margin-left:-1px;background:var(--bad);top:-10px;height:9px}
+.strip-legend{font-size:.85rem}
+
+.facts,.kv{display:grid;grid-template-columns:max-content minmax(0,1fr);gap:4px 16px;margin:0}
+.facts dt,.kv dt{color:var(--fg-muted)}
+.facts dd,.kv dd{margin:0;min-width:0;overflow-wrap:anywhere}
+code.hash{font-size:.85rem;word-break:break-all}
+.compare{border:1px solid var(--bad);border-radius:var(--radius);padding:10px 12px;display:grid;gap:6px}
+.compare dl{margin:0;display:grid;gap:2px}
+.compare dt{color:var(--fg-muted);font-size:.85rem}
+.compare dd{margin:0 0 6px}
+.compare code{display:block;padding:4px 8px;background:var(--bg-subtle);border:1px solid var(--border);border-radius:4px}
+.compare code.actual{border-color:var(--bad);background:var(--bad-subtle)}
+#notes{display:grid;gap:8px}
+#notes:empty,#break:empty{display:none}
+.note{display:flex;gap:8px;align-items:flex-start;padding:8px 10px;border:1px solid var(--border);border-left:3px solid var(--warn);border-radius:var(--radius);background:var(--warn-subtle);max-width:80ch}
+.note .icon{margin-top:3px;color:var(--warn)}
+details summary{cursor:pointer;min-height:24px}
+.report{margin:8px 0;padding:10px;background:var(--bg-subtle);border:1px solid var(--border);border-radius:var(--radius);white-space:pre-wrap;word-break:break-all;font-size:.82rem}
+
+/* Records and detail: a split pane like a packet list and packet detail. */
+.split:not([hidden]){display:grid;grid-template-columns:minmax(0,1.6fr) minmax(280px,1fr);gap:16px;align-items:start}
+.records-header{display:flex;flex-wrap:wrap;align-items:center;gap:8px 16px}
+.records-header h2{margin-right:auto}
+.pager,.jump{display:flex;align-items:center;gap:6px;flex-wrap:wrap;font-weight:400}
+.pg-label{font-size:.85rem;color:var(--fg-muted);padding:0 4px}
+.jump .input{width:7.5em;min-height:28px;padding:2px 8px}
+.table-scroll{overflow-x:auto}
+#rec-table td,#rec-table th{padding:3px 10px;white-space:nowrap}
+td.num{font-family:var(--mono);font-size:.85rem;font-variant-numeric:tabular-nums}
+tbody th{font-weight:400;background:none;font-size:inherit;color:var(--fg)}
+.linklike{font:inherit;font-family:var(--mono);font-size:.85rem;color:var(--accent);background:none;border:0;padding:0 2px;min-height:24px;min-width:24px;cursor:pointer;text-decoration:underline;text-underline-offset:2px;text-align:left}
+tr.row-bad{background:var(--bad-subtle)}
+tr.row-bad th{box-shadow:inset 3px 0 0 var(--bad)}
+tr.row-selected{outline:2px solid var(--accent);outline-offset:-2px}
+.label .icon{width:12px;height:12px}
+.table-note{padding:8px 14px;font-size:.85rem}
+.detail-body h3{margin-top:4px}
+.payload{margin:0;padding:10px;max-height:320px;overflow:auto;background:var(--bg-subtle);border:1px solid var(--border);border-radius:var(--radius);white-space:pre-wrap;word-break:break-all;font-size:.82rem}
+.receipts td{font-size:.92rem}
+.receipts-table{min-width:760px}
+.receipts td:nth-child(2){font-family:var(--mono);font-size:.85rem}
+
+.about{max-width:80ch;display:grid;gap:8px;padding-top:8px}
+.about ul{margin:0;padding-left:1.2em;display:grid;gap:6px}
+
+@media (max-width:960px){
+  .top,.split:not([hidden]){grid-template-columns:minmax(0,1fr)}
+}
+@media (max-width:560px){
+  main{padding:12px 12px 32px}
+  .app-header{padding:10px 12px}
+  .facts,.kv{grid-template-columns:minmax(0,1fr)}
+  .facts dd,.kv dd{margin-bottom:6px}
+  .verdict-line{font-size:1.15rem}
+  progress{width:120px}
+}

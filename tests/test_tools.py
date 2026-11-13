@@ -133,3 +133,55 @@ def test_receipts_past_a_damaged_record_are_not_blamed_on_deletion(fseal_bin, tm
     assert r.returncode == 1 and first_problem(r.stdout) == ("bad-crc", 2)
     assert "removed from the end" not in r.stdout
     assert "cannot be checked past the first problem" in r.stdout
+
+
+def test_append_refuses_a_receipts_path_it_cannot_open_before_sealing(fseal_bin, tmp_path):
+    key = tmp_path / "k.pem"
+    run(fseal_bin, "keygen", key)
+    log = tmp_path / "f.fseal"
+    r = run(fseal_bin, "append", log, "--key", key, "--receipts", tmp_path / "missing" / "f.receipts", stdin=LINES)
+    assert r.returncode == 2, r.stderr
+    assert "cannot write receipts" in r.stderr
+    assert "issued" not in r.stderr
+    assert not log.exists()  # nothing sealed without somewhere to put the receipts
+
+
+def test_append_fails_when_a_receipt_cannot_be_written(fseal_bin, tmp_path):
+    key = tmp_path / "k.pem"
+    run(fseal_bin, "keygen", key)
+    r = run(fseal_bin, "append", tmp_path / "f.fseal", "--key", key, "--receipts", "/dev/full", "--every", 4, stdin=LINES)
+    assert r.returncode == 2, r.stderr
+    assert "cannot write receipts" in r.stderr
+    assert "issued" not in r.stderr
+
+
+def test_receipts_signed_by_an_untrusted_key_are_unverified_not_tampered(fseal_bin, tmp_path):
+    log, _, pub = seal(fseal_bin, tmp_path)
+    other = tmp_path / "other"
+    other.mkdir()
+    _, other_rec, _ = seal(fseal_bin, other)  # the same records, receipts signed by a key nobody trusts
+    r = verify(fseal_bin, log, other_rec, pub)
+    assert r.returncode == 3, r.stdout
+    assert "RESULT: UNVERIFIED" in r.stdout and "TAMPERED" not in r.stdout
+    assert "receipt 1 (count 4): signed by a different key than the one you trust (not evidence either way)" in r.stdout
+    forged = tmp_path / "forged.receipts"  # the trusted key's name on it, but a signature anyone could write
+    _, rec, _ = log, tmp_path / "f.receipts", pub
+    forged.write_text("".join(line[: line.index("sig=") + 4] + "0" * 128 + "\n" for line in rec.read_text().splitlines()))
+    r = verify(fseal_bin, log, forged, pub)
+    assert r.returncode == 3 and "RESULT: UNVERIFIED" in r.stdout and "signature invalid" in r.stdout
+    tamper.edit_field(log, tmp_path / "t.fseal", record=5, field="z", delta=10.0, fix_crc=True)
+    r = verify(fseal_bin, tmp_path / "t.fseal", other_rec, pub)  # a broken chain is proof on its own
+    assert r.returncode == 1 and "RESULT: TAMPERED" in r.stdout
+
+
+def test_a_torn_log_with_only_untrusted_receipts_is_incomplete_not_tampered(fseal_bin, tmp_path):
+    log, rec, pub = seal(fseal_bin, tmp_path)
+    other = tmp_path / "other"
+    other.mkdir()
+    _, other_rec, _ = seal(fseal_bin, other)
+    log.write_bytes(log.read_bytes()[:-5])  # a crash cut the last record short
+    r = verify(fseal_bin, log, other_rec, pub)
+    assert r.returncode == 1 and "RESULT: INCOMPLETE" in r.stdout and "TAMPERED" not in r.stdout, r.stdout
+    assert "cannot be checked" not in r.stdout  # an untrusted receipt is untrusted, wherever it points
+    r = verify(fseal_bin, log, rec, pub)  # authenticated receipts keep the documented TAMPERED
+    assert r.returncode == 1 and "RESULT: TAMPERED" in r.stdout
