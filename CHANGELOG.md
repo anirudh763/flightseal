@@ -1,5 +1,23 @@
 # Changelog
 
+## Unreleased
+
+### Verifier page: light rebuild with separate screens
+
+The file format, the C++ core and every verdict are unchanged; `docs/verifier.js` is unchanged.
+
+- Screens with their own hash addresses: Verify a file, Findings, Records (`#/records/N`), Receipts
+  (`#/receipts/N`), Trust help, Examples, and Not found for unknown addresses. Old `?sample=...&record=N` links open
+  the same view. Findings, Records and Receipts show an empty state with the Verify action until a file is checked.
+- Evidence chain: records drawn as a vertical hash chain with the first break, the end of the covered prefix and
+  each receipt marked on it in words.
+- A real PX4 flight example (1,650 records selected from the pyulog sample log, BSD-3-Clause) and a tampered copy,
+  made by `tools/make_px4_samples.py`.
+- Light by default, also under an OS dark preference; dark only through the "Dark theme" button. FlightSeal primary
+  #174b5a, 16px text, 44px controls, a 216px rail on wide screens and a Menu sheet below 1000px.
+- Service worker cache version 0.1.0-3-ui (adds theme.js and the PX4 examples). CSP unchanged.
+- tests/web/routes.mjs: 24 checks for the screens (23 of them fail on the previous page).
+
 ## 0.1.0 – 2026-11-13
 
 First tagged version. The file format (`FLTSEAL1`, receipt `v1`) and every verdict are the ones described in the

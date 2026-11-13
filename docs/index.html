@@ -3,155 +3,291 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>FlightSeal verifier</title>
+<title>Verify a file – FlightSeal</title>
 <meta name="description" content="Check a sealed drone flight log, its receipts and public key in your browser. Files are read locally and never uploaded.">
 <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; font-src 'self'; connect-src 'self'; object-src 'none'; base-uri 'none'; form-action 'none'">
 <link rel="icon" href="favicon.svg" type="image/svg+xml">
 <link rel="manifest" href="manifest.webmanifest">
-<meta name="theme-color" content="#24292f">
+<meta name="theme-color" content="#f7f8fa">
 <link rel="stylesheet" href="ui.css">
 <link rel="stylesheet" href="app.css">
+<script src="theme.js"></script>
 <script type="module" src="app.js"></script>
 </head>
 <body>
-<a class="skip" href="#verdict">Skip to the result</a>
-<header class="app-header">
-  <h1 class="name">FlightSeal verifier</h1>
-  <span class="muted tagline">Checks a sealed flight log in this browser. Files are read locally and never uploaded.</span>
-  <a class="repo" href="https://github.com/anirudh763/flightseal">Source on GitHub</a>
-</header>
-
-<main id="main">
-  <noscript><p class="noscript">This verifier needs JavaScript: it checks the log in your browser with WebCrypto. With JavaScript off, use the command-line tool instead: <code>fseal verify LOG --receipts FILE --pubkey HEX</code> (build it from the <a href="https://github.com/anirudh763/flightseal">source</a>).</p></noscript>
-  <div class="top">
-    <section class="box inputs" aria-labelledby="inputs-h">
-      <h2 class="box-header" id="inputs-h">Files</h2>
-      <div class="inputs-body" id="dropzone">
-        <div class="field">
-          <label for="log-file" id="log-label">Sealed log <span class="muted">(.fseal)</span></label>
-          <div class="file-row">
-            <input type="file" id="log-file" hidden>
-            <button type="button" class="btn small" id="log-choose" aria-labelledby="log-choose log-label" aria-describedby="log-name">Choose file</button>
-            <span class="file-name mono" id="log-name">No file chosen</span>
-            <button type="button" class="btn small" id="log-clear" hidden>Remove</button>
-          </div>
-        </div>
-        <div class="field">
-          <label for="rec-file" id="rec-label">Receipts <span class="muted">(.receipts, optional)</span></label>
-          <div class="file-row">
-            <input type="file" id="rec-file" hidden>
-            <button type="button" class="btn small" id="rec-choose" aria-labelledby="rec-choose rec-label" aria-describedby="rec-name">Choose file</button>
-            <span class="file-name mono" id="rec-name">No file chosen</span>
-            <button type="button" class="btn small" id="rec-clear" hidden>Remove</button>
-          </div>
-        </div>
-        <div class="field">
-          <label for="pubkey">Public key you trust <span class="muted">(64 hex digits, needed with receipts)</span></label>
-          <input type="text" id="pubkey" class="input mono" spellcheck="false" autocomplete="off" aria-describedby="pubkey-help">
-          <p class="help" id="pubkey-help">Get it from the operator independently, not from whoever sent you the log.</p>
-        </div>
-        <p class="drop-hint muted">You can also drop the log and receipts anywhere on this page.</p>
-
-        <h3 class="samples-h">Samples</h3>
-        <ul class="samples" aria-describedby="samples-note">
-          <li><button type="button" class="btn" data-sample="intact">Load intact sample</button><span>The log as it was sealed.</span></li>
-          <li><button type="button" class="btn" data-sample="tampered">Load tampered sample</button><span>One altitude changed by 10 m, that record's checksum fixed.</span></li>
-          <li><button type="button" class="btn" data-sample="rewritten">Load rewritten sample</button><span>The same edit with every later link recomputed. Only receipts catch it.</span></li>
-          <li><button type="button" class="btn" data-sample="truncated">Load truncated sample</button><span>The last 150 records deleted. Only receipts catch it.</span></li>
-        </ul>
-        <p class="muted small-print" id="samples-note">Samples are a synthetic 8-second flight (800 records) sealed by the fseal CLI with a receipt every 100 records, made by <a href="https://github.com/anirudh763/flightseal/blob/main/tools/make_web_samples.py">tools/make_web_samples.py</a>.</p>
+<a class="skip" id="skip" href="#content">Skip to content</a>
+<div class="shell">
+  <nav id="rail" aria-label="FlightSeal">
+    <div class="rail-top">
+      <div class="wordmark">
+        <a class="wm" href="#/verify">FlightSeal</a>
+        <p class="purpose">Check a sealed flight log</p>
       </div>
-    </section>
-
-    <section class="box verdict" id="verdict" aria-labelledby="verdict-h" tabindex="-1">
-      <h2 class="box-header" id="verdict-h">Result</h2>
-      <div class="verdict-body">
-        <div id="status" role="status" aria-live="polite" aria-atomic="true">
-          <p class="verdict-line" id="verdict-line">Load a sealed log or a sample to check it.</p>
-        </div>
-        <div id="progress-wrap" hidden>
-          <label for="progress" class="muted">Verifying</label>
-          <progress id="progress" max="100" value="0"></progress>
-          <button type="button" class="btn small" id="cancel">Cancel</button>
-        </div>
-        <div id="verdict-detail"></div>
-        <div class="strip-wrap" id="strip-wrap" hidden>
-          <div class="strip" id="strip" aria-hidden="true"></div>
-          <p class="strip-legend muted" id="strip-legend"></p>
-        </div>
-        <dl class="facts" id="facts"></dl>
-        <div id="break"></div>
-        <div id="notes"></div>
-        <details id="report-wrap" hidden>
-          <summary>Report as text (same format as <code>fseal verify</code>)</summary>
-          <pre class="report mono" id="report"></pre>
-          <button type="button" class="btn small" id="copy-report">Copy report</button>
-          <span class="muted" id="copy-status" role="status"></span>
-        </details>
-      </div>
-    </section>
-  </div>
-
-  <div class="split" id="records-area" hidden>
-    <section class="box records" aria-labelledby="records-h">
-      <div class="box-header records-header">
-        <h2 id="records-h">Records</h2>
-        <div class="pager" role="group" aria-label="Pages of records">
-          <button type="button" class="btn small" id="pg-first">First</button>
-          <button type="button" class="btn small" id="pg-prev">Previous</button>
-          <span id="pg-label" class="pg-label" aria-live="polite"></span>
-          <button type="button" class="btn small" id="pg-next">Next</button>
-          <button type="button" class="btn small" id="pg-last">Last</button>
-        </div>
-        <form class="jump" id="jump">
-          <label for="jump-to">Record</label>
-          <input type="number" id="jump-to" class="input" min="0" step="1" inputmode="numeric">
-          <button type="submit" class="btn small">Show</button>
-          <button type="button" class="btn small" id="show-break" hidden>Show first break</button>
-        </form>
-      </div>
-      <div class="table-scroll" tabindex="0" role="region" aria-label="Records table">
-        <table id="rec-table">
-          <caption class="sr-only" id="rec-caption">Records</caption>
-          <thead><tr><th scope="col">Record</th><th scope="col">Sequence</th><th scope="col">Timestamp (µs)</th><th scope="col">Payload bytes</th><th scope="col">File offset</th><th scope="col">Check</th></tr></thead>
-          <tbody id="rec-body"></tbody>
-        </table>
-      </div>
-      <p class="muted table-note" id="rec-note"></p>
-    </section>
-
-    <section class="box detail" aria-labelledby="detail-h">
-      <h2 class="box-header" id="detail-h">Record</h2>
-      <div class="detail-body" id="detail"><p class="muted">Choose a record to see its fields.</p></div>
-    </section>
-  </div>
-
-  <section class="box receipts" id="receipts-area" aria-labelledby="receipts-h" hidden>
-    <h2 class="box-header" id="receipts-h">Receipts</h2>
-    <div class="table-scroll" tabindex="0" role="region" aria-label="Receipts table">
-      <table class="receipts-table">
-        <caption class="sr-only">Receipts and how each compares with the log</caption>
-        <thead><tr><th scope="col">Receipt</th><th scope="col">After record count</th><th scope="col">Result</th><th scope="col">Signature</th><th scope="col">Head link in the receipt</th></tr></thead>
-        <tbody id="receipts-body"></tbody>
-      </table>
+      <button type="button" class="btn" id="menu-close">Close menu</button>
     </div>
-  </section>
-
-  <section class="about" aria-labelledby="about-h">
-    <h2 id="about-h">What a pass means</h2>
-    <ul>
-      <li>Checks run in order for every record: checksum (CRC-32), sequence number, then the SHA-256 link to the record before. Verification stops at the first failure, as <code>fseal verify</code> does.</li>
-      <li>A hash chain pinpoints the first record where the chain breaks, not every altered record. Records after the break are not checked.</li>
-      <li>Truncation of the tail is only caught with receipts. So is a log that its holder rebuilt from scratch: a receipt kept by someone else, signed by the drone's key, pins how the log looked when the receipt was issued. A receipt that does not match shows that something changed between it and the previous matching receipt, not which record.</li>
-      <li>Receipts count only when their signature verifies with the key you trust. If this browser cannot check Ed25519 signatures, receipts are shown as not authenticated: neither proof of tampering nor of integrity.</li>
-      <li>Nothing here shows the data was true when it was sealed (a spoofed sensor looks normal), and records written after the last receipt are not protected. See the <a href="https://github.com/anirudh763/flightseal/blob/main/THREAT_MODEL.md">threat model</a>.</li>
-      <li>The PX4 converter seals selected decoded ULog records, sorted by timestamp, after the log was downloaded; it does not preserve or authenticate every byte of the original .ulg file, or anything that happened before sealing. See the <a href="https://docs.px4.io/main/en/dev_log/ulog_file_format">PX4 ULog specification</a>.</li>
-      <li>Keeping receipts with a separate witness is an operational assumption: the CLI writes receipts to a local file, and the protection holds only if someone other than the log&#39;s holder keeps a copy.</li>
-      <li>The tests use one real PX4 flight log (a public pyulog fixture); the browser samples are a synthetic 800-record flight.</li>
-      <li>FlightSeal is a narrow, documented workflow to support experiments. It is not proof of safe flight or of an accident&#39;s cause, and it is not a reproduction of RVFuzzer or PGFuzz. No user or field validation has been done.</li>
+    <p class="nav-group" id="nav-work">Work</p>
+    <ul class="nav-list" aria-labelledby="nav-work">
+      <li><a href="#/verify">Verify a file</a></li>
+      <li><a href="#/findings">Findings</a></li>
+      <li><a href="#/records">Records</a></li>
+      <li><a href="#/receipts">Receipts</a></li>
     </ul>
-    <p class="muted small-print">The verifier is plain JavaScript using your browser's WebCrypto for SHA-256 and Ed25519; its tests require it to print the same report as the C++ CLI on every attack the project tests (when the browser can check signatures). Matching the CLI cannot catch a mistake both share. Built with AI assistance (Claude); see the README. Font: Atkinson Hyperlegible, <a href="OFL-atkinson-hyperlegible.txt">SIL Open Font License 1.1</a>.</p>
-  </section>
-</main>
+    <p class="nav-group" id="nav-learn">Learn</p>
+    <ul class="nav-list" aria-labelledby="nav-learn">
+      <li><a href="#/help">Trust help</a></li>
+      <li><a href="#/examples">Examples</a></li>
+    </ul>
+    <div class="rail-foot">
+      <button type="button" class="btn theme" id="theme-toggle" aria-pressed="false">Dark theme</button>
+      <a href="https://github.com/anirudh763/flightseal">Source on GitHub</a>
+    </div>
+  </nav>
+  <div class="scrim" id="scrim" hidden></div>
+
+  <div class="frame" id="frame">
+    <header class="loc">
+      <button type="button" class="btn" id="menu-btn" aria-expanded="false" aria-controls="rail">Menu</button>
+      <a class="back" id="back" href="#/verify" hidden><span aria-hidden="true">←</span> Back</a>
+      <p class="crumb" id="crumb">FlightSeal / Verify a file</p>
+    </header>
+
+    <main id="content">
+      <noscript><p class="noscript">This verifier needs JavaScript: it checks the log in your browser with WebCrypto. With JavaScript off, use the command-line tool instead: <code>fseal verify LOG --receipts FILE --pubkey HEX</code> (build it from the <a href="https://github.com/anirudh763/flightseal">source</a>).</p></noscript>
+
+      <div class="run" id="progress-wrap" hidden>
+        <label for="progress" id="progress-label">Verifying</label>
+        <progress id="progress" max="100" value="0"></progress>
+        <button type="button" class="btn" id="cancel">Cancel</button>
+      </div>
+
+      <!-- Verify -->
+      <section class="screen" data-screen="verify" aria-labelledby="h-verify">
+        <h1 id="h-verify" tabindex="-1">Verify a file</h1>
+        <p class="lede">Check a sealed flight log against the receipts a witness kept and the public key you trust. Files are read in this browser and never uploaded.</p>
+        <div class="verify-grid">
+          <div class="panel" id="dropzone">
+            <ol class="steps">
+              <li class="step">
+                <span class="step-n" aria-hidden="true">1</span>
+                <div class="field">
+                  <label for="log-file" id="log-label">Sealed log <span class="muted">(.fseal)</span></label>
+                  <div class="file-row">
+                    <input type="file" id="log-file" hidden>
+                    <button type="button" class="btn" id="log-choose" aria-labelledby="log-choose log-label" aria-describedby="log-name log-error">Choose file</button>
+                    <span class="file-name mono" id="log-name">No file chosen</span>
+                    <button type="button" class="btn" id="log-clear" hidden>Remove</button>
+                  </div>
+                  <p class="field-error" id="log-error"></p>
+                </div>
+              </li>
+              <li class="step">
+                <span class="step-n" aria-hidden="true">2</span>
+                <div class="field">
+                  <label for="rec-file" id="rec-label">Receipts <span class="muted">(.receipts, optional)</span></label>
+                  <div class="file-row">
+                    <input type="file" id="rec-file" hidden>
+                    <button type="button" class="btn" id="rec-choose" aria-labelledby="rec-choose rec-label" aria-describedby="rec-name rec-help">Choose file</button>
+                    <span class="file-name mono" id="rec-name">No file chosen</span>
+                    <button type="button" class="btn" id="rec-clear" hidden>Remove</button>
+                  </div>
+                  <p class="help" id="rec-help">Receipts catch a shortened or rebuilt log. They count only if someone other than the log's holder kept them: a separate witness.</p>
+                </div>
+              </li>
+              <li class="step">
+                <span class="step-n" aria-hidden="true">3</span>
+                <div class="field">
+                  <label for="pubkey">Public key you trust <span class="muted">(64 hex digits, needed with receipts)</span></label>
+                  <input type="text" id="pubkey" class="input mono" spellcheck="false" autocomplete="off" aria-describedby="pubkey-help">
+                  <p class="help" id="pubkey-help">Get it from the operator independently, not from whoever sent you the log.</p>
+                </div>
+              </li>
+            </ol>
+            <p class="drop-hint muted">You can also drop the log and receipts anywhere on this page.</p>
+            <div class="actions">
+              <button type="button" class="btn primary" id="show-findings">Show findings</button>
+            </div>
+          </div>
+          <aside class="panel status-panel" aria-labelledby="run-h">
+            <h2 id="run-h">This check</h2>
+            <div id="run-status" role="status" aria-live="polite" aria-atomic="true"><p>No file checked yet.</p></div>
+            <p class="muted">No file at hand? <a href="#/examples">Open an example</a>: a synthetic flight or a real PX4 flight log, each sealed with receipts.</p>
+          </aside>
+        </div>
+      </section>
+
+      <!-- Findings -->
+      <section class="screen" data-screen="findings" aria-labelledby="h-findings" hidden>
+        <h1 id="h-findings" tabindex="-1">Findings</h1>
+        <p class="lede" id="findings-sub">Verdict, coverage and where to look first.</p>
+        <div class="empty" data-empty></div>
+        <div id="findings-body" hidden>
+          <div class="verdict" id="verdict" tabindex="-1">
+            <div id="status" role="status" aria-live="polite" aria-atomic="true">
+              <p class="verdict-line" id="verdict-line"></p>
+            </div>
+            <div id="verdict-detail"></div>
+          </div>
+          <div class="findings-cols" id="findings-cols">
+            <div class="panel next">
+              <h2 class="panel-h" id="next-h">Where to look first</h2>
+              <div class="panel-b">
+                <p id="next-text"></p>
+                <dl class="facts" id="facts"></dl>
+                <div id="break"></div>
+                <div class="actions" id="next-actions"></div>
+              </div>
+            </div>
+            <aside class="interp" aria-labelledby="interp-h">
+              <h2 id="interp-h">Interpretation</h2>
+              <p>A file integrity result and an external trust conclusion answer different questions. A pass means this file matches its own hash chain and, with receipts, what a witness was sent while it was written.</p>
+              <p>It does not show the data was true when it was sealed, or that every byte of the original flight log was kept.</p>
+              <a href="#/help">Read trust help</a>
+            </aside>
+          </div>
+          <section class="panel chain-panel" aria-labelledby="chain-h" id="chain-panel">
+            <h2 class="panel-h" id="chain-h">Evidence chain</h2>
+            <div class="panel-b">
+              <p class="muted" id="chain-legend"></p>
+              <ol class="chain summary" id="chain-summary"></ol>
+            </div>
+          </section>
+          <div id="notes"></div>
+          <details id="report-wrap" hidden>
+            <summary>Report as text (same format as <code>fseal verify</code>)</summary>
+            <pre class="report mono" id="report" tabindex="0" aria-label="Report as text"></pre>
+            <button type="button" class="btn" id="copy-report">Copy report</button>
+            <span class="muted" id="copy-status" role="status"></span>
+          </details>
+        </div>
+      </section>
+
+      <!-- Records -->
+      <section class="screen" data-screen="records" aria-labelledby="h-records" hidden>
+        <h1 id="h-records" tabindex="-1">Records</h1>
+        <p class="lede" id="records-sub">Every record as a link in the hash chain, with the receipts attached where they were issued.</p>
+        <div class="empty" data-empty></div>
+        <div class="split" id="records-area" hidden>
+          <section class="panel records" aria-labelledby="records-h">
+            <div class="panel-h records-header">
+              <h2 id="records-h">Chain</h2>
+              <div class="pager" role="group" aria-label="Pages of records">
+                <button type="button" class="btn" id="pg-first">First</button>
+                <button type="button" class="btn" id="pg-prev">Previous</button>
+                <button type="button" class="btn" id="pg-next">Next</button>
+                <button type="button" class="btn" id="pg-last">Last</button>
+              </div>
+            </div>
+            <div class="records-tools">
+              <p id="pg-label" class="pg-label" aria-live="polite"></p>
+              <form class="jump" id="jump">
+                <label for="jump-to">Record</label>
+                <input type="number" id="jump-to" class="input" min="0" step="1" inputmode="numeric">
+                <button type="submit" class="btn">Show</button>
+                <button type="button" class="btn" id="show-break" hidden>Show first break</button>
+              </form>
+            </div>
+            <ol class="chain links" id="rec-body" aria-labelledby="records-h"></ol>
+            <p class="muted table-note" id="rec-note"></p>
+          </section>
+          <section class="panel detail" aria-labelledby="detail-h">
+            <h2 class="panel-h" id="detail-h">Record</h2>
+            <div class="panel-b" id="detail"><p class="muted">Choose a record to see its fields.</p></div>
+          </section>
+        </div>
+      </section>
+
+      <!-- Receipts -->
+      <section class="screen" data-screen="receipts" aria-labelledby="h-receipts" hidden>
+        <h1 id="h-receipts" tabindex="-1">Receipts</h1>
+        <p class="lede" id="receipts-sub">Each receipt pins the chain head after a number of records, signed by the sealing key.</p>
+        <div class="empty" data-empty></div>
+        <div id="receipts-area" hidden>
+          <p class="note warn" id="receipts-none" hidden></p>
+          <div class="split receipts-split" id="receipts-split">
+            <section class="panel" aria-labelledby="receipts-h">
+              <h2 class="panel-h" id="receipts-h">All receipts</h2>
+              <div class="table-scroll" id="receipts-scroll" tabindex="0" role="region" aria-label="Receipts table">
+                <table class="receipts-table">
+                  <caption class="sr-only">Receipts and how each compares with the log</caption>
+                  <thead><tr><th scope="col">Receipt</th><th scope="col">After record count</th><th scope="col">Result</th><th scope="col">Signature</th><th scope="col">Head link in the receipt</th></tr></thead>
+                  <tbody id="receipts-body"></tbody>
+                </table>
+              </div>
+            </section>
+            <section class="panel detail" aria-labelledby="receipt-detail-h">
+              <h2 class="panel-h" id="receipt-detail-h">Receipt</h2>
+              <div class="panel-b" id="receipt-detail"><p class="muted">Choose a receipt to compare it with the log.</p></div>
+            </section>
+          </div>
+        </div>
+      </section>
+
+      <!-- Trust help -->
+      <section class="screen prose" data-screen="help" aria-labelledby="h-help" hidden>
+        <h1 id="h-help" tabindex="-1">Trust help</h1>
+        <p class="lede">What each result means, what it does not mean, and the limits of this check.</p>
+        <h2>Verdicts</h2>
+        <dl class="glossary">
+          <dt><span class="label bad">Tampered</span></dt>
+          <dd>The hash chain breaks at a record, or a receipt signed by the key you trust does not match the log. A rewritten log and a log whose end was removed look the same to a receipt as receipts that belong to another log sealed with the same key; the page says both.</dd>
+          <dt><span class="label ok">Intact</span></dt>
+          <dd>Every record passes its checksum, sequence and link checks, and every receipt signed by the key you trust matches. Records written after the last receipt are named as not covered.</dd>
+          <dt><span class="label warn">Unverified</span></dt>
+          <dd>The chain is consistent but the receipts are not evidence: they name another key, their signature does not verify, or this browser cannot check Ed25519. The text report then says <code>RESULT: UNVERIFIED</code> or leaves the receipts <code>NOT CHECKED</code>, as the CLI does.</dd>
+          <dt><span class="label warn">Incomplete</span></dt>
+          <dd>The last record is cut short, as a crash while writing leaves it. <code>fseal recover</code> trims only that record.</dd>
+        </dl>
+        <h2>What a pass means</h2>
+        <ul>
+          <li>Checks run in order for every record: checksum (CRC-32), sequence number, then the SHA-256 link to the record before. Verification stops at the first failure, as <code>fseal verify</code> does.</li>
+          <li>A hash chain pinpoints the first record where the chain breaks, not every altered record. Records after the break are not checked.</li>
+          <li>Truncation of the tail is only caught with receipts. So is a log that its holder rebuilt from scratch: a receipt kept by someone else, signed by the drone's key, pins how the log looked when the receipt was issued. A receipt that does not match shows that something changed between it and the previous matching receipt, not which record.</li>
+          <li>Receipts count only when their signature verifies with the key you trust. If this browser cannot check Ed25519 signatures, receipts are shown as not authenticated: neither proof of tampering nor of integrity.</li>
+          <li>Nothing here shows the data was true when it was sealed (a spoofed sensor looks normal), and records written after the last receipt are not protected. See the <a href="https://github.com/anirudh763/flightseal/blob/main/THREAT_MODEL.md">threat model</a>.</li>
+          <li>The PX4 converter seals selected decoded ULog records, sorted by timestamp, after the log was downloaded; it does not preserve or authenticate every byte of the original .ulg file, or anything that happened before sealing. See the <a href="https://docs.px4.io/main/en/dev_log/ulog_file_format">PX4 ULog specification</a>.</li>
+          <li>Keeping receipts with a separate witness is an operational assumption: the CLI writes receipts to a local file, and the protection holds only if someone other than the log&#39;s holder keeps a copy.</li>
+          <li>The tests use one real PX4 flight log (a public pyulog fixture); the browser examples are a synthetic 800-record flight and 1,650 records selected from that PX4 log.</li>
+          <li>FlightSeal is a narrow, documented workflow to support experiments. It is not proof of safe flight or of an accident&#39;s cause, and it is not a reproduction of RVFuzzer or PGFuzz. No user or field validation has been done.</li>
+        </ul>
+        <h2>Limits of this page</h2>
+        <ul>
+          <li>A receipts file over 16 MB is not read here; use the CLI.</li>
+          <li>Up to 2,000,000 records are listed; every record is verified however many there are.</li>
+          <li>A receipt count with more than 20 significant digits, or above 2<sup>64</sup>&minus;1, is &quot;not a receipt&quot;, reported with its line number, before any big-number arithmetic runs.</li>
+          <li>After a record length that runs past the end of the file, at most 16 possible starts of the next record get a full checksum (the same cap as the C++ and Python readers), so a crafted file cannot make the check slow.</li>
+          <li>Verification runs in a background worker; Cancel stops it while the log is scanned and while receipt signatures are checked, and no verdict is shown after Cancel.</li>
+        </ul>
+        <p class="muted small-print">The verifier is plain JavaScript using your browser's WebCrypto for SHA-256 and Ed25519; its tests require it to print the same report as the C++ CLI on every attack the project tests (when the browser can check signatures). Matching the CLI cannot catch a mistake both share. Built with AI assistance (Claude); see the README. Font: Atkinson Hyperlegible, <a href="OFL-atkinson-hyperlegible.txt">SIL Open Font License 1.1</a>.</p>
+      </section>
+
+      <!-- Examples -->
+      <section class="screen" data-screen="examples" aria-labelledby="h-examples" hidden>
+        <h1 id="h-examples" tabindex="-1">Examples</h1>
+        <p class="lede">Each example loads a sealed log with its receipts and public key, then opens its findings.</p>
+        <h2 class="group-h">Real PX4 flight log</h2>
+        <ul class="examples">
+          <li><button type="button" class="btn" data-sample="px4">Load PX4 flight example</button><span>1,650 records from a real PX4 flight (vehicle_local_position, commander_state and vehicle_status), sealed with a receipt every 100 records.</span></li>
+          <li><button type="button" class="btn" data-sample="px4-tampered">Load tampered PX4 example</button><span>The same log with one local-position altitude changed by 10 m and that record's checksum fixed.</span></li>
+        </ul>
+        <p class="muted small-print">Source: <code>test/sample.ulg</code> in <a href="https://github.com/PX4/pyulog">PX4/pyulog</a> (BSD-3-Clause, <a href="samples/LICENSE-pyulog.txt">licence</a>), pinned by SHA-256 and converted by <a href="https://github.com/anirudh763/flightseal/blob/main/tools/make_px4_samples.py">tools/make_px4_samples.py</a>. Three of its topics are sealed; the log has no GPS topic, only position in metres from take-off.</p>
+        <h2 class="group-h">Synthetic flight</h2>
+        <ul class="examples">
+          <li><button type="button" class="btn" data-sample="intact">Load intact example</button><span>The log as it was sealed.</span></li>
+          <li><button type="button" class="btn" data-sample="tampered">Load tampered example</button><span>One altitude changed by 10 m, that record's checksum fixed.</span></li>
+          <li><button type="button" class="btn" data-sample="rewritten">Load rewritten example</button><span>The same edit with every later link recomputed. Only receipts catch it.</span></li>
+          <li><button type="button" class="btn" data-sample="truncated">Load truncated example</button><span>The last 150 records deleted. Only receipts catch it.</span></li>
+        </ul>
+        <p class="muted small-print" id="samples-note">The synthetic examples are an 8-second flight (800 records) sealed by the fseal CLI with a receipt every 100 records, made by <a href="https://github.com/anirudh763/flightseal/blob/main/tools/make_web_samples.py">tools/make_web_samples.py</a>.</p>
+      </section>
+
+      <!-- Not found -->
+      <section class="screen" data-screen="notfound" aria-labelledby="h-notfound" hidden>
+        <h1 id="h-notfound" tabindex="-1">Not found</h1>
+        <p class="lede">There is no screen at this address.</p>
+        <p><a class="btn primary" href="#/verify">Go to Verify a file</a></p>
+      </section>
+    </main>
+  </div>
+</div>
 </body>
 </html>

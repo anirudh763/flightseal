@@ -2,7 +2,7 @@
  "sentences": [
   "The PX4 converter seals selected decoded ULog records, sorted by timestamp, after the log was downloaded; it does not preserve or authenticate every byte of the original .ulg file, or anything that happened before sealing.",
   "Keeping receipts with a separate witness is an operational assumption: the CLI writes receipts to a local file, and the protection holds only if someone other than the log's holder keeps a copy.",
-  "The tests use one real PX4 flight log (a public pyulog fixture); the browser samples are a synthetic 800-record flight.",
+  "The tests use one real PX4 flight log (a public pyulog fixture); the browser examples are a synthetic 800-record flight and 1,650 records selected from that PX4 log.",
   "FlightSeal is a narrow, documented workflow to support experiments. It is not proof of safe flight or of an accident's cause, and it is not a reproduction of RVFuzzer or PGFuzz. No user or field validation has been done."
  ],
  "spec": "https://docs.px4.io/main/en/dev_log/ulog_file_format"
