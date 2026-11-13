@@ -8,3 +8,7 @@ __pycache__/
 demo-out/
 tests/.data/
 build-release/
+!docs/samples/*.fseal
+!docs/samples/*.receipts
+tests/web/node_modules/
+build-asan/
