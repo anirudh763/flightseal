@@ -185,3 +185,82 @@ def test_a_torn_log_with_only_untrusted_receipts_is_incomplete_not_tampered(fsea
     assert "cannot be checked" not in r.stdout  # an untrusted receipt is untrusted, wherever it points
     r = verify(fseal_bin, log, rec, pub)  # authenticated receipts keep the documented TAMPERED
     assert r.returncode == 1 and "RESULT: TAMPERED" in r.stdout
+
+
+def test_recover_refuses_to_trim_complete_records_after_a_corrupt_length(fseal_bin, tmp_path):
+    lines = "".join(f"{1000 * (i + 1)}\t{{\"z\":{i}}}\n" for i in range(100))
+    log, rec, pub = seal(fseal_bin, tmp_path, lines=lines, every=10)
+    data = bytearray(log.read_bytes())
+    off = 8
+    for _ in range(50):
+        off += 20 + int.from_bytes(data[off:off + 4], "little") + 36
+    data[off + 1] |= 0x40  # bit 14 of record 50's length
+    log.write_bytes(bytes(data))
+    r = run(fseal_bin, "recover", log)
+    assert r.returncode != 0 and not re.search(r"trimmed \d+ bytes", r.stdout), r.stdout
+    assert log.read_bytes() == bytes(data)
+    r = run(fseal_bin, "append", log, stdin="99999\t{}\n")
+    assert r.returncode != 0 and log.read_bytes() == bytes(data)
+    v = verify(fseal_bin, log)
+    assert first_problem(v.stdout) == ("bad-length", 50) and "INCOMPLETE" not in v.stdout
+
+
+def test_verify_never_skips_receipts_silently(fseal_bin, tmp_path):
+    log, rec, pub = seal(fseal_bin, tmp_path)
+    tamper.drop_tail(log, tmp_path / "short.fseal", records=3)
+    short = tmp_path / "short.fseal"
+    (tmp_path / "empty.receipts").write_text("")
+    for args in (["--receipt", rec, "--pubkey", pub], ["--pubkey", pub], ["--receipts", tmp_path / "empty.receipts", "--pubkey", pub]):
+        r = run(fseal_bin, "verify", short, *args)
+        assert r.returncode == 2, (args, r.stdout)
+        assert "INTACT" not in r.stdout
+    assert run(fseal_bin, "recover", short, "--force", "yes").returncode == 2
+    assert run(fseal_bin, "append", short, "--keys", "k.pem", stdin="").returncode == 2
+
+
+def test_append_checks_the_key_before_sealing_anything(fseal_bin, tmp_path):
+    lines = "".join(f"{i + 1}\t{{\"z\":{i}}}\n" for i in range(1500))
+    log = tmp_path / "f.fseal"
+    r = run(fseal_bin, "append", log, "--key", tmp_path / "missing.pem", "--receipts", tmp_path / "f.receipts", stdin=lines)
+    assert r.returncode == 2
+    assert not log.exists() or len(fseal_py.scan(log).items) == 0
+
+
+def test_append_issues_a_receipt_for_sealed_records_before_failing(fseal_bin, tmp_path):
+    good = "".join(f"{i + 1}\t{{\"z\":{i}}}\n" for i in range(1499))
+    key = tmp_path / "k.pem"
+    run(fseal_bin, "keygen", key)
+    for name, bad in (("blank", "\n"), ("oversize", "2000\t" + "x" * (fseal_py.MAX_PAYLOAD + 1) + "\n")):
+        log, rec = tmp_path / f"{name}.fseal", tmp_path / f"{name}.receipts"
+        r = run(fseal_bin, "append", log, "--key", key, "--receipts", rec, stdin=good + bad + "3000\t{}\n")
+        assert r.returncode == 2, (name, r.stderr)
+        assert rec.read_text().splitlines()[-1].split()[2] == "count=1499", name
+
+
+def test_receipts_from_another_flight_with_the_same_key_are_not_called_a_rewrite(fseal_bin, tmp_path):
+    key = tmp_path / "k.pem"
+    pub = run(fseal_bin, "keygen", key).stdout.strip()
+    for name, lines in (("a", LINES), ("b", LINES.replace("-1", "-2"))):
+        run(fseal_bin, "append", tmp_path / f"{name}.fseal", "--key", key, "--receipts", tmp_path / f"{name}.receipts", "--every", 4, stdin=lines)
+    r = verify(fseal_bin, tmp_path / "b.fseal", tmp_path / "a.receipts", pub)
+    assert r.returncode == 1
+    assert "or these receipts belong to another log sealed with the same key" in r.stdout
+
+
+def test_a_crafted_tail_of_follow_on_candidates_is_fast_in_the_cli_and_the_python_reader(fseal_bin, tmp_path):
+    import struct
+    import time
+
+    body = b"FLTSEAL1" + struct.pack("<IQQ", 0xF0000, 0, 0)
+    data = body + struct.pack("<IQ", 500_000, 1) * ((980_000 - len(body)) // 12)
+    log = tmp_path / "crafted.fseal"
+    log.write_bytes(data)
+    t = time.monotonic()
+    v = verify(fseal_bin, log)
+    r = run(fseal_bin, "recover", log)
+    assert time.monotonic() - t < 4.0  # both commands; about a minute each before the candidate cap
+    assert first_problem(v.stdout) == ("bad-length", 0)
+    assert r.returncode == 1 and log.read_bytes() == data
+    t = time.monotonic()
+    assert fseal_py.scan(log).problem == "bad-length"
+    assert time.monotonic() - t < 2.0

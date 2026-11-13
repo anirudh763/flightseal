@@ -31,6 +31,11 @@ def seal(fseal, folder, lines, every, tag):
     return log, rec, pub
 
 
+def crafted_candidates(size=980_000):
+    body = b"FLTSEAL1" + struct.pack("<IQQ", 0xF0000, 0, 0)
+    return body + struct.pack("<IQ", 500_000, 1) * ((size - len(body)) // 12)
+
+
 def with_first_seq(log, seq):
     """The log with record 0's sequence number replaced and its checksum recomputed (so the seq check fires)."""
     recs = fseal_py.scan(log).items
@@ -87,9 +92,12 @@ def main():
     add("altered-signature", log, out / "altered-sig.receipts", pub)
     (out / "altered-count.receipts").write_text("\n".join([lines[0].replace("count=4", "count=3")] + lines[1:]) + "\n")
     add("altered-count", log, out / "altered-count.receipts", pub)
-    (out / "empty.receipts").write_text("")
-    add("empty-receipts-file", log, out / "empty.receipts", pub)
-    add("torn+empty-receipts", out / "torn.fseal", out / "empty.receipts", pub)
+    (out / "empty.receipts").write_text("")  # the CLI refuses it (exit 2); see "rejected" below
+
+    # Two flights sealed with the same key: B checked against A's receipts.
+    flight_b, rec_b = out / "flight-b.fseal", out / "flight-b.receipts"
+    run(fseal, "append", flight_b, "--key", out / "base.pem", "--receipts", rec_b, "--every", 4, stdin=LINES.replace("-1", "-2"))
+    add("other-flight-same-key", flight_b, rec, pub)
 
     # Hostile and malformed logs.
     data = log.read_bytes()
@@ -102,7 +110,7 @@ def main():
         "bad-header": b"NOTSEAL!" + data[8:],
         "short-garbage": b"\x00\xff",
         "length-0xffffffff": data[:second] + b"\xff\xff\xff\xff" + data[second + 4:],
-        "length-max-payload-torn": data[:second] + struct.pack("<I", fseal_py.MAX_PAYLOAD) + data[second + 4:],
+        "length-max-payload-bad-length": data[:second] + struct.pack("<I", fseal_py.MAX_PAYLOAD) + data[second + 4:],
         "length-max-plus-one": data[:second] + struct.pack("<I", fseal_py.MAX_PAYLOAD + 1) + data[second + 4:],
         "header-only": data[:second + 20],
         "seq-2^32": with_first_seq(log, 1 << 32),
@@ -110,6 +118,16 @@ def main():
         "zeros-after-magic": b"FLTSEAL1" + bytes(4096),
         "random-after-magic": b"FLTSEAL1" + bytes((i * 2654435761 >> 7) & 0xFF for i in range(5000)),
     }
+    # A corrupted length that runs past the end of the file with intact records after it: corruption, not a torn
+    # tail (recover must not trim the records after it).
+    s100 = fseal_py.scan(samples_intact := ROOT / "docs" / "samples" / "intact.fseal").items
+    corrupt = bytearray(samples_intact.read_bytes())
+    at = 8 + sum(len(r.encode()) for r in s100[:50])
+    corrupt[at + 2] |= 0x08  # bit 19: about 512 KiB, past the end of this 110 KB file but under the 1 MiB limit
+    hostile["corrupt-length-before-complete-records"] = bytes(corrupt)
+    # Crafted against the follow-on search: a first record that runs past the end, then ~980 KB of 12-byte
+    # [length 500000][sequence 1] candidates. Must stay fast (at most 16 candidates are checksummed).
+    hostile["crafted-many-candidates"] = crafted_candidates()
     for name, blob in hostile.items():
         (out / f"{name}.fseal").write_bytes(blob)
         add(name, out / f"{name}.fseal")
@@ -190,7 +208,11 @@ def main():
         "other-key-unsigned": {"log": str(log), "receipts": str(other_rec), "pubkey": pub},
     }
 
-    (out / "cases.json").write_text(json.dumps({"cases": cases, "malformed": malformed, "unsigned": unsigned}, indent=1))
+    rejected = [
+        {"name": "empty-receipts-file", "log": str(log), "receipts": str(out / "empty.receipts"), "pubkey": pub},
+        {"name": "torn+empty-receipts", "log": str(out / "torn.fseal"), "receipts": str(out / "empty.receipts"), "pubkey": pub},
+    ]
+    (out / "cases.json").write_text(json.dumps({"cases": cases, "malformed": malformed, "unsigned": unsigned, "rejected": rejected}, indent=1))
 
 
 if __name__ == "__main__":

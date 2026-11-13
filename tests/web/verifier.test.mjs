@@ -20,7 +20,7 @@ const dir = mkdtempSync(join(tmpdir(), "fseal-web-"));
 const made = spawnSync("python3", [join(ROOT, "tests/web/make_cases.py"), FSEAL, dir, PX4], { encoding: "utf8" });
 after(() => rmSync(dir, { recursive: true, force: true }));
 if (made.status !== 0) throw new Error(made.stderr);
-const { cases, malformed, unsigned } = JSON.parse(readFileSync(join(dir, "cases.json"), "utf8"));
+const { cases, malformed, unsigned, rejected } = JSON.parse(readFileSync(join(dir, "cases.json"), "utf8"));
 const PX4_MISSING = existsSync(PX4) ? false : "tests/.data/px4-sample.ulg is missing, so the 3 real-flight cases did not run: python3 tools/fetch_sample.py tests/.data";
 
 function cli(c) {
@@ -128,6 +128,48 @@ test("a torn log with only untrusted receipts is INCOMPLETE in the CLI and the J
     assert.match(out.stdout, new RegExp(`RESULT: ${want}`), name);
     assert.equal((await js(c)).report, out.stdout, name);
   }
+});
+
+for (const c of rejected) {
+  test(`a receipts file with no receipts is refused by the CLI (exit 2), never a pass: ${c.name}`, async () => {
+    const r = cli(c);
+    assert.equal(r.code, 2);
+    assert.match(r.stderr, /contains no receipts/);
+    assert.doesNotMatch(r.stdout, /INTACT/);
+    assert.equal(parseReceipts(decodeReceipts(readFileSync(c.receipts))).receipts.length, 0); // the page warns instead
+  });
+}
+
+test("a corrupt length with complete records after it is bad-length in all three readers, not a torn tail", async () => {
+  const c = cases.find((x) => x.name === "corrupt-length-before-complete-records");
+  const got = await js(c);
+  assert.equal(got.scan.status, "bad-length");
+  assert.equal(got.scan.problem.record, 50);
+  assert.equal(got.scan.problem.nextAt > got.scan.problem.offset, true);
+  assert.equal(c.python.problem, "bad-length");
+  assert.match(cli(c).stdout, /record 50, byte \d+: impossible record length/);
+});
+
+test("receipts of another flight sealed with the same key are not called only a rewrite", async () => {
+  const c = cases.find((x) => x.name === "other-flight-same-key");
+  const out = cli(c);
+  assert.match(out.stdout, /or these receipts belong to another log sealed with the same key/);
+  assert.equal((await js(c)).report, out.stdout);
+});
+
+test("a crafted tail of many follow-on candidates is fast in the JS and the CLI (bad-length, nothing trimmed)", async () => {
+  const c = cases.find((x) => x.name === "crafted-many-candidates");
+  let t = performance.now();
+  const got = await js(c);
+  const jsMs = performance.now() - t;
+  assert.equal(got.scan.status, "bad-length");
+  assert.equal(got.scan.problem.crafted, true);
+  assert.ok(jsMs < 2000, `JS took ${jsMs.toFixed(0)} ms`);
+  t = performance.now();
+  const out = cli(c);
+  const cliMs = performance.now() - t;
+  assert.ok(cliMs < 2000, `CLI took ${cliMs.toFixed(0)} ms`);
+  assert.equal(got.report, out.stdout);
 });
 
 test("the sample shipped with the page breaks where the page says", async () => {

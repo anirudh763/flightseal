@@ -32,11 +32,18 @@ int usage() {
   return 2;
 }
 
-// Options after the positional arguments: --name value pairs.
-bool parse_options(int argc, char** argv, int first, std::vector<std::pair<std::string, std::string>>* out) {
+// Options after the positional arguments: --name value pairs, each name one the command accepts. An unknown
+// name is an error, never ignored: a typo such as --receipt would otherwise skip the receipts check.
+bool parse_options(int argc, char** argv, int first, const std::vector<std::string>& allowed,
+                   std::vector<std::pair<std::string, std::string>>* out) {
   for (int i = first; i < argc; i += 2) {
     if (std::strncmp(argv[i], "--", 2) != 0 || i + 1 >= argc) return false;
-    out->emplace_back(argv[i] + 2, argv[i + 1]);
+    std::string name = argv[i] + 2;
+    if (std::find(allowed.begin(), allowed.end(), name) == allowed.end()) {
+      std::cerr << "fseal: unknown option --" << name << "\n";
+      return false;
+    }
+    out->emplace_back(name, argv[i + 1]);
   }
   return true;
 }
@@ -71,8 +78,9 @@ int append(const std::string& log, const std::vector<std::pair<std::string, std:
   uint64_t every = option(opts, "every").empty() ? 1000 : std::strtoull(option(opts, "every").c_str(), nullptr, 10);
   if (every == 0) return usage();
 
-  // Open the receipts file before touching the log: sealing without anywhere to put receipts would leave
-  // records that no witness ever covered.
+  // Check the key and open the receipts file before touching the log: sealing without a usable key or anywhere
+  // to put receipts would leave records that no witness ever covered.
+  if (!key.empty()) public_key(key);  // throws if the key file is missing or not an Ed25519 private key
   std::ofstream out;
   if (!receipts.empty()) {
     out.open(receipts, std::ios::app);
@@ -92,16 +100,27 @@ int append(const std::string& log, const std::vector<std::pair<std::string, std:
     ++issued;
   };
 
+  // On a bad line or any error, records already sealed still get a receipt before append stops.
+  auto stop = [&](const std::string& why) {
+    std::cerr << why << "\n";
+    if (!key.empty() && w.count() != receipted) {
+      issue();
+      std::cerr << "issued a receipt for the " << w.count() << " records sealed before the error\n";
+    }
+    return 2;
+  };
   std::string line;
   for (uint64_t n = 1; std::getline(std::cin, line); ++n) {
     size_t tab = line.find('\t');
     char* end = nullptr;
     uint64_t ts = std::strtoull(line.c_str(), &end, 10);
-    if (tab == std::string::npos || end != line.c_str() + tab || tab == 0) {
-      std::cerr << "line " << n << ": expected timestamp_us<TAB>payload\n";
-      return 2;
+    if (tab == std::string::npos || end != line.c_str() + tab || tab == 0)
+      return stop("line " + std::to_string(n) + ": expected timestamp_us<TAB>payload");
+    try {
+      w.append(ts, std::string_view(line).substr(tab + 1));
+    } catch (const std::exception& e) {
+      return stop("line " + std::to_string(n) + ": " + e.what());
     }
-    w.append(ts, std::string_view(line).substr(tab + 1));
     if (mode == "every") w.sync();
     else if ((w.count() - start) % 1000 == 0) w.sync();
     if (!key.empty() && w.count() - receipted >= every) issue();
@@ -117,6 +136,10 @@ int append(const std::string& log, const std::vector<std::pair<std::string, std:
 int verify(const std::string& log, const std::vector<std::pair<std::string, std::string>>& opts) {
   std::string receipts = option(opts, "receipts"), pub_hex = option(opts, "pubkey");
   PublicKey trusted{};
+  if (receipts.empty() != pub_hex.empty()) {
+    std::cerr << "verify: --receipts and --pubkey go together (the receipts file and the 64-hex-digit key you trust)\n";
+    return 2;
+  }
   if (!receipts.empty() && !parse_hex(pub_hex, trusted.data(), trusted.size())) {
     std::cerr << "verify: --receipts needs --pubkey with the 64-hex-digit key you trust\n";
     return 2;
@@ -136,6 +159,10 @@ int verify(const std::string& log, const std::vector<std::pair<std::string, std:
         return 2;
       }
       list.push_back(r);
+    }
+    if (list.empty()) {  // checking nothing must not look like a pass
+      std::cerr << receipts << ": contains no receipts; nothing to check the log against\n";
+      return 2;
     }
   }
   std::map<uint64_t, Hash> links;
@@ -218,7 +245,10 @@ int main(int argc, char** argv) {
   if (argc < 3) return usage();
   std::string cmd = argv[1], path = argv[2];
   std::vector<std::pair<std::string, std::string>> opts;
-  if (!parse_options(argc, argv, 3, &opts)) return usage();
+  std::vector<std::string> allowed;
+  if (cmd == "append") allowed = {"key", "receipts", "every", "sync"};
+  else if (cmd == "verify") allowed = {"receipts", "pubkey"};
+  if (!parse_options(argc, argv, 3, allowed, &opts)) return usage();
   try {
     if (cmd == "keygen" && opts.empty()) return keygen(path);
     if (cmd == "append") return append(path, opts);

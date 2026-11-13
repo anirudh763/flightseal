@@ -76,3 +76,19 @@ no evidence that the log was or was not changed. `fseal verify` reports such rec
 the log (TAMPERED, exit 1). The browser verifier follows the same rule, and when it cannot check Ed25519 at all it
 treats every receipt as unauthenticated. **Rejected:** calling a forged receipt tampering (it would let anyone make
 an honest log look tampered by sending a bad receipts file).
+
+### 16. A length that runs past the end of the file is a crash only if nothing intact follows
+A crash can cut the final record short, and recovery trims it. But one flipped bit in a length field also makes a
+record "run past the end", and trimming there would delete every complete record after it. So before calling it a
+torn tail, the reader looks within one maximum-size record for a complete record with the next sequence number and a
+valid checksum; if it finds one, it reports corruption (`bad-length`) and recovery leaves the file alone. All three
+readers (C++, Python, JavaScript) apply the same rule. At most 16 positions with the right sequence number are
+checksummed, so a crafted tail cannot make the search slow; past that cap the answer is "corruption" (trim nothing).
+Residual: a crash whose torn final record happens to contain a valid-looking next record makes recovery refuse.
+That fails safe (nothing is deleted); by accident it is very unlikely, and a crafted payload can trigger it.
+
+### Known limitation: receipts do not name their log
+A receipt says "after N records the head was H", signed by the drone's key, but not which flight it belongs to. If
+two flights are sealed with the same key, checking one against the other's receipts fails exactly as a rewrite
+would, so `verify` names both causes. A log identifier in the file header, included in every receipt, would tell
+them apart; it would change the file format, so it is left for a future version.

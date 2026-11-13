@@ -129,6 +129,51 @@ try {
     assert.match(page.url(), /record=742/);
   });
 
+  await check("keyboard focus stays on a control after showing a record and paging to either end", async () => {
+    const active = () => page.evaluate(() => ({ tag: document.activeElement.tagName, id: document.activeElement.id, text: document.activeElement.textContent }));
+    assert.equal(await page.getAttribute("#pg-label", "aria-live"), "polite");
+    // "Show record N" with Enter: focus stays on that row's button after the table re-renders.
+    await page.focus('#rec-body tr[data-record="745"] button');
+    await page.keyboard.press("Enter");
+    await page.waitForFunction(() => document.querySelector("#detail-h").textContent === "Record 745");
+    let a = await active();
+    assert.notEqual(a.tag, "BODY");
+    assert.equal(a.text, "745");
+    // On the next-to-last page (15 of 16), Next reaches the last page and becomes disabled: focus moves to Previous.
+    assert.match(await page.textContent("#pg-label"), /page 15 of 16/);
+    await page.focus("#pg-next");
+    await page.keyboard.press("Enter");
+    a = await active();
+    assert.notEqual(a.tag, "BODY");
+    assert.equal(a.id, "pg-prev");
+    // Last, from the first page; then First from the last page.
+    await page.click("#pg-first");
+    await page.focus("#pg-last");
+    await page.keyboard.press("Enter");
+    a = await active();
+    assert.equal(a.id, "pg-prev");
+    await page.focus("#pg-first");
+    await page.keyboard.press("Enter");
+    a = await active();
+    assert.equal(a.id, "pg-next");
+  });
+
+  await check("a corrupt length with complete records after it is not called a crash", async () => {
+    const data = Buffer.from(readFileSync(join(SAMPLES, "intact.fseal")));
+    let off = 8;
+    for (let i = 0; i < 50; i++) off += 56 + data.readUInt32LE(off);
+    data[off + 2] |= 0x08;
+    const p = join(tmp, "corrupt-length.fseal");
+    writeFileSync(p, data);
+    const out = spawnSync(FSEAL, ["recover", p], { encoding: "utf8" });
+    assert.notEqual(out.status, 0);
+    await page.click("#rec-clear");
+    await page.setInputFiles("#log-file", p);
+    await page.waitForFunction(() => document.querySelector("#verdict-detail").textContent.includes("fseal recover will not trim anything"));
+    assert.equal((await page.textContent("#verdict-line")).trim(), "Tampered: the chain breaks at record 50");
+    assert.doesNotMatch(await page.textContent("#verdict"), /Incomplete|crash while writing/);
+  });
+
   await check("a shared URL opens the same view", async () => {
     await page.goto(url + "?sample=truncated&record=12");
     await loaded(page);
@@ -386,9 +431,9 @@ try {
     await p2.close();
   });
 
-  for (const scheme of ["light", "dark"]) {
-    await check(`axe-core: 0 violations, ${scheme}, every sample and the empty state`, async () => {
-      const c = await browser.newContext({ colorScheme: scheme, viewport: { width: 1280, height: 900 } });
+  for (const scheme of ["light", "dark"]) for (const width of [1280, 375]) {
+    await check(`axe-core: 0 violations, ${scheme}, ${width} px, every sample and the empty state`, async () => {
+      const c = await browser.newContext({ colorScheme: scheme, viewport: { width, height: 900 } });
       const p = await c.newPage();
       const all = [];
       for (const s of ["tampered", "intact", "rewritten", "truncated"]) {

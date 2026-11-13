@@ -6,6 +6,7 @@
 #include <sys/stat.h>
 #include <unistd.h>
 
+#include <algorithm>
 #include <cerrno>
 #include <cstdio>
 #include <cstring>
@@ -69,7 +70,7 @@ const char* describe(Status s) {
     case Status::Ok: return "intact";
     case Status::TornTail: return "torn final record (the writer stopped mid-record, e.g. a crash)";
     case Status::BadHeader: return "not a FlightSeal log (bad file header)";
-    case Status::BadLength: return "impossible record length (corruption)";
+    case Status::BadLength: return "impossible record length: corruption, not a crash (nothing is trimmed)";
     case Status::BadCrc: return "checksum mismatch (bytes were changed or damaged)";
     case Status::BadSeq: return "sequence break (a record was deleted, reordered or duplicated)";
     case Status::BadLink: return "hash-chain break (a record's contents changed after sealing)";
@@ -97,6 +98,25 @@ bool read_all(const std::string& path, std::string* out) {
     return false;
   }
   return !in.bad();
+}
+// True if a complete record with sequence number `seq` and a valid checksum starts somewhere in
+// (from, from + kRecordHeader + kMaxPayload + kRecordTrailer]. Used when a record's length runs past the end of
+// the file: if the next record is intact after it, the length was corrupted and this is not a crash's torn tail.
+// At most kMaxCandidates positions with the right sequence number get a full checksum, so a crafted tail cannot
+// make this slow; past that the answer is "follows" (report corruption, trim nothing), the safe direction.
+constexpr int kMaxCandidates = 16;
+bool complete_record_follows(const std::string& s, size_t from, uint64_t seq) {
+  size_t last = std::min(s.size(), from + kRecordHeader + kMaxPayload + kRecordTrailer);
+  int candidates = 0;
+  for (size_t p = from + 1; p + kRecordHeader + kRecordTrailer <= s.size() && p <= last; ++p) {
+    if (get_le(s.data() + p + 4, 8) != seq) continue;  // cheap filter before the checksum
+    if (++candidates > kMaxCandidates) return true;
+    uint64_t len = get_le(s.data() + p, 4);
+    if (len > kMaxPayload || p + kRecordHeader + len + kRecordTrailer > s.size()) continue;
+    size_t total = kRecordHeader + len + kRecordTrailer;
+    if (crc32(s.data() + p, total - 4) == get_le(s.data() + p + total - 4, 4)) return true;
+  }
+  return false;
 }
 void write_all(int fd, const char* p, size_t n) {
   while (n > 0) {
@@ -134,7 +154,10 @@ ScanResult scan(const std::string& path, std::map<uint64_t, Hash>* links_at) {
     uint32_t len = static_cast<uint32_t>(get_le(rec, 4));
     if (len > kMaxPayload) { r.status = Status::BadLength; break; }
     size_t total = kRecordHeader + len + kRecordTrailer;
-    if (left < total) { r.status = Status::TornTail; break; }
+    if (left < total) {
+      r.status = complete_record_follows(s, off, r.records + 1) ? Status::BadLength : Status::TornTail;
+      break;
+    }
     if (crc32(rec, total - 4) != get_le(rec + total - 4, 4)) { r.status = Status::BadCrc; break; }
     uint64_t seq = get_le(rec + 4, 8), ts = get_le(rec + 12, 8);
     if (seq != r.records) { r.status = Status::BadSeq; break; }
@@ -336,7 +359,9 @@ const char* describe(ReceiptCheck c) {
     case ReceiptCheck::WrongKey: return "signed by a different key than the one you trust";
     case ReceiptCheck::BadSignature: return "signature invalid (the receipt itself was altered)";
     case ReceiptCheck::LogShorter: return "log is shorter than the receipt (records were removed from the end)";
-    case ReceiptCheck::HeadMismatch: return "log does not match the receipt (it was rewritten after the receipt was issued)";
+    case ReceiptCheck::HeadMismatch:
+      return "log does not match this receipt: it was rewritten after the receipt was issued, or these receipts belong to "
+             "another log sealed with the same key";
   }
   return "unknown";
 }

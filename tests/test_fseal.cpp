@@ -48,6 +48,7 @@ TEST(link_depends_on_every_field) {
 #include <sys/stat.h>
 #include <unistd.h>
 
+#include <chrono>
 #include <cstdint>
 #include <cstdlib>
 #include <fstream>
@@ -268,6 +269,49 @@ TEST(unreadable_path_is_an_io_error_not_an_exception) {
   CHECK(s == Status::IoError);
   CHECK(rs == Status::IoError);
   ::rmdir(dir.c_str());
+}
+
+TEST(a_corrupt_length_before_complete_records_is_corruption_not_a_torn_tail) {
+  std::string p = make_log("corruptlen", 100);
+  std::string s = read_file(p);
+  auto offs = record_offsets(s);
+  put_u32(s, offs[50], get_u32(s, offs[50]) | 0x4000);  // record 50 now claims to run past the end of the file
+  write_file(p, s);
+  ScanResult r = scan(p);
+  CHECK(r.status == Status::BadLength);
+  CHECK(r.records == 50);
+  uint64_t trimmed = 0;
+  CHECK(recover(p, &trimmed).status != Status::Ok);
+  CHECK(trimmed == 0);
+  CHECK(read_file(p) == s);  // 50 complete records after it are evidence: nothing is trimmed
+  bool threw = false;
+  try { Writer w(p); } catch (const std::exception&) { threw = true; }
+  CHECK(threw);
+  CHECK(read_file(p) == s);
+}
+
+TEST(a_crafted_tail_of_follow_on_candidates_stays_fast_and_is_not_trimmed) {
+  // A first record that runs past the end, then ~980 KB of 12-byte [length 500000][sequence 1] candidates. Without
+  // a cap on checksummed candidates this took about a minute; the bound allows for sanitizer builds.
+  std::string s(kMagic);
+  std::string rec(kRecordHeader, '\0');
+  put_u32(rec, 0, 0xF0000);
+  s += rec;
+  std::string cand(12, '\0');
+  put_u32(cand, 0, 500000);
+  cand[4] = 1;
+  while (s.size() + 12 <= 980000) s += cand;
+  std::string p = temp_path("crafted");
+  write_file(p, s);
+  auto t0 = std::chrono::steady_clock::now();
+  ScanResult r = scan(p);
+  uint64_t trimmed = 0;
+  ScanResult rr = recover(p, &trimmed);
+  double secs = std::chrono::duration<double>(std::chrono::steady_clock::now() - t0).count();
+  CHECK(r.status == Status::BadLength);
+  CHECK(rr.status == Status::BadLength && trimmed == 0);
+  CHECK(read_file(p) == s);
+  CHECK(secs < 2.0);
 }
 
 TEST(timestamps_going_backwards_are_counted_not_rejected) {
