@@ -373,8 +373,10 @@ export async function checkReceipts(receipts, trustedKey, scan) {
  * The overall verdict. With receipt signatures checked (or no receipts) it follows verify() in src/main.cpp
  * exactly. Without Ed25519 in this runtime, receipts are not authenticated: anyone could have written them, so a
  * receipt that disagrees with the log is not evidence of tampering and one that agrees is not evidence of
- * integrity. Then the result is TAMPERED only for what is proved without signatures (a broken chain, a receipt
- * naming a key other than the trusted one) and otherwise UNVERIFIED.
+ * integrity. A receipt signed by a key you do not trust, or with an invalid signature, is the same: anyone can
+ * make one. TAMPERED therefore
+ * needs a broken chain, or a receipt with a valid signature by the trusted key that disagrees with the log;
+ * receipts that prove nothing either way give UNVERIFIED (the CLI's exit status 3).
  *
  * Three things are reported separately: chain consistency (scan.status), authenticated receipt coverage
  * (`covered`, records 0..covered-1 are pinned by a receipt you can trust) and the unprotected suffix
@@ -383,26 +385,31 @@ export async function checkReceipts(receipts, trustedKey, scan) {
 export function summarize(scan, receiptCheck) {
   const list = receiptCheck ? receiptCheck.results : [];
   const authenticated = list.length > 0 && receiptCheck.signaturesChecked;
-  let covered = 0n, failed = 0, unchecked = 0, unverifiedMismatches = 0, firstFailure = null;
+  let covered = 0n, failed = 0, unchecked = 0, unverifiedMismatches = 0, untrusted = 0;
+  let firstFailure = null, firstUntrusted = null;
   for (const x of list) {
     if (x.result === "unchecked") unchecked++;
     else if (x.result === "ok") covered = x.count > covered ? x.count : covered;
-    else if (!authenticated && x.result !== "wrong-key") unverifiedMismatches++;
-    else if (failed++ === 0) firstFailure = x;
+    else if (!authenticated) unverifiedMismatches++;
+    else if (x.result === "wrong-key" || x.result === "bad-signature") {
+      if (untrusted++ === 0) firstUntrusted = x;
+    } else if (failed++ === 0) firstFailure = x;
   }
   if (!authenticated) covered = 0n;
   let result;
   if (list.length === 0 || authenticated) {
     const bad = scan.status !== "ok" || failed > 0;
-    result = !bad ? "INTACT" : scan.status === "torn-tail" && list.length === 0 ? "INCOMPLETE" : "TAMPERED";
-  } else if (failed > 0 || (scan.status !== "ok" && scan.status !== "torn-tail")) result = "TAMPERED";
+    result = !bad ? (untrusted ? "UNVERIFIED" : "INTACT") : scan.status === "torn-tail" && list.length === 0 ? "INCOMPLETE" : "TAMPERED";
+  } else if (scan.status !== "ok" && scan.status !== "torn-tail") result = "TAMPERED";
   else result = scan.status === "torn-tail" ? "INCOMPLETE" : "UNVERIFIED";
   return {
     result,
     authenticated,
     receipts: list.length,
-    matched: list.length - failed - unchecked - unverifiedMismatches,
+    matched: list.length - failed - unchecked - unverifiedMismatches - untrusted,
     failed,
+    untrusted,
+    firstUntrusted,
     unchecked,
     unverifiedMismatches,
     firstFailure,
@@ -427,9 +434,12 @@ export function cliReport(path, scan, receiptCheck) {
   if (s.receipts > 0 && s.authenticated) {
     if (s.firstFailure)
       out.push(`  receipt ${s.firstFailure.index} (count ${s.firstFailure.count}): ${RECEIPT_TEXT[s.firstFailure.result]}`);
+    if (s.firstUntrusted)
+      out.push(`  receipt ${s.firstUntrusted.index} (count ${s.firstUntrusted.count}): ${RECEIPT_TEXT[s.firstUntrusted.result]} (not evidence either way)`);
     let line = `  receipts     ${s.matched} of ${s.receipts} match`;
+    if (s.untrusted) line += `; ${s.untrusted} not validly signed by the key you trust`;
     if (s.unchecked) line += `; ${s.unchecked} cannot be checked past the first problem`;
-    else if (s.failed === 0) line += `; ${s.uncovered} record(s) after the last receipt are not covered`;
+    else if (s.failed === 0 && s.untrusted === 0) line += `; ${s.uncovered} record(s) after the last receipt are not covered`;
     out.push(line);
   } else if (s.receipts > 0) {
     out.push(`  signatures   NOT CHECKED: this browser cannot verify Ed25519, so the receipts are not authenticated`);
@@ -442,7 +452,9 @@ export function cliReport(path, scan, receiptCheck) {
   }
   const why = {
     INCOMPLETE: "INCOMPLETE (if the writer crashed, run: fseal recover)",
-    UNVERIFIED: "UNVERIFIED (hash chain intact; receipt signatures NOT CHECKED; run fseal verify)",
+    UNVERIFIED: s.authenticated
+      ? "UNVERIFIED (receipts not validly signed by the key you trust)"
+      : "UNVERIFIED (hash chain intact; receipt signatures NOT CHECKED; run fseal verify)",
   };
   out.push(`RESULT: ${why[s.result] || s.result}`);
   return out.join("\n") + "\n";

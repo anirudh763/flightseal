@@ -57,7 +57,7 @@ async function js(c, mod = { scanLog, parseReceipts, checkReceipts, cliReport })
     const scan = await mod.scanLog(src, { linksAt: receipts.map((r) => r.count) });
     const check = c.receipts ? await mod.checkReceipts(receipts, parseHex(c.pubkey, 32), scan) : null;
     const report = mod.cliReport(c.log, scan, check);
-    return { scan, check, report, code: report.includes("RESULT: INTACT") ? 0 : 1 };
+    return { scan, check, report, code: report.includes("RESULT: INTACT") ? 0 : report.includes("RESULT: UNVERIFIED") ? 3 : 1 };
   } finally {
     src.close();
   }
@@ -110,6 +110,16 @@ for (const m of malformed) {
     assert.deepEqual(got.error, { line: m.line, message: "not a receipt" });
   });
 }
+
+for (const name of ["receipts-from-another-key", "altered-signature", "altered-count"]) test(`receipts not validly signed by the trusted key are UNVERIFIED (exit 3), never TAMPERED: ${name}`, async () => {
+  const c = cases.find((x) => x.name === name);
+  const want = cli(c);
+  assert.equal(want.code, 3);
+  assert.match(want.stdout, /RESULT: UNVERIFIED \(receipts not validly signed by the key you trust\)/);
+  const got = await js(c);
+  assert.equal(got.report, want.stdout);
+  assert.equal(got.code, 3);
+});
 
 test("the sample shipped with the page breaks where the page says", async () => {
   const c = cases.find((x) => x.name === "sample-tampered");
@@ -200,7 +210,7 @@ for (const [name, c] of Object.entries(unsigned)) {
         "bogus-count2-one-record": "UNVERIFIED", // claims 2 records: not proof of deletion
         "zero-sig-on-edited-log": "TAMPERED", // the chain itself is broken: proved without signatures
         "zero-sig-on-torn-log": "INCOMPLETE",
-        "other-key-unsigned": "TAMPERED", // names a key other than the trusted one (no crypto needed)
+        "other-key-unsigned": "UNVERIFIED", // a key you do not trust: anyone could have made these
       }[name];
       assert.equal(s.result, expected);
       assert.ok(got.report.includes(`RESULT: ${expected}`));

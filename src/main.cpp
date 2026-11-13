@@ -22,6 +22,8 @@ const char* kUsage =
     "      seal records read from stdin, one per line: timestamp_us<TAB>payload\n"
     "  fseal verify LOG [--receipts FILE --pubkey HEX]\n"
     "      check every record, and every receipt against the key you trust\n"
+    "      exit status: 0 intact, 1 tampered or incomplete, 2 usage or read error,\n"
+    "      3 unverified (receipts not validly signed by the key you trust)\n"
     "  fseal recover LOG\n"
     "      trim a torn final record left by a crash (and nothing else)\n";
 
@@ -152,8 +154,11 @@ int verify(const std::string& log, const std::vector<std::pair<std::string, std:
   if (bad)
     std::cout << "  first problem  record " << s.records << ", byte " << s.good_bytes << ": " << describe(s.status) << " ["
               << token(s.status) << "]\n";
+  uint64_t untrusted = 0;
   if (!list.empty()) {
     uint64_t covered = 0, failed = 0, unchecked = 0;
+    size_t first_untrusted = 0;
+    ReceiptCheck untrusted_check = ReceiptCheck::WrongKey;
     for (size_t i = 0; i < list.size(); ++i) {
       if (s.status != Status::Ok && list[i].count > s.records) {  // the log is already broken before this point
         ++unchecked;
@@ -164,14 +169,27 @@ int verify(const std::string& log, const std::vector<std::pair<std::string, std:
         covered = std::max(covered, list[i].count);
         continue;
       }
+      // A receipt that is not validly signed by the key you trust is not evidence either way: anyone can make one.
+      if (c == ReceiptCheck::WrongKey || c == ReceiptCheck::BadSignature) {
+        if (untrusted++ == 0) first_untrusted = i, untrusted_check = c;
+        continue;
+      }
       if (failed++ == 0)
         std::cout << "  receipt " << (i + 1) << " (count " << list[i].count << "): " << describe(c) << "\n";
     }
-    std::cout << "  receipts     " << list.size() - failed - unchecked << " of " << list.size() << " match";
+    if (untrusted)
+      std::cout << "  receipt " << (first_untrusted + 1) << " (count " << list[first_untrusted].count
+                << "): " << describe(untrusted_check) << " (not evidence either way)\n";
+    std::cout << "  receipts     " << list.size() - failed - unchecked - untrusted << " of " << list.size() << " match";
+    if (untrusted) std::cout << "; " << untrusted << " not validly signed by the key you trust";
     if (unchecked) std::cout << "; " << unchecked << " cannot be checked past the first problem";
-    else if (failed == 0) std::cout << "; " << s.records - covered << " record(s) after the last receipt are not covered";
+    else if (failed == 0 && untrusted == 0) std::cout << "; " << s.records - covered << " record(s) after the last receipt are not covered";
     std::cout << "\n";
     bad = bad || failed > 0;
+  }
+  if (!bad && untrusted) {  // exit status 3: nothing wrong was proved, but the receipts prove nothing either
+    std::cout << "RESULT: UNVERIFIED (receipts not validly signed by the key you trust)\n";
+    return 3;
   }
   std::cout << "RESULT: "
             << (!bad ? "INTACT" : s.status == Status::TornTail && list.empty() ? "INCOMPLETE (if the writer crashed, run: fseal recover)"

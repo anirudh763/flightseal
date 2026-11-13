@@ -25,8 +25,8 @@ The records written after sealing starts: their contents, their order and their 
 | Delete, reorder or duplicate a record | detected, record named | sequence numbers, then links |
 | Delete records from the end | detected if a receipt covers them | the receipt's count is larger than the log |
 | Edit, then recompute every link and checksum | detected if a receipt covers the edit | the receipt's head no longer matches |
-| Forge or alter a receipt | detected | Ed25519 signature, checked against the trusted public key only |
-| Present a receipt signed by another key | detected | the key must equal the one the verifier trusts |
+| Forge or alter a receipt | detected, reported as UNVERIFIED | Ed25519 signature, checked against the trusted public key only; a forged receipt says nothing about the log |
+| Present a receipt signed by another key | detected, reported as UNVERIFIED | the key must equal the one the verifier trusts |
 | Crash in the middle of writing | not tampering | a torn final record; `fseal recover` trims only that |
 | Edit records written **after the last receipt** | **not detected** | the holder can rebuild that part of the chain |
 | Edit or fake data **before** it is sealed (spoofed GPS, altered sensor) | **not detected** | sealing proves what was written, not that it was true |

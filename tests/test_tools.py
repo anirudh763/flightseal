@@ -153,3 +153,22 @@ def test_append_fails_when_a_receipt_cannot_be_written(fseal_bin, tmp_path):
     assert r.returncode == 2, r.stderr
     assert "cannot write receipts" in r.stderr
     assert "issued" not in r.stderr
+
+
+def test_receipts_signed_by_an_untrusted_key_are_unverified_not_tampered(fseal_bin, tmp_path):
+    log, _, pub = seal(fseal_bin, tmp_path)
+    other = tmp_path / "other"
+    other.mkdir()
+    _, other_rec, _ = seal(fseal_bin, other)  # the same records, receipts signed by a key nobody trusts
+    r = verify(fseal_bin, log, other_rec, pub)
+    assert r.returncode == 3, r.stdout
+    assert "RESULT: UNVERIFIED" in r.stdout and "TAMPERED" not in r.stdout
+    assert "receipt 1 (count 4): signed by a different key than the one you trust (not evidence either way)" in r.stdout
+    forged = tmp_path / "forged.receipts"  # the trusted key's name on it, but a signature anyone could write
+    _, rec, _ = log, tmp_path / "f.receipts", pub
+    forged.write_text("".join(line[: line.index("sig=") + 4] + "0" * 128 + "\n" for line in rec.read_text().splitlines()))
+    r = verify(fseal_bin, log, forged, pub)
+    assert r.returncode == 3 and "RESULT: UNVERIFIED" in r.stdout and "signature invalid" in r.stdout
+    tamper.edit_field(log, tmp_path / "t.fseal", record=5, field="z", delta=10.0, fix_crc=True)
+    r = verify(fseal_bin, tmp_path / "t.fseal", other_rec, pub)  # a broken chain is proof on its own
+    assert r.returncode == 1 and "RESULT: TAMPERED" in r.stdout
