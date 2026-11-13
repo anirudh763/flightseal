@@ -1,14 +1,16 @@
 // FlightSeal verifier service worker: keeps the page, its scripts and the samples so the verifier opens offline
 // after one visit. Network first, so a new version is used as soon as it is online; the cache is the fallback.
 // Files dropped on the page are never sent anywhere and never cached. Bump VERSION when a cached file or the list changes.
-const VERSION = "0.1.0-2";
+const VERSION = "0.1.0-4-ui";
 const CACHE = `flightseal-${VERSION}`;
 const FILES = [
-  "./", "index.html", "ui.css", "app.css", "app.js", "verifier.js", "scan-worker.js",
+  "./", "index.html", "ui.css", "app.css", "theme.js", "app.js", "verifier.js", "scan-worker.js",
   "atkinson-hyperlegible-latin-400-normal.woff2", "atkinson-hyperlegible-latin-700-normal.woff2",
   "OFL-atkinson-hyperlegible.txt", "favicon.svg", "icon-192.png", "icon-512.png", "manifest.webmanifest",
   "samples/intact.fseal", "samples/tampered.fseal", "samples/rewritten.fseal", "samples/truncated.fseal",
   "samples/flight.receipts", "samples/pubkey.txt",
+  "samples/px4-intact.fseal", "samples/px4-tampered.fseal", "samples/px4-flight.receipts", "samples/px4-pubkey.txt",
+  "samples/LICENSE-pyulog.txt",
 ];
 
 self.addEventListener("install", (e) => {
@@ -37,7 +39,7 @@ self.addEventListener("fetch", (e) => {
       })
       .catch(async () => {
         const c = await caches.open(CACHE);
-        // A shared link (?sample=...&record=N) opens the cached page.
+        // A shared link (#/records/N?sample=..., or an old ?sample=...&record=N) opens the cached page.
         const hit = (await c.match(req, { ignoreSearch: req.mode === "navigate" })) || (req.mode === "navigate" && (await c.match("./")));
         return hit || Response.error();
       }),

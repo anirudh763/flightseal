@@ -66,13 +66,22 @@ the public key you trust. It runs in the page with the browser's WebCrypto (SHA-
 locally and never uploaded. After one visit it also opens offline (a service worker keeps the page and the samples;
 files you check are never cached), and it can be installed as an app from the browser menu.
 
-![The verifier on the tampered sample: the chain breaks at record 150, expected and stored link side by side](docs/screenshots/verifier-tampered.png)
+![Findings for the tampered example: the verdict, where to look first, and the evidence chain with the covered prefix, the break at record 150 and the receipts attached where they were issued](docs/screenshots/findings-1440.png)
 
-- It opens on a built-in sample with one altitude changed by 10 m. It shows the first record where the chain breaks,
-  the expected and stored link, and a paged list of every record checked. Three more samples: the intact log, a full
-  rewrite that only the receipts catch, and a log with its last 150 records deleted that only the receipts catch.
-  They are a synthetic 8-second flight (800 records) sealed by the real CLI with
-  [`tools/make_web_samples.py`](tools/make_web_samples.py).
+- Screens, each with its own address so a view can be shared: **Verify a file** (the log, optional receipts, the
+  key you trust), **Findings** (verdict, coverage and one next action), **Records** (every record as a link in the
+  hash chain, `#/records/150`), **Receipts** (`#/receipts/2`), and **Trust help** and **Examples**. Old
+  `?sample=...&record=N` links open the same view. Findings, Records and Receipts show an empty state with the
+  Verify action until a file has been checked.
+- The evidence chain: records are drawn as a vertical chain (record number, byte range, status in words). The first
+  break, the end of the covered prefix and every receipt (attached after the record it pins) are marked on it.
+- Examples: a synthetic 8-second flight (800 records: intact, one altitude changed by 10 m, a full rewrite that
+  only the receipts catch, the last 150 records deleted) sealed by the real CLI with
+  [`tools/make_web_samples.py`](tools/make_web_samples.py), and a real PX4 flight: 2,422 records from five topics
+  with no position or GPS data (motor outputs, flight mode, vehicle status, CPU load, telemetry link) selected from
+  the public pyulog sample log, intact and with one motor output changed, made by
+  [`tools/make_px4_samples.py`](tools/make_px4_samples.py).
+- Light by default, including when the system prefers dark; a "Dark theme" button switches and remembers it.
 - It reports three things separately: whether the hash chain is consistent (no key needed), which records are
   covered by receipts signed by the key you trust, and which records come after the last such receipt and are not
   protected. A hash chain pinpoints the first record where the chain breaks, not every altered record; a receipt
@@ -106,7 +115,7 @@ Limits of this project:
 
 - The PX4 converter seals selected decoded ULog records, sorted by timestamp, after the log was downloaded; it does not preserve or authenticate every byte of the original .ulg file, or anything that happened before sealing. The ULog format is described in the [PX4 ULog specification](https://docs.px4.io/main/en/dev_log/ulog_file_format).
 - Keeping receipts with a separate witness is an operational assumption: the CLI writes receipts to a local file, and the protection holds only if someone other than the log's holder keeps a copy.
-- The tests use one real PX4 flight log (a public pyulog fixture); the browser samples are a synthetic 800-record flight.
+- The tests use one real PX4 flight log (a public pyulog fixture); the browser examples are a synthetic 800-record flight and 2,422 records selected from that PX4 log, with no position or GPS topics.
 - FlightSeal is a narrow, documented workflow to support experiments. It is not proof of safe flight or of an accident's cause, and it is not a reproduction of RVFuzzer or PGFuzz. No user or field validation has been done.
 
 ## How it works
@@ -161,6 +170,7 @@ ctest --test-dir build && python -m pytest -q    # C++ and Python tests
 tools/demo.sh                                    # the demo above
 node --test tests/web/verifier.test.mjs          # browser verifier against the CLI and the Python reader (Node 22)
 (cd tests/web && npm ci && npx playwright install chromium) && node tests/web/e2e.mjs   # the page itself
+node tests/web/routes.mjs                         # the screens: routes, focus, Menu, Back/Forward, theme, axe
 ```
 
 Seal your own PX4 log:
@@ -227,14 +237,20 @@ Measured with `build-release/fseal-bench records.tsv <dir> 5` on the PX4 flight 
   release build and the clean-container check ([`tools/release_build.sh`](tools/release_build.sh)) on every push.
 - **Copy** ([tests/web/copy.test.mjs](tests/web/copy.test.mjs)): fails if the limits listed above are removed from
   this README or from the verifier page.
-- **Browser** ([tests/web/e2e.mjs](tests/web/e2e.mjs), Playwright, 42 checks): every sample shows the same broken
-  record or receipt as the CLI; hostile, empty and torn files, a forged signature, an empty receipts file, a
+- **Browser** ([tests/web/e2e.mjs](tests/web/e2e.mjs), Playwright, 45 checks): every sample, including the two
+  real PX4 examples, shows the same broken record or receipt and the same text report as the CLI; hostile, empty and torn files, a forged signature, an empty receipts file, a
   network failure, no Ed25519, no Web Workers and JavaScript turned off each give the right result; after one visit
   the page reloads with the network off and still verifies a sample; Cancel during the receipt checks stops them and
   shows no verdict; keyboard-only use works; a 1,000,000-record log has
   no task over 200 ms and Cancel answers within 200 ms; no horizontal scroll at 375 and 320 px or at 200% text. The
   page passes automated axe-core checks with 0 violations in light and dark themes, at 1280 and 375 px wide. A manual screen-reader check
   has not been done.
+- **Screens** ([tests/web/routes.mjs](tests/web/routes.mjs), Playwright, 24 checks): each route sets the title,
+  marks its nav item and moves focus to its heading; Back and Forward restore the screen, the selected record and
+  form text; deep links and old `?sample=` links load directly; unknown routes show Not found; the Menu sheet keeps
+  focus inside and Escape returns focus to the Menu button; no page scrolls sideways at 320, 768 or 1440 px; light
+  is the default under an OS dark preference; axe-core reports 0 violations on every screen, light and dark, at
+  1280 and 320 px.
 
 ## Security review
 
@@ -288,4 +304,7 @@ README comes from a run of the commands above.
 
 MIT. The verifier page uses the Atkinson Hyperlegible font (Braille Institute), under the SIL Open Font License 1.1
 ([docs/OFL-atkinson-hyperlegible.txt](docs/OFL-atkinson-hyperlegible.txt)). The PX4 sample flight log used by the tests and the demo is downloaded at run time from
-[PX4/pyulog](https://github.com/PX4/pyulog) (BSD-3-Clause), pinned by commit and SHA-256, and is not included here.
+[PX4/pyulog](https://github.com/PX4/pyulog) (BSD-3-Clause), pinned by commit and SHA-256. The verifier's PX4
+examples (`docs/samples/px4-*`) are 2,422 records selected from it and sealed; pyulog's licence is in
+[docs/samples/LICENSE-pyulog.txt](docs/samples/LICENSE-pyulog.txt). The sealed selection has no position or GPS
+topics or fields (checked by tests/test_web_samples.py).

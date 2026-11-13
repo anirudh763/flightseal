@@ -56,6 +56,8 @@ jobs:
           npx playwright install --with-deps chromium
       - name: Verifier page (samples match the CLI, hostile files, axe-core light and dark)
         run: node tests/web/e2e.mjs
+      - name: Verifier screens (routes, focus, Menu sheet, Back/Forward, deep and old links, light default, axe-core)
+        run: node tests/web/routes.mjs
 
   release-dry-run:
     # The release workflow's build-and-container steps, run on every push without publishing anything.

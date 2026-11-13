@@ -1,5 +1,6 @@
 // Browser test for docs/index.html: loads each sample, checks the page shows what the C++ CLI says, checks
-// hostile files and the no-Ed25519 path, and runs axe-core (0 violations) in light and dark.
+// hostile files and the no-Ed25519 path, and runs axe-core (0 violations) in light and dark. The routed screens
+// themselves (focus, Menu, Back/Forward, deep links, theme) are covered by tests/web/routes.mjs.
 //   FSEAL_BIN=build/fseal node tests/web/e2e.mjs [--screenshots]
 // Needs the playwright and axe-core packages (CI installs them; set AXE_PATH to use another axe.min.js).
 import { createRequire } from "node:module";
@@ -46,7 +47,19 @@ async function axe(page) {
 }
 
 async function loaded(page) {
-  await page.waitForSelector("#report-wrap:not([hidden])");
+  await page.waitForSelector("#report-wrap:not([hidden])", { state: "attached" });
+}
+// Screens are hash routes; the file inputs, key field and Remove buttons are on Verify, examples on Examples.
+async function go(page, hash) {
+  await page.evaluate((h) => { location.hash = h; }, hash);
+  await page.waitForFunction((h) => location.hash.startsWith(h), hash);
+}
+async function example(page, name) {
+  await go(page, "#/examples");
+  await page.click(`text=Load ${name} example`);
+}
+async function opened(page) {
+  await page.waitForFunction(() => [...document.querySelectorAll("h1")].some((h) => h.offsetParent !== null));
 }
 
 const tmp = mkdtempSync(join(tmpdir(), "fseal-e2e-"));
@@ -59,17 +72,17 @@ try {
   page.on("pageerror", (e) => errors.push(String(e)));
   page.on("console", (m) => m.type() === "error" && errors.push(m.text()));
 
-  await check("first visit shows the tampered sample, broken at the record the CLI reports", async () => {
-    await page.goto(url);
+  await check("the tampered sample shows the break at the record the CLI reports", async () => {
+    await page.goto(url + "#/findings?sample=tampered");
     await loaded(page);
     const m = cli("tampered.fseal").match(/first problem {2}record (\d+), byte (\d+): .*\[bad-link\]/);
     assert.ok(m, "CLI did not report a bad-link");
     const line = await page.textContent("#verdict-line");
     assert.equal(line.trim(), `Tampered: the chain breaks at record ${Number(m[1]).toLocaleString("en-US")}`);
-    // The highlighted row in the table is that record, and the detail pane shows it.
-    const row = await page.getAttribute("#rec-body tr.row-bad", "data-record");
+    // The broken link on the chain is that record, selected, and the detail pane shows it.
+    const row = await page.getAttribute("#rec-body li.link-bad", "data-record");
     assert.equal(row, m[1]);
-    assert.equal(await page.getAttribute(`#rec-body tr[data-record="${m[1]}"]`, "aria-current"), "true");
+    assert.equal(await page.getAttribute(`#rec-body li[data-record="${m[1]}"]`, "aria-current"), "true");
     await page.waitForFunction((r) => document.querySelector("#detail-h").textContent === `Record ${r}`, m[1]);
     // Expected vs actual link, in monospace.
     const codes = await page.$$eval("#break code", (cs) => cs.map((c) => [c.textContent, getComputedStyle(c).fontFamily]));
@@ -80,6 +93,15 @@ try {
     assert.match(await page.textContent("#verdict-detail"), /A hash chain pinpoints the first record where the chain breaks, not every altered record\./);
     assert.match(await page.textContent("#verdict-detail"), new RegExp(`At byte ${Number(m[2]).toLocaleString("en-US")},`));
     assert.match(await page.textContent("#facts"), /records 0 to 99; nothing from the problem at record 150 on/);
+    // The evidence chain marks the covered prefix, the uncovered records before the break, and the break.
+    const chain = await page.innerText("#chain-summary");
+    assert.match(chain, /Records 0 to 99\s+pass every check; covered by a matching receipt/);
+    assert.match(chain, /Covered prefix ends after record 99\./);
+    assert.match(chain, /Records 100 to 149\s+pass every check; not covered by a receipt/);
+    assert.match(chain, /Record 150\s+chain breaks here \[bad-link\]/);
+    assert.match(chain, /Receipts 2 to 8\s+after 200 to 800 records:\s+not checked: past the first problem/);
+    const order = ["Records 0 to 99", "Covered prefix ends", "Records 100 to 149", "Record 150", "After record 150"].map((t) => chain.indexOf(t));
+    assert.deepEqual([...order].sort((a, b) => a - b), order, `chain out of order: ${order}`);
     assert.equal((await page.textContent("#report")), cli("tampered.fseal").replace(join(SAMPLES, "tampered.fseal"), "tampered.fseal (sample)"));
   });
 
@@ -95,7 +117,8 @@ try {
     }
     assert.match(await page.textContent("#log-name"), /^tampered\.fseal \(sample\), [\d,]+ bytes$/);
     assert.match(await page.textContent("#rec-name"), /^flight\.receipts \(sample\), [\d,]+ bytes$/);
-    assert.doesNotMatch(await page.innerText("#inputs-h + *"), /No file chosen/);
+    assert.doesNotMatch(await page.innerText("#dropzone"), /No file chosen/);
+    await go(page, "#/verify");
     // Its accessible name keeps the field label, and the button opens the file chooser.
     const name = await page.evaluate(() => [...document.querySelector("#log-choose").getAttribute("aria-labelledby").split(" ")].map((i) => document.getElementById(i).textContent).join(" "));
     assert.match(name, /Choose file Sealed log/);
@@ -108,7 +131,7 @@ try {
     const errs = [];
     p.on("console", (m) => m.type() === "error" && errs.push(m.text()));
     await p.goto(url);
-    await p.waitForSelector("#report-wrap:not([hidden])");
+    await opened(p);
     const href = await p.evaluate(() => document.querySelector('link[rel="icon"]').href);
     const r = await p.evaluate(async (h) => { const x = await fetch(h); return [x.status, x.headers.get("content-type")]; }, href);
     assert.equal(r[0], 200);
@@ -134,7 +157,7 @@ try {
     const p = await c.newPage();
     const errs = [];
     p.on("pageerror", (e) => errs.push(String(e)));
-    await p.goto(url);
+    await p.goto(url + "#/findings?sample=tampered");
     await loaded(p);
     // The service worker is installed, has cached the files and controls this page.
     await p.waitForFunction(() => navigator.serviceWorker.controller !== null, null, { timeout: 15000 });
@@ -147,7 +170,9 @@ try {
     await p.reload();
     await loaded(p);
     assert.equal((await p.textContent("#verdict-line")).trim(), "Tampered: the chain breaks at record 150");
-    await p.click("text=Load intact sample");
+    await example(p, "intact");
+    await p.waitForFunction(() => document.querySelector("#verdict-line").textContent.trim() === "Intact");
+    await example(p, "PX4 flight"); // the real PX4 example is cached too
     await p.waitForFunction(() => document.querySelector("#verdict-line").textContent.trim() === "Intact");
     await p.goto(url + "?sample=rewritten"); // a shared link with a query also opens offline
     await loaded(p);
@@ -156,8 +181,20 @@ try {
     await c.close();
   });
 
+  await check("real PX4 flight examples: the page and its report match the CLI (intact, then the break)", async () => {
+    const px4 = (log) => spawnSync(FSEAL, ["verify", join(SAMPLES, log), "--receipts", join(SAMPLES, "px4-flight.receipts"), "--pubkey", readFileSync(join(SAMPLES, "px4-pubkey.txt"), "utf8").trim()], { encoding: "utf8" }).stdout;
+    await example(page, "PX4 flight");
+    await page.waitForFunction(() => document.querySelector("#verdict-line").textContent.trim() === "Intact");
+    assert.equal(await page.textContent("#report"), px4("px4-intact.fseal").replace(join(SAMPLES, "px4-intact.fseal"), "px4-intact.fseal (sample)"));
+    await example(page, "tampered PX4");
+    const m = px4("px4-tampered.fseal").match(/first problem {2}record (\d+), byte (\d+): .*\[bad-link\]/);
+    await page.waitForFunction((r) => document.querySelector("#verdict-line").textContent.trim() === `Tampered: the chain breaks at record ${r}`, Number(m[1]).toLocaleString("en-US"));
+    assert.equal(await page.textContent("#report"), px4("px4-tampered.fseal").replace(join(SAMPLES, "px4-tampered.fseal"), "px4-tampered.fseal (sample)"));
+    assert.match(await page.innerText("#chain-summary"), new RegExp(`Record ${Number(m[1]).toLocaleString("en-US")}\\s+chain breaks here`));
+  });
+
   await check("intact sample: Intact, all receipts match", async () => {
-    await page.click("text=Load intact sample");
+    await example(page, "intact");
     await page.waitForFunction(() => document.querySelector("#verdict-line").textContent.trim() === "Intact");
     assert.match(cli("intact.fseal"), /RESULT: INTACT/);
     assert.match(await page.textContent("#facts"), /8 of 8 signed by the key you trust and match/);
@@ -165,7 +202,7 @@ try {
   });
 
   await check("rewritten sample: chain passes, the receipt the CLI names fails", async () => {
-    await page.click("text=Load rewritten sample");
+    await example(page, "rewritten");
     const m = cli("rewritten.fseal").match(/receipt (\d+) \(count (\d+)\): log does not match/);
     await page.waitForFunction((i) => document.querySelector("#verdict-line").textContent.trim() === `Tampered: receipt ${i} does not match the log`, m[1]);
     assert.match(await page.textContent("#verdict-detail"), new RegExp(`signed by the key you trust after ${m[2]} records`));
@@ -173,13 +210,16 @@ try {
   });
 
   await check("truncated sample: the receipt the CLI names says records were removed from the end", async () => {
-    await page.click("text=Load truncated sample");
+    await example(page, "truncated");
     const m = cli("truncated.fseal").match(/receipt (\d+) \(count (\d+)\): log is shorter/);
     await page.waitForFunction((i) => document.querySelector("#verdict-line").textContent.trim() === `Tampered: receipt ${i} does not match the log`, m[1]);
     assert.match(await page.textContent("#verdict-detail"), /records were removed from the end/);
+    // The receipts past the end of the log are pinned after the last record on the chain.
+    assert.match(await page.innerText("#chain-summary"), /Receipts 7 to 8\s+after 700 to 800 records:\s+log is shorter than the receipt/);
   });
 
   await check("without receipts the page says truncation is only caught with receipts", async () => {
+    await go(page, "#/verify");
     await page.click("#rec-clear");
     await page.waitForFunction(() => document.querySelector("#verdict-line").textContent.includes("no receipts checked"));
     assert.match(await page.textContent("#notes"), /Truncation of the tail \(records deleted from the end\) is only caught with receipts/);
@@ -187,22 +227,23 @@ try {
   });
 
   await check("paging and jump to record work from the keyboard", async () => {
-    await page.click("text=Load intact sample");
+    await example(page, "intact");
     await page.waitForFunction(() => document.querySelector("#verdict-line").textContent.trim() === "Intact");
+    await go(page, "#/records");
     await page.focus("#pg-next");
     await page.keyboard.press("Enter");
     assert.match(await page.textContent("#pg-label"), /Records 50 to 99 of 800/);
     await page.fill("#jump-to", "742");
     await page.keyboard.press("Enter");
-    assert.match(await page.textContent("#pg-label"), /page 15 of 16/);
-    assert.equal(await page.evaluate(() => document.activeElement.textContent), "742");
     await page.waitForFunction(() => document.querySelector("#detail-h").textContent === "Record 742");
-    assert.match(page.url(), /record=742/);
+    assert.match(await page.textContent("#pg-label"), /page 15 of 16/);
+    assert.equal(await page.evaluate(() => document.activeElement.textContent), "Record 742");
+    assert.match(page.url(), /#\/records\/742\?sample=intact$/);
   });
 
   await check("pager on a broken log: counts records checked, and a one-record page names one record", async () => {
     const p = await ctx.newPage();
-    await p.goto(url + "?sample=tampered");
+    await p.goto(url + "#/records?sample=tampered");
     await loaded(p);
     // The tampered log has 800 records; 150 pass and record 150 breaks the chain, so the table holds 151 rows.
     // It opens on the page with the break, which holds that one record.
@@ -212,21 +253,18 @@ try {
     await p.close();
   });
 
-  await check("loading a sample brings the result into view on a phone, and does not scroll on a wide screen", async () => {
+  await check("loading an example opens Findings with the verdict in view and focus on its heading", async () => {
     for (const [width, height] of [[375, 812], [1280, 900]]) {
       const c = await browser.newContext({ viewport: { width, height } });
       const p = await c.newPage();
-      await p.goto(url);
-      await loaded(p);
-      await p.locator("text=Load intact sample").scrollIntoViewIfNeeded();
-      const before = await p.evaluate(() => scrollY);
-      await p.click("text=Load intact sample");
+      await p.goto(url + "#/examples");
+      await opened(p);
+      await p.locator("text=Load intact example").scrollIntoViewIfNeeded();
+      await p.click("text=Load intact example");
       await p.waitForFunction(() => document.querySelector("#verdict-line").textContent.trim() === "Intact");
       const top = await p.evaluate(() => document.querySelector("#verdict-line").getBoundingClientRect().top);
       assert.ok(top >= 0 && top < height, `${width} px: the verdict line is at y=${top.toFixed(0)}, outside the ${height} px viewport`);
-      if (width === 1280) assert.equal(await p.evaluate(() => scrollY), before, "the wide layout scrolled although the result was visible");
-      // Focus stays on the button that was pressed.
-      assert.equal(await p.evaluate(() => document.activeElement.textContent), "Load intact sample");
+      assert.equal(await p.evaluate(() => document.activeElement.textContent), "Findings");
       await c.close();
     }
   });
@@ -235,12 +273,12 @@ try {
     const active = () => page.evaluate(() => ({ tag: document.activeElement.tagName, id: document.activeElement.id, text: document.activeElement.textContent }));
     assert.equal(await page.getAttribute("#pg-label", "aria-live"), "polite");
     // "Show record N" with Enter: focus stays on that row's button after the table re-renders.
-    await page.focus('#rec-body tr[data-record="745"] button');
+    await page.focus('#rec-body li[data-record="745"] button');
     await page.keyboard.press("Enter");
     await page.waitForFunction(() => document.querySelector("#detail-h").textContent === "Record 745");
     let a = await active();
     assert.notEqual(a.tag, "BODY");
-    assert.equal(a.text, "745");
+    assert.equal(a.text, "Record 745");
     // On the next-to-last page (15 of 16), Next reaches the last page and becomes disabled: focus moves to Previous.
     assert.match(await page.textContent("#pg-label"), /page 15 of 16/);
     await page.focus("#pg-next");
@@ -269,6 +307,7 @@ try {
     writeFileSync(p, data);
     const out = spawnSync(FSEAL, ["recover", p], { encoding: "utf8" });
     assert.notEqual(out.status, 0);
+    await go(page, "#/verify");
     await page.click("#rec-clear");
     await page.setInputFiles("#log-file", p);
     await page.waitForFunction(() => document.querySelector("#verdict-detail").textContent.includes("fseal recover will not trim anything"));
@@ -288,9 +327,8 @@ try {
   await check("hostile file: length field 0xFFFFFFFF is reported, page keeps working", async () => {
     const b = Buffer.from(intact.subarray(0, 4096));
     b.writeUInt32LE(0xffffffff, 8);
-    await page.goto(url);
-    await loaded(page);
-    await page.click("#rec-clear");
+    await page.goto(url + "#/verify");
+    await opened(page);
     await page.setInputFiles("#log-file", hostile("len.fseal", b));
     await page.waitForFunction(() => document.querySelector("#verdict-line").textContent.includes("record 0"));
     assert.match(await page.textContent("#verdict-detail"), /claims a length of 4,294,967,295 bytes/);
@@ -329,6 +367,7 @@ try {
   await check("picking your own log clears the sample's receipts and key (no false 'rewritten')", async () => {
     await page.goto(url + "?sample=intact");
     await loaded(page);
+    await go(page, "#/verify");
     await page.setInputFiles("#log-file", join(tmp, "own.fseal"));
     await page.waitForFunction(() => document.querySelector("#verdict-line").textContent.trim() === "Chain intact; no receipts checked");
     assert.equal(await page.inputValue("#pubkey"), "");
@@ -381,8 +420,12 @@ try {
     await page.setInputFiles("#rec-file", hostile("forged.receipts", forged));
     await page.fill("#pubkey", ownPub);
     await page.press("#pubkey", "Tab");
-    await page.waitForFunction(() => document.querySelector("#verdict-line").textContent.trim() === "Chain intact; receipts not valid for the key you trust");
+    await page.waitForFunction(() => document.querySelector("#verdict-line").textContent.trim() === "UNVERIFIED: chain intact; receipts not valid for the key you trust");
     assert.match(await page.textContent("#report"), /RESULT: UNVERIFIED/);
+    // The same term on Findings, in the Verify status card and in Trust help; never Intact or Tampered.
+    assert.equal(await page.getAttribute("#verdict", "class"), "verdict warn");
+    assert.match(await page.textContent("#run-status"), /^UNVERIFIED: /);
+    assert.equal((await page.textContent('.glossary .label.warn')).trim(), "UNVERIFIED");
     assert.equal(spawnSync(FSEAL, ["verify", join(tmp, "own.fseal"), "--receipts", join(tmp, "forged.receipts"), "--pubkey", ownPub]).status, 3);
   });
 
@@ -391,8 +434,8 @@ try {
     await page.fill("#pubkey", PUB); // the sample key, not the one that signed these receipts
     await page.press("#pubkey", "Tab");
     await page.waitForFunction(() => document.querySelector("#verdict-detail").textContent.includes("it names a different signing key"));
-    assert.equal((await page.textContent("#verdict-line")).trim(), "Chain intact; receipts not valid for the key you trust");
-    assert.match(await page.textContent("#strip-legend"), /not checked against your key/);
+    assert.equal((await page.textContent("#verdict-line")).trim(), "UNVERIFIED: chain intact; receipts not valid for the key you trust");
+    assert.match(await page.textContent("#chain-legend"), /not checked against your key/);
     const out = spawnSync(FSEAL, ["verify", join(tmp, "own.fseal"), "--receipts", join(tmp, "own.receipts"), "--pubkey", PUB], { encoding: "utf8" });
     assert.equal(out.status, 3);
     assert.equal(await page.textContent("#report"), out.stdout.replace(join(tmp, "own.fseal"), "own.fseal"));
@@ -406,8 +449,12 @@ try {
 
   await check("removing the log returns to the empty state", async () => {
     await page.click("#log-clear");
-    await page.waitForFunction(() => document.querySelector("#verdict-line").textContent.trim() === "Load a sealed log or a sample to check it.");
+    await page.waitForFunction(() => document.querySelector("#run-status").textContent.trim() === "No file checked yet.");
     assert.equal(await page.isHidden("#records-area"), true);
+    // Findings, Records and Receipts show the real empty state again, with the Verify action.
+    for (const s of ["findings", "records", "receipts"]) {
+      assert.match(await page.textContent(`.screen[data-screen="${s}"] [data-empty]`), /No file has been verified yet/);
+    }
     assert.equal((await page.textContent("#log-name")).trim(), "No file chosen");
     assert.equal(await page.evaluate(() => document.activeElement.id), "log-choose");
   });
@@ -425,25 +472,32 @@ try {
   await check("keyboard only: skip link, then load a sample and reach the first break", async () => {
     const p = await ctx.newPage();
     await p.goto(url);
-    await p.waitForSelector("#report-wrap:not([hidden])");
+    await opened(p);
     await p.keyboard.press("Tab");
-    assert.equal(await p.evaluate(() => document.activeElement.textContent), "Skip to the result");
+    assert.equal(await p.evaluate(() => document.activeElement.textContent), "Skip to content");
     await p.keyboard.press("Enter");
-    assert.equal(await p.evaluate(() => document.activeElement.id), "verdict");
-    await p.evaluate(() => document.activeElement.blur());
-    let found = false;
-    for (let i = 0; i < 40 && !found; i++) {
-      await p.keyboard.press("Tab");
-      found = (await p.evaluate(() => document.activeElement.textContent)) === "Load rewritten sample";
-    }
-    assert.ok(found, "Load rewritten sample is not reachable with Tab");
+    assert.equal(await p.evaluate(() => document.activeElement.textContent), "Verify a file");
+    const tabTo = async (text) => {
+      for (let i = 0; i < 40; i++) {
+        await p.keyboard.press("Tab");
+        if ((await p.evaluate(() => document.activeElement.textContent.trim())) === text) return;
+      }
+      assert.fail(`${text} is not reachable with Tab`);
+    };
+    await tabTo("Open an example");
+    await p.keyboard.press("Enter");
+    await p.waitForFunction(() => document.activeElement.textContent === "Examples");
+    await tabTo("Load rewritten example");
     await p.keyboard.press("Enter");
     await p.waitForFunction(() => document.querySelector("#verdict-line").textContent.includes("receipt 2 does not match"));
-    await p.goto(url + "?sample=tampered");
-    await p.waitForSelector("#report-wrap:not([hidden])");
+    await tabTo("Review receipt 2"); // the one next action
+    await p.keyboard.press("Enter");
+    await p.waitForFunction(() => document.querySelector("#receipt-detail-h").textContent === "Receipt 2");
+    await p.goto(url + "#/records?sample=tampered");
+    await loaded(p);
     await p.focus("#show-break");
     await p.keyboard.press("Enter");
-    assert.equal(await p.evaluate(() => document.activeElement.closest("tr").dataset.record), "150");
+    await p.waitForFunction(() => document.activeElement.closest("li") && document.activeElement.closest("li").dataset.record === "150");
     await p.close();
   });
 
@@ -464,13 +518,12 @@ try {
     }
     const big = hostile("big.fseal", buf);
     const p = await ctx.newPage();
-    await p.goto(url);
-    await p.waitForSelector("#report-wrap:not([hidden])");
+    await p.goto(url + "#/verify");
+    await opened(p);
     await p.evaluate(() => {
       window.__long = [];
       new PerformanceObserver((l) => window.__long.push(...l.getEntries().map((e) => e.duration))).observe({ type: "longtask", buffered: false });
     });
-    await p.click("#rec-clear");
     await p.setInputFiles("#log-file", big);
     await p.waitForSelector("#progress-wrap:not([hidden])");
     await p.waitForTimeout(3000);
@@ -502,6 +555,7 @@ try {
     });
     await p.goto(url + "?sample=intact");
     await loaded(p);
+    await go(p, "#/verify");
     await p.setInputFiles("#log-file", join(SAMPLES, "intact.fseal")); // your own files replace the sample's log and key
     await p.setInputFiles("#rec-file", many);
     await p.evaluate(() => { window.__armed = true; });
@@ -536,11 +590,13 @@ try {
     });
     await p2.goto(url + "?sample=intact");
     await loaded(p2);
-    assert.equal((await p2.textContent("#verdict-line")).trim(), "Chain intact; receipts not authenticated");
+    assert.equal((await p2.textContent("#verdict-line")).trim(), "UNVERIFIED: chain intact; receipts not authenticated");
     assert.match(await p2.textContent("#notes"), /cannot verify Ed25519 signatures/);
     let report = await p2.textContent("#report");
     assert.match(report, /NOT CHECKED/);
     assert.doesNotMatch(report, /RESULT: INTACT/);
+    assert.match(await p2.innerText("#chain-summary"), /No record is covered: the receipts are not authenticated in this browser\./);
+    await go(p2, "#/verify");
     // The reviewer's case: a one-record log and a bogus, unsigned receipt claiming 2 records.
     spawnSync(FSEAL, ["append", join(tmp, "one.fseal")], { input: "1000\t{\"z\":1}\n" });
     const pub = readFileSync(join(SAMPLES, "pubkey.txt"), "utf8").trim();
@@ -549,7 +605,7 @@ try {
     await p2.fill("#pubkey", pub);
     await p2.press("#pubkey", "Tab");
     await p2.waitForFunction(() => document.querySelector("#verdict-detail").textContent.includes("The 1 record passes"));
-    assert.equal((await p2.textContent("#verdict-line")).trim(), "Chain intact; receipts not authenticated");
+    assert.equal((await p2.textContent("#verdict-line")).trim(), "UNVERIFIED: chain intact; receipts not authenticated");
     report = await p2.textContent("#report");
     assert.doesNotMatch(report, /RESULT: (TAMPERED|INTACT)/);
     assert.doesNotMatch(await p2.textContent("#verdict"), /records were removed from the end/);
@@ -559,7 +615,7 @@ try {
     await p2.fill("#pubkey", pub);
     await p2.press("#pubkey", "Tab");
     await p2.waitForFunction(() => document.querySelector("#report").textContent.includes("intact.fseal"));
-    assert.equal((await p2.textContent("#verdict-line")).trim(), "Chain intact; receipts not authenticated");
+    assert.equal((await p2.textContent("#verdict-line")).trim(), "UNVERIFIED: chain intact; receipts not authenticated");
     assert.doesNotMatch(await p2.textContent("#report"), /RESULT: (TAMPERED|INTACT)/);
     await p2.goto(url + "?sample=tampered"); // a broken chain is still proved without signatures
     await loaded(p2);
@@ -578,7 +634,9 @@ try {
         await p.click("#report-wrap summary");
         all.push(...(await axe(p)).map((v) => `${s}: ${v}`));
       }
+      await go(p, "#/verify");
       await p.click("#log-clear");
+      await go(p, "#/findings");
       all.push(...(await axe(p)).map((v) => `empty: ${v}`));
       await c.close();
       assert.deepEqual(all, []);
@@ -601,7 +659,7 @@ try {
     const c = await browser.newContext({ viewport: { width: 320, height: 800 } });
     const p = await c.newPage();
     await p.goto(url);
-    await loaded(p);
+    await opened(p);
     const over = await p.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth);
     await c.close();
     assert.ok(over <= 0, `page scrolls sideways by ${over}px`);
@@ -610,31 +668,33 @@ try {
   await check("200% zoom (640 px viewport at 2x text): no horizontal page scroll", async () => {
     const c = await browser.newContext({ viewport: { width: 640, height: 800 } });
     const p = await c.newPage();
-    await p.goto(url);
+    await p.goto(url + "#/findings?sample=tampered");
     await loaded(p);
-    await p.evaluate(() => { document.documentElement.style.fontSize = "30px"; }); // text at 200% of 15px
+    await p.evaluate(() => { document.documentElement.style.fontSize = "32px"; }); // text at 200% of 16px
     const over = await p.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth);
     await c.close();
     assert.ok(over <= 0, `page scrolls sideways by ${over}px`);
   });
 
   if (process.argv.includes("--screenshots")) {
+    // README screenshots: light, deviceScaleFactor 2, real sample data. Findings at 1440 and 320 (the primary
+    // screen), the Records evidence chain at 1440, and the README's two existing names.
     const out = join(ROOT, "docs", "screenshots");
     mkdirSync(out, { recursive: true });
-    for (const [s, file] of [["tampered", "verifier-tampered.png"], ["rewritten", "verifier-rewritten.png"]]) {
-      const c = await browser.newContext({ colorScheme: "light", viewport: { width: 1280, height: 860 }, deviceScaleFactor: 2 });
+    const shots = [
+      ["#/findings?sample=tampered", 1440, 1000, "findings-1440.png", false],
+      ["#/findings?sample=tampered", 320, 800, "findings-320.png", true],
+      ["#/records/1476?sample=px4-tampered", 1440, 1000, "records-chain-1440.png", false],
+      ["#/findings?sample=tampered", 1280, 860, "verifier-tampered.png", false],
+      ["#/findings?sample=rewritten", 1280, 860, "verifier-rewritten.png", false],
+    ];
+    for (const [route, w, h, file, full] of shots) {
+      const c = await browser.newContext({ colorScheme: "light", viewport: { width: w, height: h }, deviceScaleFactor: 2 });
       const p = await c.newPage();
-      await p.goto(url + `?sample=${s}`);
+      await p.goto(url + route);
       await loaded(p);
-      await p.screenshot({ path: join(out, file) });
-      await c.close();
-    }
-    for (const [scheme, w, file] of [["dark", 1280, "dark.png"], ["light", 360, "narrow.png"]]) {
-      const c = await browser.newContext({ colorScheme: scheme, viewport: { width: w, height: 900 } });
-      const p = await c.newPage();
-      await p.goto(url);
-      await loaded(p);
-      await p.screenshot({ path: join(tmpdir(), `fseal-${file}`), fullPage: true });
+      await p.waitForTimeout(300);
+      await p.screenshot({ path: join(out, file), fullPage: full });
       await c.close();
     }
     console.log(`screenshots in ${out} (review copies in ${tmpdir()})`);
