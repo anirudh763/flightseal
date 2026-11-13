@@ -4,7 +4,8 @@
 // Needs the playwright and axe-core packages (CI installs them; set AXE_PATH to use another axe.min.js).
 import { createRequire } from "node:module";
 import { spawnSync } from "node:child_process";
-import { readFileSync, writeFileSync, mkdirSync, mkdtempSync } from "node:fs";
+import { readFileSync, writeFileSync, mkdirSync, mkdtempSync, rmSync } from "node:fs";
+import { createHash } from "node:crypto";
 import { tmpdir } from "node:os";
 import { join, resolve, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -46,6 +47,7 @@ async function loaded(page) {
   await page.waitForSelector("#report-wrap:not([hidden])");
 }
 
+const tmp = mkdtempSync(join(tmpdir(), "fseal-e2e-"));
 const { server, url } = await serve();
 const browser = await chromium.launch();
 try {
@@ -75,6 +77,7 @@ try {
     assert.match(codes[0][1], /mono/i);
     assert.match(await page.textContent("#verdict-detail"), /A hash chain pinpoints the first record where the chain breaks, not every altered record\./);
     assert.match(await page.textContent("#verdict-detail"), new RegExp(`At byte ${Number(m[2]).toLocaleString("en-US")},`));
+    assert.match(await page.textContent("#facts"), /records 0 to 99; nothing from the problem at record 150 on/);
     assert.equal((await page.textContent("#report")), cli("tampered.fseal").replace(join(SAMPLES, "tampered.fseal"), "tampered.fseal (sample)"));
   });
 
@@ -86,7 +89,7 @@ try {
     await page.click("text=Load intact sample");
     await page.waitForFunction(() => document.querySelector("#verdict-line").textContent.trim() === "Intact");
     assert.match(cli("intact.fseal"), /RESULT: INTACT/);
-    assert.match(await page.textContent("#facts"), /8 of 8 match/);
+    assert.match(await page.textContent("#facts"), /8 of 8 signed by the key you trust and match/);
     assert.match(page.url(), /sample=intact/);
   });
 
@@ -94,7 +97,7 @@ try {
     await page.click("text=Load rewritten sample");
     const m = cli("rewritten.fseal").match(/receipt (\d+) \(count (\d+)\): log does not match/);
     await page.waitForFunction((i) => document.querySelector("#verdict-line").textContent.trim() === `Tampered: receipt ${i} does not match the log`, m[1]);
-    assert.match(await page.textContent("#verdict-detail"), new RegExp(`issued after ${m[2]} records`));
+    assert.match(await page.textContent("#verdict-detail"), new RegExp(`signed by the key you trust after ${m[2]} records`));
     assert.match(cli("rewritten.fseal", false), /RESULT: INTACT/);
   });
 
@@ -117,10 +120,10 @@ try {
     await page.waitForFunction(() => document.querySelector("#verdict-line").textContent.trim() === "Intact");
     await page.focus("#pg-next");
     await page.keyboard.press("Enter");
-    assert.match(await page.textContent("#pg-label"), /Records 100 to 199 of 800/);
+    assert.match(await page.textContent("#pg-label"), /Records 50 to 99 of 800/);
     await page.fill("#jump-to", "742");
     await page.keyboard.press("Enter");
-    assert.match(await page.textContent("#pg-label"), /page 8 of 8/);
+    assert.match(await page.textContent("#pg-label"), /page 15 of 16/);
     assert.equal(await page.evaluate(() => document.activeElement.textContent), "742");
     await page.waitForFunction(() => document.querySelector("#detail-h").textContent === "Record 742");
     assert.match(page.url(), /record=742/);
@@ -132,7 +135,6 @@ try {
     await page.waitForFunction(() => document.querySelector("#detail-h").textContent === "Record 12");
   });
 
-  const tmp = mkdtempSync(join(tmpdir(), "fseal-e2e-"));
   const hostile = (name, bytes) => { const p = join(tmp, name); writeFileSync(p, bytes); return p; };
   const intact = readFileSync(join(SAMPLES, "intact.fseal"));
 
@@ -170,6 +172,164 @@ try {
     await page.waitForFunction(() => document.querySelector("#notes").textContent.includes("line 1: not a receipt"));
   });
 
+  // A log sealed by the user with their own key, plus its receipts.
+  const ownKey = join(tmp, "own.pem");
+  const ownPub = spawnSync(FSEAL, ["keygen", ownKey], { encoding: "utf8" }).stdout.trim();
+  const ownLines = Array.from({ length: 30 }, (_, i) => `${1000 * (i + 1)}\t{"z":${i}}\n`).join("");
+  spawnSync(FSEAL, ["append", join(tmp, "own.fseal"), "--key", ownKey, "--receipts", join(tmp, "own.receipts"), "--every", "10"], { input: ownLines });
+  const v = () => page.textContent("#verdict-line").then((t) => t.trim());
+
+  await check("picking your own log clears the sample's receipts and key (no false 'rewritten')", async () => {
+    await page.goto(url + "?sample=intact");
+    await loaded(page);
+    await page.setInputFiles("#log-file", join(tmp, "own.fseal"));
+    await page.waitForFunction(() => document.querySelector("#verdict-line").textContent.trim() === "Chain intact; no receipts checked");
+    assert.equal(await page.inputValue("#pubkey"), "");
+    assert.equal(await page.textContent("#rec-name"), "");
+    assert.equal(await page.isHidden("#rec-clear"), true);
+    await page.setInputFiles("#rec-file", join(tmp, "own.receipts"));
+    await page.fill("#pubkey", ownPub);
+    await page.press("#pubkey", "Tab");
+    await page.waitForFunction(() => document.querySelector("#verdict-line").textContent.trim() === "Intact");
+    assert.match(spawnSync(FSEAL, ["verify", join(tmp, "own.fseal"), "--receipts", join(tmp, "own.receipts"), "--pubkey", ownPub], { encoding: "utf8" }).stdout, /RESULT: INTACT/);
+  });
+
+  await check("an empty receipts file counts as no receipts (never 'all 0 receipts match')", async () => {
+    await page.setInputFiles("#rec-file", hostile("empty.receipts", ""));
+    await page.waitForFunction(() => document.querySelector("#notes").textContent.includes("contains no receipts"));
+    assert.equal(await v(), "Chain intact; no receipts checked");
+    assert.match(await page.textContent("#notes"), /Truncation of the tail \(records deleted from the end\) is only caught with receipts/);
+    assert.doesNotMatch(await page.textContent("#verdict"), /0 receipts match/);
+  });
+
+  await check("a receipts file with a UTF-8 byte-order mark is rejected at line 1, like the CLI", async () => {
+    const bom = Buffer.concat([Buffer.from([0xef, 0xbb, 0xbf]), readFileSync(join(tmp, "own.receipts"))]);
+    const bomPath = hostile("bom.receipts", bom);
+    assert.match(spawnSync(FSEAL, ["verify", join(tmp, "own.fseal"), "--receipts", bomPath, "--pubkey", ownPub], { encoding: "utf8" }).stderr, /:1: not a receipt/);
+    await page.setInputFiles("#rec-file", bomPath);
+    await page.waitForFunction(() => document.querySelector("#notes").textContent.includes("line 1: not a receipt"));
+  });
+
+  await check("a crash-torn log whose receipts all match is Incomplete, with the CLI's TAMPERED explained", async () => {
+    const own = readFileSync(join(tmp, "own.fseal"));
+    const torn = hostile("own-torn.fseal", Buffer.concat([own, own.subarray(8, 8 + 30)])); // a half-written 31st record
+    const out = spawnSync(FSEAL, ["verify", torn, "--receipts", join(tmp, "own.receipts"), "--pubkey", ownPub], { encoding: "utf8" }).stdout;
+    assert.match(out, /3 of 3 match/);
+    assert.match(out, /RESULT: TAMPERED/);
+    await page.setInputFiles("#log-file", torn);
+    await page.setInputFiles("#rec-file", join(tmp, "own.receipts"));
+    await page.fill("#pubkey", ownPub);
+    await page.press("#pubkey", "Tab");
+    await page.waitForFunction(() => document.querySelector("#verdict-line").textContent.trim() === "Incomplete: the final record is cut short");
+    const body = await page.textContent("#verdict-detail");
+    assert.match(body, /fseal verify reports TAMPERED whenever receipts are given/);
+    assert.doesNotMatch(body, /expected more/);
+  });
+
+  await check("a receipt with a forged signature is not valid for the key you trust (never Intact)", async () => {
+    const forged = readFileSync(join(tmp, "own.receipts"), "utf8").replace(/sig=[0-9a-f]+/g, "sig=" + "0".repeat(128));
+    await page.setInputFiles("#log-file", join(tmp, "own.fseal"));
+    await page.setInputFiles("#rec-file", hostile("forged.receipts", forged));
+    await page.fill("#pubkey", ownPub);
+    await page.press("#pubkey", "Tab");
+    await page.waitForFunction(() => document.querySelector("#verdict-line").textContent.trim() === "Receipt 1 is not valid for the key you trust");
+    assert.match(await page.textContent("#report"), /RESULT: TAMPERED/);
+  });
+
+  await check("an empty log file says it has no records", async () => {
+    await page.click("#rec-clear");
+    await page.setInputFiles("#log-file", hostile("empty.fseal", ""));
+    await page.waitForFunction(() => document.querySelector("#verdict-line").textContent.trim() === "The log has no records");
+  });
+
+  await check("removing the log returns to the empty state", async () => {
+    await page.click("#log-clear");
+    await page.waitForFunction(() => document.querySelector("#verdict-line").textContent.trim() === "Load a sealed log or a sample to check it.");
+    assert.equal(await page.isHidden("#records-area"), true);
+  });
+
+  await check("a network failure loading a sample is reported in text", async () => {
+    const p = await ctx.newPage();
+    await p.route("**/samples/**", (r) => r.abort());
+    await p.goto(url + "?sample=intact");
+    await p.waitForFunction(() => document.querySelector("#verdict-line").textContent.includes("Could not load the intact sample"));
+    await p.close();
+  });
+
+  await check("keyboard only: skip link, then load a sample and reach the first break", async () => {
+    const p = await ctx.newPage();
+    await p.goto(url);
+    await p.waitForSelector("#report-wrap:not([hidden])");
+    await p.keyboard.press("Tab");
+    assert.equal(await p.evaluate(() => document.activeElement.textContent), "Skip to the result");
+    await p.keyboard.press("Enter");
+    assert.equal(await p.evaluate(() => document.activeElement.id), "verdict");
+    await p.evaluate(() => document.activeElement.blur());
+    let found = false;
+    for (let i = 0; i < 40 && !found; i++) {
+      await p.keyboard.press("Tab");
+      found = (await p.evaluate(() => document.activeElement.textContent)) === "Load rewritten sample";
+    }
+    assert.ok(found, "Load rewritten sample is not reachable with Tab");
+    await p.keyboard.press("Enter");
+    await p.waitForFunction(() => document.querySelector("#verdict-line").textContent.includes("receipt 2 does not match"));
+    await p.goto(url + "?sample=tampered");
+    await p.waitForSelector("#report-wrap:not([hidden])");
+    await p.focus("#show-break");
+    await p.keyboard.press("Enter");
+    assert.equal(await p.evaluate(() => document.activeElement.closest("tr").dataset.record), "150");
+    await p.close();
+  });
+
+  await check("a 56 MB log of 1,000,000 records: no long task over 200 ms, Cancel answers within 200 ms", async () => {
+    const n = 1_000_000;
+    const buf = Buffer.alloc(8 + n * 56);
+    buf.write("FLTSEAL1");
+    let prev = Buffer.alloc(32);
+    const crcTable = Array.from({ length: 256 }, (_, i) => { let c = i; for (let k = 0; k < 8; k++) c = c & 1 ? 0xedb88320 ^ (c >>> 1) : c >>> 1; return c >>> 0; });
+    const crc = (b) => { let c = 0xffffffff; for (const x of b) c = crcTable[(c ^ x) & 0xff] ^ (c >>> 8); return (c ^ 0xffffffff) >>> 0; };
+    for (let i = 0; i < n; i++) {
+      const o = 8 + i * 56;
+      buf.writeBigUInt64LE(BigInt(i), o + 4);
+      buf.writeBigUInt64LE(BigInt(i), o + 12);
+      prev = createHash("sha256").update(prev).update(buf.subarray(o + 4, o + 20)).update(buf.subarray(o, o + 4)).digest();
+      prev.copy(buf, o + 20);
+      buf.writeUInt32LE(crc(buf.subarray(o, o + 52)), o + 52);
+    }
+    const big = hostile("big.fseal", buf);
+    const p = await ctx.newPage();
+    await p.goto(url);
+    await p.waitForSelector("#report-wrap:not([hidden])");
+    await p.evaluate(() => {
+      window.__long = [];
+      new PerformanceObserver((l) => window.__long.push(...l.getEntries().map((e) => e.duration))).observe({ type: "longtask", buffered: false });
+    });
+    await p.click("#rec-clear");
+    await p.setInputFiles("#log-file", big);
+    await p.waitForSelector("#progress-wrap:not([hidden])");
+    await p.waitForTimeout(3000);
+    const cancelMs = await p.evaluate(() => new Promise((resolve) => {
+      const t0 = performance.now();
+      const line = document.querySelector("#verdict-line");
+      new MutationObserver(() => line.textContent.includes("cancelled") && resolve(performance.now() - t0)).observe(line, { subtree: true, childList: true, characterData: true });
+      document.querySelector("#cancel").click();
+    }));
+    const worst = Math.max(0, ...(await p.evaluate(() => window.__long)));
+    await p.close();
+    console.log(`     measured: Cancel answered in ${cancelMs.toFixed(0)} ms, longest task ${worst.toFixed(0)} ms`);
+    assert.ok(cancelMs < 200, `Cancel took ${cancelMs.toFixed(0)} ms`);
+    assert.ok(worst < 200, `longest task ${worst.toFixed(0)} ms`);
+  });
+
+  await check("without Web Workers the page verifies on the main thread", async () => {
+    const p = await ctx.newPage();
+    await p.addInitScript(() => { delete window.Worker; });
+    await p.goto(url + "?sample=tampered");
+    await p.waitForSelector("#report-wrap:not([hidden])");
+    assert.equal((await p.textContent("#verdict-line")).trim(), "Tampered: the chain breaks at record 150");
+    await p.close();
+  });
+
   await check("no page errors", async () => assert.deepEqual(errors, []));
 
   await check("without WebCrypto Ed25519 the page says so and still verifies the chain", async () => {
@@ -180,9 +340,23 @@ try {
     });
     await p2.goto(url + "?sample=intact");
     await loaded(p2);
-    assert.equal((await p2.textContent("#verdict-line")).trim(), "Chain intact; receipt signatures not checked");
+    assert.equal((await p2.textContent("#verdict-line")).trim(), "Chain intact; receipts not authenticated");
     assert.match(await p2.textContent("#notes"), /cannot verify Ed25519 signatures/);
-    await p2.goto(url + "?sample=tampered");
+    let report = await p2.textContent("#report");
+    assert.match(report, /NOT CHECKED/);
+    assert.doesNotMatch(report, /RESULT: INTACT/);
+    // The reviewer's case: a one-record log and a bogus, unsigned receipt claiming 2 records.
+    spawnSync(FSEAL, ["append", join(tmp, "one.fseal")], { input: "1000\t{\"z\":1}\n" });
+    const pub = readFileSync(join(SAMPLES, "pubkey.txt"), "utf8").trim();
+    await p2.setInputFiles("#log-file", join(tmp, "one.fseal"));
+    await p2.setInputFiles("#rec-file", hostile("bogus.receipts", `fseal-receipt v1 count=2 head=${"0".repeat(64)} key=${pub} sig=${"0".repeat(128)}\n`));
+    await p2.fill("#pubkey", pub);
+    await p2.press("#pubkey", "Tab");
+    await p2.waitForFunction(() => document.querySelector("#verdict-line").textContent.trim() === "Chain intact; receipts not authenticated");
+    report = await p2.textContent("#report");
+    assert.doesNotMatch(report, /RESULT: (TAMPERED|INTACT)/);
+    assert.doesNotMatch(await p2.textContent("#verdict"), /removed from the end\./);
+    await p2.goto(url + "?sample=tampered"); // a broken chain is still proved without signatures
     await loaded(p2);
     assert.match(await p2.textContent("#verdict-line"), /chain breaks at record/);
     await p2.close();
@@ -205,6 +379,18 @@ try {
       assert.deepEqual(all, []);
     });
   }
+
+  for (const w of [375, 320]) await check(`${w} px wide, every sample: no horizontal page scroll`, async () => {
+    const c = await browser.newContext({ viewport: { width: w, height: 800 } });
+    const p = await c.newPage();
+    for (const s of ["tampered", "intact", "rewritten", "truncated"]) {
+      await p.goto(url + `?sample=${s}`);
+      await loaded(p);
+      const over = await p.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth);
+      assert.ok(over <= 0, `${s}: page scrolls sideways by ${over}px`);
+    }
+    await c.close();
+  });
 
   await check("320 px wide: no horizontal page scroll", async () => {
     const c = await browser.newContext({ viewport: { width: 320, height: 800 } });
@@ -251,6 +437,7 @@ try {
 } finally {
   await browser.close();
   server.close();
+  rmSync(tmp, { recursive: true, force: true });
 }
 console.log(`${passed} passed, ${failures} failed`);
 process.exit(failures ? 1 : 0);

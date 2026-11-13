@@ -41,7 +41,7 @@
         </div>
         <div class="field">
           <label for="pubkey">Public key you trust <span class="muted">(64 hex digits, needed with receipts)</span></label>
-          <input type="text" id="pubkey" class="input mono" spellcheck="false" autocomplete="off" inputmode="latin" aria-describedby="pubkey-help">
+          <input type="text" id="pubkey" class="input mono" spellcheck="false" autocomplete="off" aria-describedby="pubkey-help">
           <p class="help" id="pubkey-help">Get it from the operator independently, not from whoever sent you the log.</p>
         </div>
         <p class="drop-hint muted">You can also drop the log, receipts and key file anywhere on this page.</p>
@@ -136,10 +136,11 @@
     <ul>
       <li>Checks run in order for every record: checksum (CRC-32), sequence number, then the SHA-256 link to the record before. Verification stops at the first failure, as <code>fseal verify</code> does.</li>
       <li>A hash chain pinpoints the first record where the chain breaks, not every altered record. Records after the break are not checked.</li>
-      <li>Truncation of the tail is only caught with receipts. So is a log that its holder rebuilt from scratch: a receipt kept by someone else, signed by the drone's key, pins how the log looked when the receipt was issued.</li>
+      <li>Truncation of the tail is only caught with receipts. So is a log that its holder rebuilt from scratch: a receipt kept by someone else, signed by the drone's key, pins how the log looked when the receipt was issued. A receipt that does not match shows that something changed between it and the previous matching receipt, not which record.</li>
+      <li>Receipts count only when their signature verifies with the key you trust. If this browser cannot check Ed25519 signatures, receipts are shown as not authenticated: neither proof of tampering nor of integrity.</li>
       <li>Nothing here shows the data was true when it was sealed (a spoofed sensor looks normal), and records written after the last receipt are not protected. See the <a href="https://github.com/anirudh763/flightseal/blob/main/THREAT_MODEL.md">threat model</a>.</li>
     </ul>
-    <p class="muted small-print">The verifier is plain JavaScript using your browser's WebCrypto for SHA-256 and Ed25519; its tests require it to print the same report as the C++ CLI on every attack the project tests. Built with AI assistance (Claude); see the README.</p>
+    <p class="muted small-print">The verifier is plain JavaScript using your browser's WebCrypto for SHA-256 and Ed25519; its tests require it to print the same report as the C++ CLI on every attack the project tests (when the browser can check signatures). Matching the CLI cannot catch a mistake both share. Built with AI assistance (Claude); see the README. Font: Atkinson Hyperlegible, <a href="OFL-atkinson-hyperlegible.txt">SIL Open Font License 1.1</a>.</p>
   </section>
 </main>
 </body>

@@ -2,11 +2,11 @@
 // view in the URL (?sample=...&record=N) so a sample view can be shared.
 import {
   scanLog, parseReceipts, checkReceipts, summarize, cliReport, blobSource, readRecord, parseHex, ed25519Supported,
-  PROBLEM_TEXT, RECEIPT_TEXT, MAGIC,
+  decodeReceipts, PROBLEM_TEXT, RECEIPT_TEXT, MAGIC,
 } from "./verifier.js";
 
 const $ = (id) => document.getElementById(id);
-const PAGE = 100;
+const PAGE = 50;
 const MAX_RECEIPTS_BYTES = 16 << 20;
 const MAX_KEY_FILE_BYTES = 4096;
 const MAX_ROWS = 2_000_000; // records kept for the table (about 40 MB); verification itself has no limit
@@ -14,9 +14,10 @@ const fmt = new Intl.NumberFormat("en-US");
 const n = (x) => fmt.format(x);
 
 const state = {
-  log: null, // { blob, name }
-  receipts: null, // { text, name }
+  log: null, // { blob, name, fromSample }
+  receipts: null, // { text, name, fromSample } or { error, name }
   pubkey: "",
+  pubkeyFromSample: false,
   sample: null,
   result: null, // { scan, check, summary, source }
   page: 0,
@@ -62,24 +63,46 @@ function code(text, cls = "hash") {
 }
 
 // ---- inputs ---------------------------------------------------------------------------------
+// A file of the user's own replaces every input that came from a sample, so a sample's receipts and key are
+// never checked against the user's log (an honest log sealed with another key would look rewritten).
+function clearSampleInputs() {
+  state.sample = null;
+  if (state.log && state.log.fromSample) clearLog();
+  if (state.receipts && state.receipts.fromSample) clearReceipts();
+  if (state.pubkeyFromSample) setKey("", false);
+}
+function clearLog() {
+  state.log = null;
+  $("log-file").value = "";
+  $("log-name").textContent = "";
+  $("log-clear").hidden = true;
+}
+function clearReceipts() {
+  state.receipts = null;
+  $("rec-file").value = "";
+  $("rec-name").textContent = "";
+  $("rec-clear").hidden = true;
+}
 async function setLog(blob, name, fromSample = false) {
-  state.log = { blob, name };
-  if (!fromSample) state.sample = null;
+  if (!fromSample) clearSampleInputs();
+  state.log = { blob, name, fromSample };
   $("log-name").textContent = `${name}, ${n(blob.size)} bytes`;
   $("log-clear").hidden = false;
 }
 async function setReceipts(blob, name, fromSample = false) {
-  if (!fromSample) state.sample = null;
+  if (!fromSample) clearSampleInputs();
   if (blob.size > MAX_RECEIPTS_BYTES) {
-    state.receipts = { error: `${name} is ${n(blob.size)} bytes; a receipts file over 16 MB is not read here. Use the fseal CLI.`, name };
+    state.receipts = { error: `${name} is ${n(blob.size)} bytes; a receipts file over 16 MB is not read here. Use the fseal CLI.`, name, fromSample };
   } else {
-    state.receipts = { text: await blob.text(), name };
+    // Decoded without stripping a byte-order mark, so a file the CLI rejects is rejected here too.
+    state.receipts = { text: decodeReceipts(new Uint8Array(await blob.arrayBuffer())), name, fromSample };
   }
   $("rec-name").textContent = `${name}, ${n(blob.size)} bytes`;
   $("rec-clear").hidden = false;
 }
-function setKey(text) {
+function setKey(text, fromSample = false) {
   state.pubkey = text.trim().toLowerCase();
+  state.pubkeyFromSample = fromSample;
   $("pubkey").value = state.pubkey;
 }
 
@@ -98,7 +121,10 @@ async function addFiles(files) {
       const kind = await classify(f);
       if (kind === "log") await setLog(f, f.name);
       else if (kind === "receipts") await setReceipts(f, f.name);
-      else setKey(await f.text());
+      else {
+        clearSampleInputs();
+        setKey(await f.text());
+      }
     }
   } catch (e) {
     showError(`Could not read the dropped file (a folder cannot be checked): ${e.message || e}`);
@@ -121,7 +147,7 @@ async function loadSample(name, record = null) {
     state.sample = name;
     await setLog(log, `${name}.fseal (sample)`, true);
     await setReceipts(rec, "flight.receipts (sample)", true);
-    setKey(await key.text());
+    setKey(await key.text(), true);
     $("log-file").value = "";
     $("rec-file").value = "";
     state.selected = record;
@@ -129,7 +155,7 @@ async function loadSample(name, record = null) {
     syncUrl();
     await verify();
   } catch (e) {
-    showError(String(e.message || e));
+    showError(`Could not load the ${name} sample: ${e.message || e}. Check your connection and reload, or choose your own files.`);
   }
 }
 
@@ -142,6 +168,42 @@ function syncUrl() {
 }
 
 // ---- verification ----------------------------------------------------------------------------
+// Scans in a module worker (Cancel terminates it at once); falls back to the main thread, where scanLog yields to
+// the page every few milliseconds, if a worker cannot be started.
+function runScan(blob, options) {
+  const { signal, onProgress } = options;
+  let worker;
+  try {
+    worker = new Worker(new URL("scan-worker.js", import.meta.url), { type: "module" });
+  } catch {
+    return scanLog(blobSource(blob), options);
+  }
+  return new Promise((resolve, reject) => {
+    const stop = () => {
+      worker.terminate();
+      reject(new DOMException("verification cancelled", "AbortError"));
+    };
+    if (signal.aborted) return stop();
+    signal.addEventListener("abort", stop, { once: true });
+    worker.onmessage = (e) => {
+      const m = e.data;
+      if (m.type === "progress") return onProgress(m.done, m.size);
+      signal.removeEventListener("abort", stop);
+      worker.terminate();
+      if (m.type === "done") resolve(m.result);
+      else reject(new Error(m.message));
+    };
+    worker.onerror = (e) => {
+      // A worker that fails to load (old browser, unusual hosting): verify on the main thread instead.
+      e.preventDefault();
+      signal.removeEventListener("abort", stop);
+      worker.terminate();
+      scanLog(blobSource(blob), options).then(resolve, reject);
+    };
+    worker.postMessage({ blob, linksAt: options.linksAt, maxRows: options.maxRows });
+  });
+}
+
 function showError(message) {
   $("verdict-line").replaceChildren(icon("warn"), el("span", { text: message }));
   $("verdict-line").className = "verdict-line warn";
@@ -162,6 +224,7 @@ async function verify() {
     else {
       const parsed = parseReceipts(state.receipts.text);
       if (parsed.error) receiptError = `${state.receipts.name}, line ${parsed.error.line}: not a receipt. Nothing was checked against the receipts.`;
+      else if (parsed.receipts.length === 0) receiptError = `${state.receipts.name} contains no receipts, so nothing was checked against receipts.`;
       else receipts = parsed.receipts;
     }
     if (receipts) {
@@ -180,7 +243,7 @@ async function verify() {
   $("progress").value = 0;
   let last = 0;
   try {
-    const scan = await scanLog(source, {
+    const scan = await runScan(state.log.blob, {
       linksAt: receipts ? receipts.map((r) => r.count) : [],
       maxRows: MAX_ROWS,
       signal: abort.signal,
@@ -195,7 +258,7 @@ async function verify() {
     const check = receipts && key ? await checkReceipts(receipts, key, scan) : null;
     if (run !== state.run) return;
     const summary = summarize(scan, check);
-    state.result = { scan, check, summary, source, receiptError, receiptsLoaded: !!state.receipts };
+    state.result = { scan, check, summary, source, receiptError };
     render();
   } catch (e) {
     if (run !== state.run) return;
@@ -217,52 +280,80 @@ function clearResult() {
 }
 
 // ---- verdict ---------------------------------------------------------------------------------
+// Three things are judged separately: whether the hash chain is consistent (proved without any key), whether
+// receipts signed by the key you trust cover the log, and which records no authenticated receipt covers.
 function verdictFor(r) {
   const { scan, check, summary } = r;
-  const sigs = check && check.signaturesChecked;
   const p = scan.problem;
+  const authenticated = summary.authenticated;
+  const unauthenticated = check && !authenticated;
   if (scan.status === "bad-header") return { kind: "bad", head: "Not a FlightSeal log", body: [`The file does not start with the FlightSeal header. Nothing in it was checked.`] };
-  if (scan.status === "torn-tail" && summary.result === "INCOMPLETE") {
-    return { kind: "warn", head: `Incomplete: the final record is cut short`, body: [
-      `Records 0 to ${n(scan.records - 1)} pass every check. The last ${n(scan.size - scan.goodBytes)} bytes are an unfinished record, which is what a crash while writing leaves. fseal recover trims only that record.`,
-    ] };
-  }
-  if (scan.status !== "ok") {
+
+  // 1. The chain itself (no key needed).
+  if (scan.status !== "ok" && scan.status !== "torn-tail") {
     const what = {
       "bad-crc": `the checksum of record ${n(p.record)} does not match its bytes: they were changed or damaged`,
       "bad-seq": `record ${n(p.record)} has sequence number ${p.actual}, not ${p.expected}: a record was deleted, reordered or duplicated`,
       "bad-link": `the contents of record ${n(p.record)} changed after sealing: its link does not match the record and the one before it`,
       "bad-length": `record ${n(p.record)} claims a length of ${n(Number(p.actual))} bytes, more than any record can have: the file is corrupt`,
-      "torn-tail": `record ${n(p.record)} is cut short, and the receipts expected more`,
     }[scan.status];
     return { kind: "bad", head: `Tampered: the chain breaks at record ${n(p.record)}`, body: [
       `At byte ${n(p.offset)}, ${what}. ${scan.records ? `Records 0 to ${n(scan.records - 1)} are intact.` : "No record before it passed."}`,
       `A hash chain pinpoints the first record where the chain breaks, not every altered record. Records after ${n(p.record)} were not checked and may also have been changed.`,
     ] };
   }
+
+  // 2. Receipts that are provably not from the key you trust (no signature check needed for a different key).
+  if (summary.failed > 0) {
+    const f = summary.firstFailure;
+    if (f.result === "wrong-key" || f.result === "bad-signature") {
+      return { kind: "bad", head: `Receipt ${f.index} is not valid for the key you trust`, body: [f.result === "wrong-key"
+        ? `Receipt ${f.index} names a different signing key than the one you entered. Either the key you entered is wrong, or the receipts are not the ones issued for this log. Check the key with the operator. fseal verify reports this as TAMPERED.`
+        : `The signature on receipt ${f.index} does not verify with the key you trust: the receipt itself was altered or forged. fseal verify reports this as TAMPERED.`] };
+    }
+  }
+
+  // 3. Receipts that cannot be authenticated in this browser are not evidence either way.
+  if (unauthenticated) {
+    const mism = summary.unverifiedMismatches;
+    return { kind: "warn", head: scan.status === "torn-tail" ? "Incomplete; receipts not authenticated" : "Chain intact; receipts not authenticated", body: [
+      scan.status === "torn-tail"
+        ? `Records 0 to ${n(scan.records - 1)} pass every check; the last ${n(scan.size - scan.goodBytes)} bytes are an unfinished record, as a crash leaves it.`
+        : `All ${n(scan.records)} records pass their checksum, sequence and hash-chain checks.`,
+      `This browser cannot verify Ed25519 signatures, so the ${summary.receipts} receipt(s) are not authenticated: anyone could have written them. ${mism ? `${mism} of them disagree with the log, which proves nothing without a valid signature.` : "They agree with the log, which proves nothing without a valid signature."} No record is covered by an authenticated receipt. Use the fseal CLI or a browser with Ed25519 to check them.`,
+    ] };
+  }
+
+  // 4. Authenticated receipts that disagree with the log.
   if (summary.failed > 0) {
     const f = summary.firstFailure;
     const prevOk = check.results.filter((x) => x.result === "ok" && x.count < f.count).reduce((m, x) => (x.count > m ? x.count : m), 0n);
     const body = {
-      "head-mismatch": `Every record passes its own checks, but receipt ${f.index}, issued after ${n(f.count)} records, pins a different chain head: the log was rewritten after the receipt was issued. The change is in records ${n(prevOk)} to ${n(f.count - 1n)}, because ${prevOk ? `the receipt after ${n(prevOk)} records still matches` : "no earlier receipt narrows it down"}.`,
-      "log-shorter": `Every record passes its own checks, but receipt ${f.index} says ${n(f.count)} records had been written and this log has ${n(scan.records)}: records were removed from the end.`,
-      "wrong-key": `Receipt ${f.index} was signed by a different key than the one you entered. Check the key with the operator.`,
-      "bad-signature": `Receipt ${f.index} has an invalid signature: the receipt itself was altered.`,
+      "head-mismatch": `Every record passes its own checks, but receipt ${f.index}, signed by the key you trust after ${n(f.count)} records, pins a different chain head: the log was rewritten after the receipt was issued. Something in records ${n(prevOk)} to ${n(f.count - 1n)} changed${prevOk ? ` (the receipt after ${n(prevOk)} records still matches)` : ""}. A receipt mismatch cannot say which record in that range was edited.`,
+      "log-shorter": `Every record passes its own checks, but receipt ${f.index}, signed by the key you trust, says ${n(f.count)} records had been written and this log has ${n(scan.records)}: records were removed from the end.`,
     }[f.result];
     return { kind: "bad", head: `Tampered: receipt ${f.index} does not match the log`, body: [body] };
   }
-  if (check && !sigs) {
-    return { kind: "warn", head: "Chain intact; receipt signatures not checked", body: [
-      `All ${n(scan.records)} records pass, and the counts and head links in all ${summary.receipts} receipts match, but this browser could not check their signatures.`,
+
+  // 5. A torn final record (a crash leaves one); the CLI reports TAMPERED for it whenever receipts are given.
+  if (scan.status === "torn-tail") {
+    return { kind: "warn", head: "Incomplete: the final record is cut short", body: [
+      `Records 0 to ${n(scan.records - 1)} pass every check${check ? `, and ${summary.matched} of ${summary.receipts} receipts match` : ""}. Record ${n(p.record)} is cut short (the last ${n(scan.size - scan.goodBytes)} bytes), as a crash while writing leaves it. fseal recover trims only that record.`,
+      ...(check ? [`fseal verify reports TAMPERED whenever receipts are given and the log has any problem, including this one; run fseal recover and verify again.`] : []),
     ] };
   }
+
+  if (scan.records === 0) return { kind: "warn", head: "The log has no records", body: ["The file is a FlightSeal log header with no records after it, so there is nothing to check."] };
   if (check) {
     return { kind: "ok", head: "Intact", body: [
-      `All ${n(scan.records)} records pass their checksum, sequence and hash-chain checks, and all ${summary.receipts} receipts match the log. ${n(summary.uncovered)} record(s) after the last receipt are not covered by any receipt.`,
+      `All ${n(scan.records)} records pass their checksum, sequence and hash-chain checks, and all ${summary.receipts} receipts, signed by the key you trust, match the log.`,
+      summary.uncovered > 0n
+        ? `The last ${n(summary.uncovered)} record(s), from record ${n(summary.covered)} on, come after the last receipt: no receipt protects them, so whoever holds the file could have changed them.`
+        : "The last receipt covers the final record, so every record is protected by a receipt.",
     ] };
   }
   return { kind: "warn", head: "Chain intact; no receipts checked", body: [
-    `All ${n(scan.records)} records pass their checksum, sequence and hash-chain checks.`,
+    `All ${n(scan.records)} records pass their checksum, sequence and hash-chain checks. Without receipts this shows only that the file is self-consistent.`,
   ] };
 }
 
@@ -276,18 +367,28 @@ function render() {
   $("verdict-detail").replaceChildren(...v.body.map((t) => el("p", { text: t })));
 
   // Facts.
+  const chain = scan.status === "ok" ? `consistent: ${n(scan.records)} records pass`
+    : scan.status === "bad-header" ? "not checked: not a FlightSeal log"
+    : `${n(scan.records)} records pass, then ${scan.status === "torn-tail" ? "a cut-short record" : `a break at record ${n(scan.problem.record)}`} [${scan.status}]`;
+  let receiptsText = "none loaded";
+  if (check && !summary.authenticated) receiptsText = `${summary.receipts} loaded, NOT authenticated (signatures not checked in this browser)`;
+  else if (check) {
+    receiptsText = `${summary.matched} of ${summary.receipts} signed by the key you trust and match`;
+    if (summary.unchecked) receiptsText += `; ${summary.unchecked} cannot be checked past the first problem`;
+  }
+  const coverage = !check || !summary.authenticated ? `none: all ${n(scan.records)} checked record(s) lack an authenticated receipt`
+    : summary.failed ? "not established: a receipt does not match"
+    : scan.status !== "ok" ? (summary.covered > 0n ? `records 0 to ${n(summary.covered - 1n)}; nothing from the problem at record ${n(scan.problem.record)} on` : `none before the problem at record ${n(scan.problem.record)}`)
+    : summary.uncovered > 0n ? `records 0 to ${n(summary.covered - 1n)}; the last ${n(summary.uncovered)} record(s) are not covered`
+    : `all ${n(scan.records)} records`;
   const facts = [
     ["Log", state.log.name],
-    ["Records checked", scan.status === "ok" ? `${n(scan.records)}, all intact` : `${n(scan.records)} intact before the problem`],
+    ["Hash chain", chain],
+    ["Receipts", receiptsText],
+    ["Covered by a receipt", coverage],
     ["Chain head", code(Array.from(scan.head, (b) => b.toString(16).padStart(2, "0")).join(""))],
     ["Time order", `${n(scan.timeReversals)} backward timestamp(s) (counted, not trusted)`],
   ];
-  if (check) {
-    let t = `${summary.matched} of ${summary.receipts} match`;
-    if (summary.unchecked) t += `; ${summary.unchecked} cannot be checked past the first problem`;
-    else if (summary.failed === 0) t += `; ${n(summary.uncovered)} record(s) after the last receipt are not covered`;
-    facts.push(["Receipts", t]);
-  }
   $("facts").replaceChildren(...facts.flatMap(([k, val]) => [el("dt", { text: k }), el("dd", {}, val)]));
 
   renderBreak(r);
@@ -319,7 +420,7 @@ function renderBreak(r) {
       "bad-length": ["Allowed payload length", "Length field in the record"],
     }[p.token];
     box.replaceChildren(pair(`First break: record ${n(p.record)}, byte ${n(p.offset)} [${p.token}]`, p.expected, p.actual, ...labels));
-  } else if (summary.firstFailure && summary.firstFailure.result === "head-mismatch") {
+  } else if (summary.authenticated && summary.firstFailure && summary.firstFailure.result === "head-mismatch") {
     const f = summary.firstFailure;
     box.replaceChildren(pair(`Receipt ${f.index}, after ${n(f.count)} records`, f.receiptHead, f.logHead, "Head link in the receipt (signed when it was issued)", `Link of record ${n(f.count - 1n)} in this log`));
   } else if (p && p.detail) {
@@ -331,9 +432,9 @@ function renderNotes(r) {
   const out = [];
   const note = (kind, text) => out.push(el("p", { class: `note ${kind}` }, icon(kind), el("span", { text })));
   if (r.receiptError) note("warn", r.receiptError);
-  if (!r.receiptsLoaded) note("warn", "No receipts loaded. Truncation of the tail (records deleted from the end) is only caught with receipts, and so is a log its holder rebuilt with every link recomputed. Load the receipts and the public key to check for both.");
+  if (!r.check) note("warn", "No receipts loaded. Truncation of the tail (records deleted from the end) is only caught with receipts, and so is a log its holder rebuilt with every link recomputed. Load the receipts and the public key to check for both.");
   if (r.check && !r.check.signaturesChecked)
-    note("warn", "This browser's WebCrypto cannot verify Ed25519 signatures, so the receipt signatures were not checked. The checksums, sequence numbers and hash chain were still verified, and each receipt's count and head were compared with the log, but a forged receipt would not be detected. Use a current version of Chrome, Edge, Firefox or Safari, or the fseal CLI.");
+    note("warn", "This browser's WebCrypto cannot verify Ed25519 signatures, so the receipt signatures were NOT checked and the receipts are not evidence. The checksums, sequence numbers and hash chain were still verified. Use a current version of Chrome, Edge, Firefox or Safari, or the fseal CLI.");
   if (r.scan.rowsTruncated) note("warn", `Only the first ${n(MAX_ROWS)} records are listed below; all ${n(r.scan.records)} were verified.`);
   $("notes").replaceChildren(...out);
 }
@@ -359,7 +460,7 @@ function renderStrip(r) {
       if (x.result === "unchecked" || x.count === 0n) continue;
       const c = Number(x.count);
       const at = c <= rows.count ? rows.offset[c - 1] + 56 + rows.len[c - 1] : scan.size;
-      const t = el("span", { class: `tick ${x.result === "ok" ? "ok" : "bad"}` });
+      const t = el("span", { class: `tick ${x.result === "ok" || !r.summary.authenticated ? "ok" : "bad"}` });
       t.style.left = pct(at);
       kids.push(t);
     }
@@ -367,16 +468,22 @@ function renderStrip(r) {
   strip.replaceChildren(...kids);
   const legend = [`Bytes 0 to ${n(scan.goodBytes)} of ${n(scan.size)} verified.`];
   if (scan.goodBytes < scan.size) legend.push(`The rest was not checked.`);
-  if (check) legend.push("Marks above the bar are receipts (thin: matches, thick: does not match).");
+  if (check && r.summary.authenticated) legend.push("Marks above the bar are receipts (thin: matches, thick: does not match).");
+  else if (check) legend.push("Marks above the bar are receipts that could not be authenticated.");
   $("strip-legend").textContent = legend.join(" ");
   $("strip-wrap").hidden = false;
 }
 
 function renderReceipts(r) {
   if (!r.check) return;
+  const authenticated = r.summary.authenticated;
   const rows = r.check.results.map((x) => {
-    const kind = x.result === "ok" ? "ok" : x.result === "unchecked" ? "warn" : "bad";
-    const label = x.result === "unchecked" ? "not checked: past the first problem" : RECEIPT_TEXT[x.result];
+    let kind = x.result === "ok" ? "ok" : x.result === "unchecked" ? "warn" : "bad";
+    let label = x.result === "unchecked" ? "not checked: past the first problem" : RECEIPT_TEXT[x.result];
+    if (!authenticated && x.result !== "unchecked" && x.result !== "wrong-key") {
+      kind = "warn";
+      label = x.result === "ok" ? "agrees with the log, but not authenticated" : `disagrees with the log, but not authenticated (${RECEIPT_TEXT[x.result].split(" (")[0]})`;
+    }
     const sig = x.result === "unchecked" || x.result === "wrong-key" ? "not checked" : x.sigChecked ? (x.result === "bad-signature" ? "invalid" : "valid") : "not checked (no Ed25519 in this browser)";
     return el("tr", { class: kind === "bad" ? "row-bad" : null },
       el("td", { text: String(x.index) }),
