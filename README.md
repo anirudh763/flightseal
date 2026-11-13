@@ -77,8 +77,9 @@ files you check are never cached), and it can be installed as an app from the br
   break, the end of the covered prefix and every receipt (attached after the record it pins) are marked on it.
 - Examples: a synthetic 8-second flight (800 records: intact, one altitude changed by 10 m, a full rewrite that
   only the receipts catch, the last 150 records deleted) sealed by the real CLI with
-  [`tools/make_web_samples.py`](tools/make_web_samples.py), and a real PX4 flight: 1,650 records (three topics)
-  selected from the public pyulog sample log, intact and with one altitude changed, made by
+  [`tools/make_web_samples.py`](tools/make_web_samples.py), and a real PX4 flight: 2,422 records from five topics
+  with no position or GPS data (motor outputs, flight mode, vehicle status, CPU load, telemetry link) selected from
+  the public pyulog sample log, intact and with one motor output changed, made by
   [`tools/make_px4_samples.py`](tools/make_px4_samples.py).
 - Light by default, including when the system prefers dark; a "Dark theme" button switches and remembers it.
 - It reports three things separately: whether the hash chain is consistent (no key needed), which records are
@@ -114,7 +115,7 @@ Limits of this project:
 
 - The PX4 converter seals selected decoded ULog records, sorted by timestamp, after the log was downloaded; it does not preserve or authenticate every byte of the original .ulg file, or anything that happened before sealing. The ULog format is described in the [PX4 ULog specification](https://docs.px4.io/main/en/dev_log/ulog_file_format).
 - Keeping receipts with a separate witness is an operational assumption: the CLI writes receipts to a local file, and the protection holds only if someone other than the log's holder keeps a copy.
-- The tests use one real PX4 flight log (a public pyulog fixture); the browser examples are a synthetic 800-record flight and 1,650 records selected from that PX4 log.
+- The tests use one real PX4 flight log (a public pyulog fixture); the browser examples are a synthetic 800-record flight and 2,422 records selected from that PX4 log, with no position or GPS topics.
 - FlightSeal is a narrow, documented workflow to support experiments. It is not proof of safe flight or of an accident's cause, and it is not a reproduction of RVFuzzer or PGFuzz. No user or field validation has been done.
 
 ## How it works
@@ -304,5 +305,6 @@ README comes from a run of the commands above.
 MIT. The verifier page uses the Atkinson Hyperlegible font (Braille Institute), under the SIL Open Font License 1.1
 ([docs/OFL-atkinson-hyperlegible.txt](docs/OFL-atkinson-hyperlegible.txt)). The PX4 sample flight log used by the tests and the demo is downloaded at run time from
 [PX4/pyulog](https://github.com/PX4/pyulog) (BSD-3-Clause), pinned by commit and SHA-256. The verifier's PX4
-examples (`docs/samples/px4-*`) are 1,650 records selected from it and sealed; pyulog's licence is in
-[docs/samples/LICENSE-pyulog.txt](docs/samples/LICENSE-pyulog.txt). That log has no GPS topic.
+examples (`docs/samples/px4-*`) are 2,422 records selected from it and sealed; pyulog's licence is in
+[docs/samples/LICENSE-pyulog.txt](docs/samples/LICENSE-pyulog.txt). The sealed selection has no position or GPS
+topics or fields (checked by tests/test_web_samples.py).

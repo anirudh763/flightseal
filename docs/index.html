@@ -232,8 +232,8 @@
           <dd>The hash chain breaks at a record, or a receipt signed by the key you trust does not match the log. A rewritten log and a log whose end was removed look the same to a receipt as receipts that belong to another log sealed with the same key; the page says both.</dd>
           <dt><span class="label ok">Intact</span></dt>
           <dd>Every record passes its checksum, sequence and link checks, and every receipt signed by the key you trust matches. Records written after the last receipt are named as not covered.</dd>
-          <dt><span class="label warn">Unverified</span></dt>
-          <dd>The chain is consistent but the receipts are not evidence: they name another key, their signature does not verify, or this browser cannot check Ed25519. The text report then says <code>RESULT: UNVERIFIED</code> or leaves the receipts <code>NOT CHECKED</code>, as the CLI does.</dd>
+          <dt><span class="label warn">UNVERIFIED</span></dt>
+          <dd>The chain is consistent (or only the last record is cut short) but the receipts are not evidence: they name another key, their signature does not verify, or this browser cannot check Ed25519. Findings then starts with &quot;UNVERIFIED:&quot;, and the text report says <code>RESULT: UNVERIFIED</code> or leaves the receipts <code>NOT CHECKED</code>, as the CLI does.</dd>
           <dt><span class="label warn">Incomplete</span></dt>
           <dd>The last record is cut short, as a crash while writing leaves it. <code>fseal recover</code> trims only that record.</dd>
         </dl>
@@ -246,7 +246,7 @@
           <li>Nothing here shows the data was true when it was sealed (a spoofed sensor looks normal), and records written after the last receipt are not protected. See the <a href="https://github.com/anirudh763/flightseal/blob/main/THREAT_MODEL.md">threat model</a>.</li>
           <li>The PX4 converter seals selected decoded ULog records, sorted by timestamp, after the log was downloaded; it does not preserve or authenticate every byte of the original .ulg file, or anything that happened before sealing. See the <a href="https://docs.px4.io/main/en/dev_log/ulog_file_format">PX4 ULog specification</a>.</li>
           <li>Keeping receipts with a separate witness is an operational assumption: the CLI writes receipts to a local file, and the protection holds only if someone other than the log&#39;s holder keeps a copy.</li>
-          <li>The tests use one real PX4 flight log (a public pyulog fixture); the browser examples are a synthetic 800-record flight and 1,650 records selected from that PX4 log.</li>
+          <li>The tests use one real PX4 flight log (a public pyulog fixture); the browser examples are a synthetic 800-record flight and 2,422 records selected from that PX4 log, with no position or GPS topics.</li>
           <li>FlightSeal is a narrow, documented workflow to support experiments. It is not proof of safe flight or of an accident&#39;s cause, and it is not a reproduction of RVFuzzer or PGFuzz. No user or field validation has been done.</li>
         </ul>
         <h2>Limits of this page</h2>
@@ -266,10 +266,10 @@
         <p class="lede">Each example loads a sealed log with its receipts and public key, then opens its findings.</p>
         <h2 class="group-h">Real PX4 flight log</h2>
         <ul class="examples">
-          <li><button type="button" class="btn" data-sample="px4">Load PX4 flight example</button><span>1,650 records from a real PX4 flight (vehicle_local_position, commander_state and vehicle_status), sealed with a receipt every 100 records.</span></li>
-          <li><button type="button" class="btn" data-sample="px4-tampered">Load tampered PX4 example</button><span>The same log with one local-position altitude changed by 10 m and that record's checksum fixed.</span></li>
+          <li><button type="button" class="btn" data-sample="px4">Load PX4 flight example</button><span>2,422 records from a real PX4 flight (actuator_outputs, commander_state, vehicle_status, cpuload, telemetry_status), sealed with a receipt every 100 records.</span></li>
+          <li><button type="button" class="btn" data-sample="px4-tampered">Load tampered PX4 example</button><span>The same log with one motor output (output[0]) raised by 100 and that record's checksum fixed.</span></li>
         </ul>
-        <p class="muted small-print">Source: <code>test/sample.ulg</code> in <a href="https://github.com/PX4/pyulog">PX4/pyulog</a> (BSD-3-Clause, <a href="samples/LICENSE-pyulog.txt">licence</a>), pinned by SHA-256 and converted by <a href="https://github.com/anirudh763/flightseal/blob/main/tools/make_px4_samples.py">tools/make_px4_samples.py</a>. Three of its topics are sealed; the log has no GPS topic, only position in metres from take-off.</p>
+        <p class="muted small-print">Source: <code>test/sample.ulg</code> in <a href="https://github.com/PX4/pyulog">PX4/pyulog</a> (BSD-3-Clause, <a href="samples/LICENSE-pyulog.txt">licence</a>), pinned by SHA-256 and converted by <a href="https://github.com/anirudh763/flightseal/blob/main/tools/make_px4_samples.py">tools/make_px4_samples.py</a>. Five of its topics are sealed; the sealed selection has no position or GPS topics.</p>
         <h2 class="group-h">Synthetic flight</h2>
         <ul class="examples">
           <li><button type="button" class="btn" data-sample="intact">Load intact example</button><span>The log as it was sealed.</span></li>

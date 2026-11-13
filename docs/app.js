@@ -117,8 +117,11 @@ function syncUrl() {
 }
 
 function onRoute(initial) {
-  const r = parseHash();
-  if (!r) return; // an in-page anchor
+  let r = parseHash();
+  if (!r) {
+    if (state.route) return; // an in-page anchor on a screen that is already shown
+    r = { screen: "verify", id: null, sample: null }; // first load with an anchor (#content): show Verify
+  }
   const prev = state.route;
   const sameScreen = prev && prev.screen === r.screen;
   state.route = r;
@@ -489,7 +492,7 @@ function verdictFor(r) {
   // 2. Receipts that cannot be authenticated in this browser are not evidence either way.
   if (unauthenticated) {
     const mism = summary.unverifiedMismatches;
-    return { kind: "warn", head: scan.status === "torn-tail" ? "Incomplete; receipts not authenticated" : "Chain intact; receipts not authenticated", body: [
+    return { kind: "warn", head: scan.status === "torn-tail" ? "UNVERIFIED: incomplete log; receipts not authenticated" : "UNVERIFIED: chain intact; receipts not authenticated", body: [
       scan.status === "torn-tail"
         ? `Records 0 to ${n(scan.records - 1)} pass every check; the last ${n(scan.size - scan.goodBytes)} bytes are an unfinished record, as a crash leaves it.`
         : `${allPass(scan.records)} their checksum, sequence and hash-chain checks.`,
@@ -511,7 +514,7 @@ function verdictFor(r) {
   // 4. Receipts not validly signed by the key you trust: anyone could have made them, so they prove nothing.
   if (summary.untrusted > 0) {
     const u = lowestCount(check.results.filter((x) => x.result === "wrong-key" || x.result === "bad-signature"));
-    return { kind: "warn", head: scan.status === "torn-tail" ? "Incomplete; receipts not valid for the key you trust" : "Chain intact; receipts not valid for the key you trust", body: [
+    return { kind: "warn", head: scan.status === "torn-tail" ? "UNVERIFIED: incomplete log; receipts not valid for the key you trust" : "UNVERIFIED: chain intact; receipts not valid for the key you trust", body: [
       scan.status === "torn-tail"
         ? `Records 0 to ${n(scan.records - 1)} pass every check; the last ${n(scan.size - scan.goodBytes)} bytes are an unfinished record, as a crash leaves it.`
         : `${allPass(scan.records)} their checksum, sequence and hash-chain checks.`,
@@ -901,7 +904,7 @@ function renderPage() {
 }
 
 function recordButton(record) {
-  return el("button", { type: "button", class: "linklike", "aria-label": `Show record ${record}`, onclick: () => navigate(hrefFor("records", record)) }, `Record ${record}`);
+  return el("button", { type: "button", class: "linklike", "aria-label": `Show record ${n(record)}`, onclick: () => navigate(hrefFor("records", record)) }, `Record ${n(record)}`);
 }
 function recordItem(i, cover) {
   const { scan } = state.result;
@@ -911,8 +914,8 @@ function recordItem(i, cover) {
     el("div", { class: "link-main" }, recordButton(i),
       el("span", { class: "link-status", text: covered ? "passes; covered by a receipt" : "passes; not covered by a receipt" })),
     el("p", { class: "link-meta" },
-      el("span", { text: `${byteText(bytesOf(scan, i))}, seq ` }), el("span", { class: "mono", text: String(i) }),
-      el("span", { text: ", t " }), el("span", { class: "mono", text: `${scan.rows.ts[i].toString()} µs` })));
+      el("span", { text: `${byteText(bytesOf(scan, i))}, raw seq ` }), el("span", { class: "mono", text: String(i) }),
+      el("span", { text: ", raw t " }), el("span", { class: "mono", text: `${scan.rows.ts[i].toString()} µs` })));
 }
 function problemItem(p) {
   const selected = state.selected === p.record;
@@ -930,7 +933,7 @@ async function fillProblemRow() {
   if (result !== state.result) return; // another log or run replaced this one while reading
   const span = document.querySelector(`#rec-body li[data-break] .problem-fields`);
   if (!rec || !span) return;
-  span.textContent = `, ${n(rec.length)} payload bytes, seq ${rec.seq == null ? "missing" : rec.seq.toString()}, t ${rec.ts == null ? "missing" : `${rec.ts.toString()} µs`}`;
+  span.textContent = `, ${n(rec.length)} payload bytes, raw seq ${rec.seq == null ? "missing" : rec.seq.toString()}, raw t ${rec.ts == null ? "missing" : `${rec.ts.toString()} µs`}`;
 }
 
 let detailToken = 0;
@@ -956,8 +959,8 @@ async function showDetail(record) {
     ["Receipt coverage", isBroken ? "not covered" : BigInt(record) < cover ? `covered (records 0 to ${n(cover - 1n)} are pinned by a matching receipt)` : "not covered by a receipt"],
     ["File offset", n(offset)],
     ["Payload bytes", n(rec.length)],
-    ["Sequence", rec.seq == null ? "missing" : rec.seq.toString()],
-    ["Timestamp (µs)", rec.ts == null ? "missing" : rec.ts.toString()],
+    ["Sequence (raw field)", rec.seq == null ? "missing" : rec.seq.toString()],
+    ["Timestamp (raw field, µs)", rec.ts == null ? "missing" : rec.ts.toString()],
     ["Stored link", rec.link ? code(rec.link) : "missing (record cut short or impossible length)"],
     ["Stored CRC-32", rec.crc ? code(rec.crc) : "missing"],
   ];

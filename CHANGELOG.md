@@ -11,7 +11,8 @@ The file format, the C++ core and every verdict are unchanged; `docs/verifier.js
   the same view. Findings, Records and Receipts show an empty state with the Verify action until a file is checked.
 - Evidence chain: records drawn as a vertical hash chain with the first break, the end of the covered prefix and
   each receipt marked on it in words.
-- A real PX4 flight example (1,650 records selected from the pyulog sample log, BSD-3-Clause) and a tampered copy,
+- A real PX4 flight example (2,422 records from five topics with no position or GPS data, selected from the pyulog
+  sample log, BSD-3-Clause) and a tampered copy,
   made by `tools/make_px4_samples.py`.
 - Light by default, also under an OS dark preference; dark only through the "Dark theme" button. FlightSeal primary
   #174b5a, 16px text, 44px controls, a 216px rail on wide screens and a Menu sheet below 1000px.

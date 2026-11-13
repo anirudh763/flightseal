@@ -420,8 +420,12 @@ try {
     await page.setInputFiles("#rec-file", hostile("forged.receipts", forged));
     await page.fill("#pubkey", ownPub);
     await page.press("#pubkey", "Tab");
-    await page.waitForFunction(() => document.querySelector("#verdict-line").textContent.trim() === "Chain intact; receipts not valid for the key you trust");
+    await page.waitForFunction(() => document.querySelector("#verdict-line").textContent.trim() === "UNVERIFIED: chain intact; receipts not valid for the key you trust");
     assert.match(await page.textContent("#report"), /RESULT: UNVERIFIED/);
+    // The same term on Findings, in the Verify status card and in Trust help; never Intact or Tampered.
+    assert.equal(await page.getAttribute("#verdict", "class"), "verdict warn");
+    assert.match(await page.textContent("#run-status"), /^UNVERIFIED: /);
+    assert.equal((await page.textContent('.glossary .label.warn')).trim(), "UNVERIFIED");
     assert.equal(spawnSync(FSEAL, ["verify", join(tmp, "own.fseal"), "--receipts", join(tmp, "forged.receipts"), "--pubkey", ownPub]).status, 3);
   });
 
@@ -430,7 +434,7 @@ try {
     await page.fill("#pubkey", PUB); // the sample key, not the one that signed these receipts
     await page.press("#pubkey", "Tab");
     await page.waitForFunction(() => document.querySelector("#verdict-detail").textContent.includes("it names a different signing key"));
-    assert.equal((await page.textContent("#verdict-line")).trim(), "Chain intact; receipts not valid for the key you trust");
+    assert.equal((await page.textContent("#verdict-line")).trim(), "UNVERIFIED: chain intact; receipts not valid for the key you trust");
     assert.match(await page.textContent("#chain-legend"), /not checked against your key/);
     const out = spawnSync(FSEAL, ["verify", join(tmp, "own.fseal"), "--receipts", join(tmp, "own.receipts"), "--pubkey", PUB], { encoding: "utf8" });
     assert.equal(out.status, 3);
@@ -586,7 +590,7 @@ try {
     });
     await p2.goto(url + "?sample=intact");
     await loaded(p2);
-    assert.equal((await p2.textContent("#verdict-line")).trim(), "Chain intact; receipts not authenticated");
+    assert.equal((await p2.textContent("#verdict-line")).trim(), "UNVERIFIED: chain intact; receipts not authenticated");
     assert.match(await p2.textContent("#notes"), /cannot verify Ed25519 signatures/);
     let report = await p2.textContent("#report");
     assert.match(report, /NOT CHECKED/);
@@ -601,7 +605,7 @@ try {
     await p2.fill("#pubkey", pub);
     await p2.press("#pubkey", "Tab");
     await p2.waitForFunction(() => document.querySelector("#verdict-detail").textContent.includes("The 1 record passes"));
-    assert.equal((await p2.textContent("#verdict-line")).trim(), "Chain intact; receipts not authenticated");
+    assert.equal((await p2.textContent("#verdict-line")).trim(), "UNVERIFIED: chain intact; receipts not authenticated");
     report = await p2.textContent("#report");
     assert.doesNotMatch(report, /RESULT: (TAMPERED|INTACT)/);
     assert.doesNotMatch(await p2.textContent("#verdict"), /records were removed from the end/);
@@ -611,7 +615,7 @@ try {
     await p2.fill("#pubkey", pub);
     await p2.press("#pubkey", "Tab");
     await p2.waitForFunction(() => document.querySelector("#report").textContent.includes("intact.fseal"));
-    assert.equal((await p2.textContent("#verdict-line")).trim(), "Chain intact; receipts not authenticated");
+    assert.equal((await p2.textContent("#verdict-line")).trim(), "UNVERIFIED: chain intact; receipts not authenticated");
     assert.doesNotMatch(await p2.textContent("#report"), /RESULT: (TAMPERED|INTACT)/);
     await p2.goto(url + "?sample=tampered"); // a broken chain is still proved without signatures
     await loaded(p2);
@@ -680,7 +684,7 @@ try {
     const shots = [
       ["#/findings?sample=tampered", 1440, 1000, "findings-1440.png", false],
       ["#/findings?sample=tampered", 320, 800, "findings-320.png", true],
-      ["#/records/1107?sample=px4-tampered", 1440, 1000, "records-chain-1440.png", false],
+      ["#/records/1476?sample=px4-tampered", 1440, 1000, "records-chain-1440.png", false],
       ["#/findings?sample=tampered", 1280, 860, "verifier-tampered.png", false],
       ["#/findings?sample=rewritten", 1280, 860, "verifier-rewritten.png", false],
     ];

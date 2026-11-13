@@ -211,7 +211,7 @@ try {
     await c.close();
   });
 
-  for (const w of [375, 768]) await check(`${w} px: the Menu button opens the nav sheet; focus stays inside; Escape closes and returns focus`, async () => {
+  for (const w of [320, 375, 768]) await check(`${w} px: the Menu button opens the nav sheet; focus stays inside; Escape closes and returns focus`, async () => {
     const c = await browser.newContext({ viewport: { width: w, height: 800 } });
     const p = await c.newPage();
     await p.goto(url + "#/verify");
@@ -240,6 +240,39 @@ try {
     assert.equal(await p.isVisible('nav a[href="#/findings"]'), false);
     assert.ok(await focusedIsH1(p));
     await c.close();
+  });
+
+  await check("a first load with an in-page anchor (#content) shows Verify with its nav item marked current", async () => {
+    const c = await browser.newContext({ viewport: { width: 1280, height: 900 } });
+    const p = await c.newPage();
+    await p.goto(url + "#content");
+    await waitH1(p, "Verify a file");
+    assert.equal(await p.getAttribute('nav a[aria-current="page"]', "href"), "#/verify");
+    assert.equal(await p.title(), "Verify a file – FlightSeal");
+    await c.close();
+  });
+
+  for (const w of [320, 1440]) await check(`${w} px: every interactive target on Findings, Records and Receipts is at least 44 x 44 px`, async () => {
+    const c = await browser.newContext({ viewport: { width: w, height: 900 } });
+    const p = await c.newPage();
+    const small = [];
+    for (const [route, title] of [
+      ["#/findings?sample=tampered", "Findings"], ["#/records/150?sample=tampered", "Records"], ["#/receipts/2?sample=tampered", "Receipts"],
+      ["#/findings?sample=rewritten", "Findings"], ["#/records/99?sample=rewritten", "Records"], ["#/receipts/2?sample=rewritten", "Receipts"],
+    ]) {
+      await p.goto(url + route);
+      await waitH1(p, title);
+      await waitResult(p);
+      await p.waitForTimeout(200);
+      if (title === "Findings") await p.click("#report-wrap summary"); // its Copy report button counts too
+      const found = await p.evaluate(() => [...document.querySelectorAll('a[href], button, input, select, textarea, summary, [tabindex]:not([tabindex="-1"])')]
+        .filter((e) => e.getClientRects().length && getComputedStyle(e).visibility !== "hidden" && e.id !== "skip")
+        .map((e) => { const r = e.getBoundingClientRect(); return { what: `${e.tagName.toLowerCase()} "${(e.textContent || e.getAttribute("aria-label") || e.id).trim().slice(0, 40)}"`, w: r.width, h: r.height }; })
+        .filter((t) => t.w < 43.5 || t.h < 43.5));
+      small.push(...found.map((t) => `${route}: ${t.what} ${t.w.toFixed(0)}x${t.h.toFixed(0)}`));
+    }
+    await c.close();
+    assert.deepEqual(small, []);
   });
 
   await check("1440 px: the 216 px rail is shown and there is no Menu button", async () => {
