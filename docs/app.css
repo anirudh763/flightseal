@@ -1,16 +1,10 @@
 /* FlightSeal verifier: app styles on top of ui.css (tokens come from there). */
-/* Atkinson Hyperlegible without its digits: its slashed zero reads oddly in prose, so numbers fall through to the
-   system font. Hashes and offsets stay in the monospace font. */
-@font-face{font-family:"Atkinson Text";font-weight:400;font-display:swap;src:url(atkinson-hyperlegible-latin-400-normal.woff2) format("woff2");unicode-range:U+0000-002F,U+003A-FFFF}
-@font-face{font-family:"Atkinson Text";font-weight:700;font-display:swap;src:url(atkinson-hyperlegible-latin-700-normal.woff2) format("woff2");unicode-range:U+0000-002F,U+003A-FFFF}
 [hidden]{display:none!important} /* .btn and others set display, which would otherwise override hidden */
-:root{--font:"Atkinson Text",system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
 body.dragging main{outline:2px dashed var(--accent);outline-offset:-6px}
 h2,h3{margin:0;font-size:1rem;line-height:1.4}
 h3{font-size:.95rem}
 p{margin:0}
 .app-header{flex-wrap:wrap;row-gap:4px}
-.app-header nav{margin-left:auto}
 .app-header h1.name{margin:0;font-size:1rem;line-height:1.4}
 .tagline{font-size:.9rem}
 main{max-width:1440px;margin:0 auto;padding:16px 20px 40px;display:grid;gap:16px}
@@ -27,7 +21,7 @@ input[type=file]{font:inherit;width:100%;max-width:100%;min-width:0;min-height:3
 .file-row>.file-name{flex:1 1 160px;word-break:normal;overflow-wrap:anywhere}
 input[type=file]::file-selector-button{font:inherit;font-weight:700;min-height:32px;padding:4px 12px;margin-right:8px;border:1px solid var(--border);border-radius:var(--radius);background:var(--bg-subtle);color:var(--fg);cursor:pointer}
 .file-name{font-size:.85rem;color:var(--fg-muted);word-break:break-all;min-height:0}
-.noscript{padding:10px 12px;border:1px solid var(--border);border-left:3px solid var(--warn);border-radius:var(--radius);background:var(--warn-subtle);max-width:80ch}
+.noscript{padding:10px 12px;border:1px solid var(--border);border-radius:var(--radius);background:var(--warn-subtle);max-width:80ch}
 .input.mono{width:100%;font-size:.85rem}
 .input[aria-invalid=true]{border-color:var(--bad)}
 .help,.small-print,.drop-hint{font-size:.85rem}
@@ -71,7 +65,7 @@ code.hash{font-size:.85rem;word-break:break-all}
 .compare code.actual{border-color:var(--bad);background:var(--bad-subtle)}
 #notes{display:grid;gap:8px}
 #notes:empty,#break:empty{display:none}
-.note{display:flex;gap:8px;align-items:flex-start;padding:8px 10px;border:1px solid var(--border);border-left:3px solid var(--warn);border-radius:var(--radius);background:var(--warn-subtle);max-width:80ch}
+.note{display:flex;gap:8px;align-items:flex-start;padding:8px 10px;border:1px solid var(--border);border-radius:var(--radius);background:var(--warn-subtle);max-width:80ch}
 .note .icon{margin-top:3px;color:var(--warn)}
 details summary{cursor:pointer;min-height:24px}
 .report{margin:8px 0;padding:10px;background:var(--bg-subtle);border:1px solid var(--border);border-radius:var(--radius);white-space:pre-wrap;word-break:break-all;font-size:.82rem}
@@ -96,12 +90,15 @@ tr.row-selected{outline:2px solid var(--accent);outline-offset:-2px}
 .detail-body h3{margin-top:4px}
 .payload{margin:0;padding:10px;max-height:320px;overflow:auto;background:var(--bg-subtle);border:1px solid var(--border);border-radius:var(--radius);white-space:pre-wrap;word-break:break-all;font-size:.82rem}
 .receipts td{font-size:.92rem}
+.receipts .label{font-size:.8rem}
 .receipts-table{min-width:760px}
 .receipts td:nth-child(2){font-family:var(--mono);font-size:.85rem}
 
 .about{max-width:80ch;display:grid;gap:8px;padding-top:8px}
 .about ul{margin:0;padding-left:1.2em;display:grid;gap:6px}
 
+/* Inputs under 16px make iOS zoom the page when they get focus. */
+@media (pointer:coarse){.input{font-size:16px}}
 @media (max-width:960px){
   .top,.split:not([hidden]){grid-template-columns:minmax(0,1fr)}
 }

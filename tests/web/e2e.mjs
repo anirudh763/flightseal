@@ -200,6 +200,37 @@ try {
     assert.match(page.url(), /record=742/);
   });
 
+  await check("pager on a broken log: counts records checked, and a one-record page names one record", async () => {
+    const p = await ctx.newPage();
+    await p.goto(url + "?sample=tampered");
+    await loaded(p);
+    // The tampered log has 800 records; 150 pass and record 150 breaks the chain, so the table holds 151 rows.
+    // It opens on the page with the break, which holds that one record.
+    assert.equal((await p.textContent("#pg-label")).trim(), "Record 150 of 151 checked (verification stopped at record 150), page 4 of 4");
+    await p.click("#pg-first");
+    assert.equal((await p.textContent("#pg-label")).trim(), "Records 0 to 49 of 151 checked (verification stopped at record 150), page 1 of 4");
+    await p.close();
+  });
+
+  await check("loading a sample brings the result into view on a phone, and does not scroll on a wide screen", async () => {
+    for (const [width, height] of [[375, 812], [1280, 900]]) {
+      const c = await browser.newContext({ viewport: { width, height } });
+      const p = await c.newPage();
+      await p.goto(url);
+      await loaded(p);
+      await p.locator("text=Load intact sample").scrollIntoViewIfNeeded();
+      const before = await p.evaluate(() => scrollY);
+      await p.click("text=Load intact sample");
+      await p.waitForFunction(() => document.querySelector("#verdict-line").textContent.trim() === "Intact");
+      const top = await p.evaluate(() => document.querySelector("#verdict-line").getBoundingClientRect().top);
+      assert.ok(top >= 0 && top < height, `${width} px: the verdict line is at y=${top.toFixed(0)}, outside the ${height} px viewport`);
+      if (width === 1280) assert.equal(await p.evaluate(() => scrollY), before, "the wide layout scrolled although the result was visible");
+      // Focus stays on the button that was pressed.
+      assert.equal(await p.evaluate(() => document.activeElement.textContent), "Load intact sample");
+      await c.close();
+    }
+  });
+
   await check("keyboard focus stays on a control after showing a record and paging to either end", async () => {
     const active = () => page.evaluate(() => ({ tag: document.activeElement.tagName, id: document.activeElement.id, text: document.activeElement.textContent }));
     assert.equal(await page.getAttribute("#pg-label", "aria-live"), "polite");
