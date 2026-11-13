@@ -218,13 +218,13 @@ async function verify() {
     $("verdict-line").textContent = "Load a sealed log or a sample to check it.";
     return;
   }
-  let receipts = null, key = null, receiptError = null;
+  let receipts = null, key = null, receiptError = null, emptyReceipts = false;
   if (state.receipts) {
     if (state.receipts.error) receiptError = state.receipts.error;
     else {
       const parsed = parseReceipts(state.receipts.text);
       if (parsed.error) receiptError = `${state.receipts.name}, line ${parsed.error.line}: not a receipt. Nothing was checked against the receipts.`;
-      else if (parsed.receipts.length === 0) receiptError = `${state.receipts.name} contains no receipts, so nothing was checked against receipts.`;
+      else if (parsed.receipts.length === 0) emptyReceipts = true, receiptError = `${state.receipts.name} contains no receipts, so nothing was checked against receipts.`;
       else receipts = parsed.receipts;
     }
     if (receipts) {
@@ -258,7 +258,7 @@ async function verify() {
     const check = receipts && key ? await checkReceipts(receipts, key, scan) : null;
     if (run !== state.run) return;
     const summary = summarize(scan, check);
-    state.result = { scan, check, summary, source, receiptError };
+    state.result = { scan, check, summary, source, receiptError, emptyReceipts };
     render();
   } catch (e) {
     if (run !== state.run) return;
@@ -280,6 +280,9 @@ function clearResult() {
 }
 
 // ---- verdict ---------------------------------------------------------------------------------
+const plural = (k, word) => `${n(k)} ${word}${k === 1 || k === 1n ? "" : "s"}`;
+const allPass = (k) => (k === 1 ? "The 1 record passes" : `All ${n(k)} records pass`);
+const lowestCount = (list) => list.reduce((m, x) => (!m || x.count < m.count ? x : m), null);
 // Three things are judged separately: whether the hash chain is consistent (proved without any key), whether
 // receipts signed by the key you trust cover the log, and which records no authenticated receipt covers.
 function verdictFor(r) {
@@ -303,36 +306,37 @@ function verdictFor(r) {
     ] };
   }
 
-  // 2. Receipts that are provably not from the key you trust (no signature check needed for a different key).
-  if (summary.failed > 0) {
-    const f = summary.firstFailure;
-    if (f.result === "wrong-key" || f.result === "bad-signature") {
-      return { kind: "bad", head: `Receipt ${f.index} is not valid for the key you trust`, body: [f.result === "wrong-key"
-        ? `Receipt ${f.index} names a different signing key than the one you entered. Either the key you entered is wrong, or the receipts are not the ones issued for this log. Check the key with the operator. fseal verify reports this as TAMPERED.`
-        : `The signature on receipt ${f.index} does not verify with the key you trust: the receipt itself was altered or forged. fseal verify reports this as TAMPERED.`] };
-    }
-  }
-
-  // 3. Receipts that cannot be authenticated in this browser are not evidence either way.
+  // 2. Receipts that cannot be authenticated in this browser are not evidence either way.
   if (unauthenticated) {
     const mism = summary.unverifiedMismatches;
     return { kind: "warn", head: scan.status === "torn-tail" ? "Incomplete; receipts not authenticated" : "Chain intact; receipts not authenticated", body: [
       scan.status === "torn-tail"
         ? `Records 0 to ${n(scan.records - 1)} pass every check; the last ${n(scan.size - scan.goodBytes)} bytes are an unfinished record, as a crash leaves it.`
-        : `All ${n(scan.records)} records pass their checksum, sequence and hash-chain checks.`,
-      `This browser cannot verify Ed25519 signatures, so the ${summary.receipts} receipt(s) are not authenticated: anyone could have written them. ${mism ? `${mism} of them disagree with the log, which proves nothing without a valid signature.` : "They agree with the log, which proves nothing without a valid signature."} No record is covered by an authenticated receipt. Use the fseal CLI or a browser with Ed25519 to check them.`,
+        : `${allPass(scan.records)} their checksum, sequence and hash-chain checks.`,
+      `This browser cannot verify Ed25519 signatures, so the ${plural(summary.receipts, "receipt")} ${summary.receipts === 1 ? "is" : "are"} not authenticated: anyone could have written them. ${mism ? `${n(mism)} disagree with the log, which proves nothing without a valid signature.` : "Agreeing with the log proves nothing without a valid signature."} No record is covered by an authenticated receipt. Use the fseal CLI or a browser with Ed25519 to check them.`,
     ] };
   }
 
-  // 4. Authenticated receipts that disagree with the log.
+  // 3. Authenticated receipts (valid signature by the key you trust) that disagree with the log: proof.
   if (summary.failed > 0) {
-    const f = summary.firstFailure;
+    const f = lowestCount(check.results.filter((x) => x.result === "head-mismatch" || x.result === "log-shorter"));
     const prevOk = check.results.filter((x) => x.result === "ok" && x.count < f.count).reduce((m, x) => (x.count > m ? x.count : m), 0n);
     const body = {
-      "head-mismatch": `Every record passes its own checks, but receipt ${f.index}, signed by the key you trust after ${n(f.count)} records, pins a different chain head: the log was rewritten after the receipt was issued. Something in records ${n(prevOk)} to ${n(f.count - 1n)} changed${prevOk ? ` (the receipt after ${n(prevOk)} records still matches)` : ""}. A receipt mismatch cannot say which record in that range was edited.`,
-      "log-shorter": `Every record passes its own checks, but receipt ${f.index}, signed by the key you trust, says ${n(f.count)} records had been written and this log has ${n(scan.records)}: records were removed from the end.`,
+      "head-mismatch": `Every record passes its own checks, but receipt ${f.index}, signed by the key you trust after ${plural(f.count, "record")}, pins a different chain head: the log was rewritten after the receipt was issued. Something in records ${n(prevOk)} to ${n(f.count - 1n)} changed${prevOk ? ` (the receipt after ${plural(prevOk, "record")} still matches)` : ""}. A receipt mismatch cannot say which record in that range was edited.`,
+      "log-shorter": `Every record passes its own checks, but receipt ${f.index}, signed by the key you trust, says ${plural(f.count, "record")} had been written and this log has ${n(scan.records)}: records were removed from the end.`,
     }[f.result];
     return { kind: "bad", head: `Tampered: receipt ${f.index} does not match the log`, body: [body] };
+  }
+
+  // 4. Receipts not validly signed by the key you trust: anyone could have made them, so they prove nothing.
+  if (summary.untrusted > 0) {
+    const u = lowestCount(check.results.filter((x) => x.result === "wrong-key" || x.result === "bad-signature"));
+    return { kind: "warn", head: scan.status === "torn-tail" ? "Incomplete; receipts not valid for the key you trust" : "Chain intact; receipts not valid for the key you trust", body: [
+      scan.status === "torn-tail"
+        ? `Records 0 to ${n(scan.records - 1)} pass every check; the last ${n(scan.size - scan.goodBytes)} bytes are an unfinished record, as a crash leaves it.`
+        : `${allPass(scan.records)} their checksum, sequence and hash-chain checks.`,
+      `${plural(summary.untrusted, "receipt")} ${summary.untrusted === 1 ? "is" : "are"} not validly signed by the key you entered (the lowest is receipt ${u.index}, after ${plural(u.count, "record")}: ${u.result === "wrong-key" ? "it names a different signing key" : "its signature does not verify"}). Anyone can write such a receipt, so it is no evidence that the log was or was not changed. Check the key with the operator, or ask the witness for the receipts they kept.`,
+    ] };
   }
 
   // 5. A torn final record (a crash leaves one); the CLI reports TAMPERED for it whenever receipts are given.
@@ -346,14 +350,14 @@ function verdictFor(r) {
   if (scan.records === 0) return { kind: "warn", head: "The log has no records", body: ["The file is a FlightSeal log header with no records after it, so there is nothing to check."] };
   if (check) {
     return { kind: "ok", head: "Intact", body: [
-      `All ${n(scan.records)} records pass their checksum, sequence and hash-chain checks, and all ${summary.receipts} receipts, signed by the key you trust, match the log.`,
+      `${allPass(scan.records)} their checksum, sequence and hash-chain checks, and ${summary.receipts === 1 ? "the receipt" : `all ${summary.receipts} receipts`}, signed by the key you trust, match${summary.receipts === 1 ? "es" : ""} the log.`,
       summary.uncovered > 0n
-        ? `The last ${n(summary.uncovered)} record(s), from record ${n(summary.covered)} on, come after the last receipt: no receipt protects them, so whoever holds the file could have changed them.`
+        ? `The last ${plural(summary.uncovered, "record")}, from record ${n(summary.covered)} on, come after the last receipt: no receipt protects them, so whoever holds the file could have changed them.`
         : "The last receipt covers the final record, so every record is protected by a receipt.",
     ] };
   }
   return { kind: "warn", head: "Chain intact; no receipts checked", body: [
-    `All ${n(scan.records)} records pass their checksum, sequence and hash-chain checks. Without receipts this shows only that the file is self-consistent.`,
+    `${allPass(scan.records)} their checksum, sequence and hash-chain checks. Without receipts this shows only that the file is self-consistent.`,
   ] };
 }
 
@@ -367,20 +371,22 @@ function render() {
   $("verdict-detail").replaceChildren(...v.body.map((t) => el("p", { text: t })));
 
   // Facts.
-  const chain = scan.status === "ok" ? `consistent: ${n(scan.records)} records pass`
+  const chain = scan.status === "ok" ? `consistent: ${plural(scan.records, "record")} pass${scan.records === 1 ? "es" : ""}`
     : scan.status === "bad-header" ? "not checked: not a FlightSeal log"
-    : `${n(scan.records)} records pass, then ${scan.status === "torn-tail" ? "a cut-short record" : `a break at record ${n(scan.problem.record)}`} [${scan.status}]`;
-  let receiptsText = "none loaded";
+    : `${plural(scan.records, "record")} pass${scan.records === 1 ? "es" : ""}, then ${scan.status === "torn-tail" ? "a cut-short record" : `a break at record ${n(scan.problem.record)}`} [${scan.status}]`;
+  let receiptsText = r.emptyReceipts ? "file loaded, 0 receipts" : "none loaded";
   if (check && !summary.authenticated) receiptsText = `${summary.receipts} loaded, NOT authenticated (signatures not checked in this browser)`;
   else if (check) {
     receiptsText = `${summary.matched} of ${summary.receipts} signed by the key you trust and match`;
+    if (summary.untrusted) receiptsText += `; ${summary.untrusted} not validly signed by that key`;
     if (summary.unchecked) receiptsText += `; ${summary.unchecked} cannot be checked past the first problem`;
   }
-  const coverage = !check || !summary.authenticated ? `none: all ${n(scan.records)} checked record(s) lack an authenticated receipt`
+  const coverage = !check || !summary.authenticated ? `none: no checked record has an authenticated receipt`
     : summary.failed ? "not established: a receipt does not match"
     : scan.status !== "ok" ? (summary.covered > 0n ? `records 0 to ${n(summary.covered - 1n)}; nothing from the problem at record ${n(scan.problem.record)} on` : `none before the problem at record ${n(scan.problem.record)}`)
-    : summary.uncovered > 0n ? `records 0 to ${n(summary.covered - 1n)}; the last ${n(summary.uncovered)} record(s) are not covered`
-    : `all ${n(scan.records)} records`;
+    : summary.covered === 0n ? `none: no receipt signed by the key you trust matches`
+    : summary.uncovered > 0n ? `records 0 to ${n(summary.covered - 1n)}; the last ${plural(summary.uncovered, "record")} ${summary.uncovered === 1n ? "is" : "are"} not covered`
+    : `all ${plural(scan.records, "record")}`;
   const facts = [
     ["Log", state.log.name],
     ["Hash chain", chain],
@@ -420,8 +426,9 @@ function renderBreak(r) {
       "bad-length": ["Allowed payload length", "Length field in the record"],
     }[p.token];
     box.replaceChildren(pair(`First break: record ${n(p.record)}, byte ${n(p.offset)} [${p.token}]`, p.expected, p.actual, ...labels));
-  } else if (summary.authenticated && summary.firstFailure && summary.firstFailure.result === "head-mismatch") {
-    const f = summary.firstFailure;
+  } else if (summary.authenticated && summary.failed > 0
+    && lowestCount(r.check.results.filter((x) => x.result === "head-mismatch" || x.result === "log-shorter")).result === "head-mismatch") {
+    const f = lowestCount(r.check.results.filter((x) => x.result === "head-mismatch"));
     box.replaceChildren(pair(`Receipt ${f.index}, after ${n(f.count)} records`, f.receiptHead, f.logHead, "Head link in the receipt (signed when it was issued)", `Link of record ${n(f.count - 1n)} in this log`));
   } else if (p && p.detail) {
     box.replaceChildren(el("div", { class: "compare" }, el("h3", { text: `First problem: record ${n(p.record)}, byte ${n(p.offset)} [${p.token}]` }), el("p", { text: p.detail })));
@@ -460,7 +467,8 @@ function renderStrip(r) {
       if (x.result === "unchecked" || x.count === 0n) continue;
       const c = Number(x.count);
       const at = c <= rows.count ? rows.offset[c - 1] + 56 + rows.len[c - 1] : scan.size;
-      const t = el("span", { class: `tick ${x.result === "ok" || !r.summary.authenticated ? "ok" : "bad"}` });
+      const proof = r.summary.authenticated && (x.result === "head-mismatch" || x.result === "log-shorter");
+      const t = el("span", { class: `tick ${proof ? "bad" : "ok"}` });
       t.style.left = pct(at);
       kids.push(t);
     }
@@ -478,9 +486,10 @@ function renderReceipts(r) {
   if (!r.check) return;
   const authenticated = r.summary.authenticated;
   const rows = r.check.results.map((x) => {
-    let kind = x.result === "ok" ? "ok" : x.result === "unchecked" ? "warn" : "bad";
+    let kind = x.result === "ok" ? "ok" : x.result === "unchecked" || x.result === "wrong-key" || x.result === "bad-signature" ? "warn" : "bad";
     let label = x.result === "unchecked" ? "not checked: past the first problem" : RECEIPT_TEXT[x.result];
-    if (!authenticated && x.result !== "unchecked" && x.result !== "wrong-key") {
+    if (x.result === "wrong-key" || x.result === "bad-signature") label = `${RECEIPT_TEXT[x.result].split(" (")[0]}: not evidence either way`;
+    if (!authenticated && x.result !== "unchecked") {
       kind = "warn";
       label = x.result === "ok" ? "agrees with the log, but not authenticated" : `disagrees with the log, but not authenticated (${RECEIPT_TEXT[x.result].split(" (")[0]})`;
     }
@@ -561,8 +570,10 @@ function recordRow(record, seq, ts, len, offset, token) {
 }
 
 async function fillProblemRow() {
-  const { scan, source } = state.result;
+  const result = state.result;
+  const { scan, source } = result;
   const rec = await readRecord(source, scan.problem.offset);
+  if (result !== state.result) return; // another log or run replaced this one while reading
   const tr = document.querySelector(`#rec-body tr[data-record="${scan.problem.record}"]`);
   if (!rec || !tr) return;
   const cells = tr.querySelectorAll("td");

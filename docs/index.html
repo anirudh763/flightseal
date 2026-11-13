@@ -44,7 +44,7 @@
           <input type="text" id="pubkey" class="input mono" spellcheck="false" autocomplete="off" aria-describedby="pubkey-help">
           <p class="help" id="pubkey-help">Get it from the operator independently, not from whoever sent you the log.</p>
         </div>
-        <p class="drop-hint muted">You can also drop the log, receipts and key file anywhere on this page.</p>
+        <p class="drop-hint muted">You can also drop the log and receipts anywhere on this page. Get the public key from the operator separately, never from whoever sent you the log.</p>
 
         <h3 class="samples-h">Samples</h3>
         <ul class="samples" aria-describedby="samples-note">
@@ -139,6 +139,10 @@
       <li>Truncation of the tail is only caught with receipts. So is a log that its holder rebuilt from scratch: a receipt kept by someone else, signed by the drone's key, pins how the log looked when the receipt was issued. A receipt that does not match shows that something changed between it and the previous matching receipt, not which record.</li>
       <li>Receipts count only when their signature verifies with the key you trust. If this browser cannot check Ed25519 signatures, receipts are shown as not authenticated: neither proof of tampering nor of integrity.</li>
       <li>Nothing here shows the data was true when it was sealed (a spoofed sensor looks normal), and records written after the last receipt are not protected. See the <a href="https://github.com/anirudh763/flightseal/blob/main/THREAT_MODEL.md">threat model</a>.</li>
+      <li>The PX4 converter seals selected decoded ULog records, sorted by timestamp, after the log was downloaded; it does not preserve or authenticate every byte of the original .ulg file, or anything that happened before sealing. See the <a href="https://docs.px4.io/main/en/dev_log/ulog_file_format">PX4 ULog specification</a>.</li>
+      <li>Keeping receipts with a separate witness is an operational assumption: the CLI writes receipts to a local file, and the protection holds only if someone other than the log&#39;s holder keeps a copy.</li>
+      <li>The tests use one real PX4 flight log (a public pyulog fixture); the browser samples are a synthetic 800-record flight.</li>
+      <li>FlightSeal is a narrow, documented workflow to support experiments. It is not proof of safe flight or of an accident&#39;s cause, and it is not a reproduction of RVFuzzer or PGFuzz. No user or field validation has been done.</li>
     </ul>
     <p class="muted small-print">The verifier is plain JavaScript using your browser's WebCrypto for SHA-256 and Ed25519; its tests require it to print the same report as the C++ CLI on every attack the project tests (when the browser can check signatures). Matching the CLI cannot catch a mistake both share. Built with AI assistance (Claude); see the README. Font: Atkinson Hyperlegible, <a href="OFL-atkinson-hyperlegible.txt">SIL Open Font License 1.1</a>.</p>
   </section>

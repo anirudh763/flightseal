@@ -200,6 +200,7 @@ try {
     assert.equal(await v(), "Chain intact; no receipts checked");
     assert.match(await page.textContent("#notes"), /Truncation of the tail \(records deleted from the end\) is only caught with receipts/);
     assert.doesNotMatch(await page.textContent("#verdict"), /0 receipts match/);
+    assert.match(await page.textContent("#facts"), /file loaded, 0 receipts/);
   });
 
   await check("a receipts file with a UTF-8 byte-order mark is rejected at line 1, like the CLI", async () => {
@@ -220,20 +221,33 @@ try {
     await page.setInputFiles("#rec-file", join(tmp, "own.receipts"));
     await page.fill("#pubkey", ownPub);
     await page.press("#pubkey", "Tab");
-    await page.waitForFunction(() => document.querySelector("#verdict-line").textContent.trim() === "Incomplete: the final record is cut short");
+    await page.waitForFunction(() => document.querySelector("#verdict-detail").textContent.includes("fseal verify reports TAMPERED whenever receipts are given"));
+    assert.equal((await page.textContent("#verdict-line")).trim(), "Incomplete: the final record is cut short");
     const body = await page.textContent("#verdict-detail");
     assert.match(body, /fseal verify reports TAMPERED whenever receipts are given/);
     assert.doesNotMatch(body, /expected more/);
   });
 
-  await check("a receipt with a forged signature is not valid for the key you trust (never Intact)", async () => {
+  await check("a receipt with a forged signature is not valid for the key you trust: UNVERIFIED, never Intact or Tampered", async () => {
     const forged = readFileSync(join(tmp, "own.receipts"), "utf8").replace(/sig=[0-9a-f]+/g, "sig=" + "0".repeat(128));
     await page.setInputFiles("#log-file", join(tmp, "own.fseal"));
     await page.setInputFiles("#rec-file", hostile("forged.receipts", forged));
     await page.fill("#pubkey", ownPub);
     await page.press("#pubkey", "Tab");
-    await page.waitForFunction(() => document.querySelector("#verdict-line").textContent.trim() === "Receipt 1 is not valid for the key you trust");
-    assert.match(await page.textContent("#report"), /RESULT: TAMPERED/);
+    await page.waitForFunction(() => document.querySelector("#verdict-line").textContent.trim() === "Chain intact; receipts not valid for the key you trust");
+    assert.match(await page.textContent("#report"), /RESULT: UNVERIFIED/);
+    assert.equal(spawnSync(FSEAL, ["verify", join(tmp, "own.fseal"), "--receipts", join(tmp, "forged.receipts"), "--pubkey", ownPub]).status, 3);
+  });
+
+  await check("receipts validly signed by a key you do not trust: UNVERIFIED, like the CLI (exit 3)", async () => {
+    await page.setInputFiles("#rec-file", join(tmp, "own.receipts"));
+    await page.fill("#pubkey", PUB); // the sample key, not the one that signed these receipts
+    await page.press("#pubkey", "Tab");
+    await page.waitForFunction(() => document.querySelector("#verdict-detail").textContent.includes("it names a different signing key"));
+    assert.equal((await page.textContent("#verdict-line")).trim(), "Chain intact; receipts not valid for the key you trust");
+    const out = spawnSync(FSEAL, ["verify", join(tmp, "own.fseal"), "--receipts", join(tmp, "own.receipts"), "--pubkey", PUB], { encoding: "utf8" });
+    assert.equal(out.status, 3);
+    assert.equal(await page.textContent("#report"), out.stdout.replace(join(tmp, "own.fseal"), "own.fseal"));
   });
 
   await check("an empty log file says it has no records", async () => {
@@ -352,10 +366,19 @@ try {
     await p2.setInputFiles("#rec-file", hostile("bogus.receipts", `fseal-receipt v1 count=2 head=${"0".repeat(64)} key=${pub} sig=${"0".repeat(128)}\n`));
     await p2.fill("#pubkey", pub);
     await p2.press("#pubkey", "Tab");
-    await p2.waitForFunction(() => document.querySelector("#verdict-line").textContent.trim() === "Chain intact; receipts not authenticated");
+    await p2.waitForFunction(() => document.querySelector("#verdict-detail").textContent.includes("The 1 record passes"));
+    assert.equal((await p2.textContent("#verdict-line")).trim(), "Chain intact; receipts not authenticated");
     report = await p2.textContent("#report");
     assert.doesNotMatch(report, /RESULT: (TAMPERED|INTACT)/);
     assert.doesNotMatch(await p2.textContent("#verdict"), /removed from the end\./);
+    // A receipt naming a random key, unsigned, with Ed25519 off: not evidence, so not Tampered.
+    await p2.setInputFiles("#log-file", join(SAMPLES, "intact.fseal"));
+    await p2.setInputFiles("#rec-file", hostile("randkey.receipts", `fseal-receipt v1 count=800 head=${"0".repeat(64)} key=${"ab".repeat(32)} sig=${"0".repeat(128)}\n`));
+    await p2.fill("#pubkey", pub);
+    await p2.press("#pubkey", "Tab");
+    await p2.waitForFunction(() => document.querySelector("#report").textContent.includes("intact.fseal"));
+    assert.equal((await p2.textContent("#verdict-line")).trim(), "Chain intact; receipts not authenticated");
+    assert.doesNotMatch(await p2.textContent("#report"), /RESULT: (TAMPERED|INTACT)/);
     await p2.goto(url + "?sample=tampered"); // a broken chain is still proved without signatures
     await loaded(p2);
     assert.match(await p2.textContent("#verdict-line"), /chain breaks at record/);
