@@ -42,7 +42,7 @@ export const RECEIPT_TEXT = {
   "wrong-key": "signed by a different key than the one you trust",
   "bad-signature": "signature invalid (the receipt itself was altered)",
   "log-shorter": "log is shorter than the receipt (records were removed from the end)",
-  "head-mismatch": "log does not match the receipt (it was rewritten after the receipt was issued)",
+  "head-mismatch": "log does not match this receipt: it was rewritten after the receipt was issued, or these receipts belong to another log sealed with the same key",
 };
 
 // ---- small helpers ------------------------------------------------------------------------------
@@ -107,6 +107,22 @@ export function blobSource(blob) {
 }
 
 // ---- log scan ---------------------------------------------------------------------------------
+
+// Offset in `tail` (which starts at a record whose length runs past the end of the file) of a complete record
+// with sequence number `seq` and a valid CRC, within one maximum-size record; -1 if there is none.
+function recordFollows(tail, seq) {
+  const view = new DataView(tail.buffer, tail.byteOffset, tail.length);
+  const last = Math.min(tail.length - HEADER - TRAILER, HEADER + MAX_PAYLOAD + TRAILER);
+  const lo = seq % 4294967296, hi = Math.floor(seq / 4294967296);
+  for (let p = 1; p <= last; p++) {
+    if (view.getUint32(p + 4, true) !== lo || view.getUint32(p + 8, true) !== hi) continue;
+    const len = view.getUint32(p, true);
+    const total = HEADER + len + TRAILER;
+    if (len > MAX_PAYLOAD || p + total > tail.length) continue;
+    if (crc32(tail, p, p + total - 4) === view.getUint32(p + total - 4, true)) return p;
+  }
+  return -1;
+}
 
 function growRows(rows, need, maxRows) {
   if (need <= rows.capacity) return true;
@@ -201,7 +217,13 @@ export async function scanLog(source, options = {}) {
       }
       const total = HEADER + len + TRAILER;
       if (left < total) {
-        fail = { token: "torn-tail", record: index, offset: pos, detail: `record needs ${total} bytes, ${left} left in the file` };
+        // A crash leaves a torn tail. A corrupted length with an intact next record after it is corruption, and
+        // the records after it are evidence (fseal recover must not trim them).
+        await ensure(pos, left);
+        const next = recordFollows(win.subarray(pos - winStart, pos - winStart + left), index + 1);
+        fail = next >= 0
+          ? { token: "bad-length", record: index, offset: pos, expected: `${next - HEADER - TRAILER} or less (record ${index + 1} starts ${next} bytes later)`, actual: String(len), nextAt: pos + next }
+          : { token: "torn-tail", record: index, offset: pos, detail: `record needs ${total} bytes, ${left} left in the file` };
         break;
       }
       await ensure(pos, total);

@@ -298,7 +298,9 @@ function verdictFor(r) {
       "bad-crc": `the checksum of record ${n(p.record)} does not match its bytes: they were changed or damaged`,
       "bad-seq": `record ${n(p.record)} has sequence number ${p.actual}, not ${p.expected}: a record was deleted, reordered or duplicated`,
       "bad-link": `the contents of record ${n(p.record)} changed after sealing: its link does not match the record and the one before it`,
-      "bad-length": `record ${n(p.record)} claims a length of ${n(Number(p.actual))} bytes, more than any record can have: the file is corrupt`,
+      "bad-length": p.nextAt != null
+        ? `record ${n(p.record)} claims a length of ${n(Number(p.actual))} bytes, which runs past the end of the file, but a complete record ${n(p.record + 1)} starts at byte ${n(p.nextAt)}: the length field was corrupted. This is not what a crash leaves, so fseal recover will not trim anything; the records after it are evidence`
+        : `record ${n(p.record)} claims a length of ${n(Number(p.actual))} bytes, more than any record can have: the file is corrupt`,
     }[scan.status];
     return { kind: "bad", head: `Tampered: the chain breaks at record ${n(p.record)}`, body: [
       `At byte ${n(p.offset)}, ${what}. ${scan.records ? `Records 0 to ${n(scan.records - 1)} are intact.` : "No record before it passed."}`,
@@ -322,7 +324,7 @@ function verdictFor(r) {
     const f = lowestCount(check.results.filter((x) => x.result === "head-mismatch" || x.result === "log-shorter"));
     const prevOk = check.results.filter((x) => x.result === "ok" && x.count < f.count).reduce((m, x) => (x.count > m ? x.count : m), 0n);
     const body = {
-      "head-mismatch": `Every record passes its own checks, but receipt ${f.index}, signed by the key you trust after ${plural(f.count, "record")}, pins a different chain head: the log was rewritten after the receipt was issued. Something in records ${n(prevOk)} to ${n(f.count - 1n)} changed${prevOk ? ` (the receipt after ${plural(prevOk, "record")} still matches)` : ""}. A receipt mismatch cannot say which record in that range was edited.`,
+      "head-mismatch": `Every record passes its own checks, but receipt ${f.index}, signed by the key you trust after ${plural(f.count, "record")}, pins a different chain head: the log was rewritten after the receipt was issued, or these receipts belong to another log sealed with the same key. If they are this log's receipts, something in records ${n(prevOk)} to ${n(f.count - 1n)} changed${prevOk ? ` (the receipt after ${plural(prevOk, "record")} still matches)` : ""}. A receipt mismatch cannot say which record in that range was edited.`,
       "log-shorter": `Every record passes its own checks, but receipt ${f.index}, signed by the key you trust, says ${plural(f.count, "record")} had been written and this log has ${n(scan.records)}: records were removed from the end.`,
     }[f.result];
     return { kind: "bad", head: `Tampered: receipt ${f.index} does not match the log`, body: [body] };
@@ -557,7 +559,7 @@ function renderPage() {
 
 function recordRow(record, seq, ts, len, offset, token) {
   const selected = state.selected === record;
-  const btn = el("button", { type: "button", class: "linklike", "aria-label": `Show record ${record}`, onclick: () => { state.selected = record; syncUrl(); renderPage(); showDetail(record); } }, String(record));
+  const btn = el("button", { type: "button", class: "linklike", "aria-label": `Show record ${record}`, onclick: () => { state.selected = record; syncUrl(); renderPage(); focusRow(record); showDetail(record); } }, String(record));
   const check = token
     ? el("span", { class: "label bad" }, icon("bad"), el("span", { text: token === "bad-link" ? "chain breaks here" : PROBLEM_TEXT[token].split(" (")[0] }))
     : el("span", { class: "label ok" }, icon("ok"), el("span", { text: "ok" }));
@@ -640,7 +642,17 @@ function wire() {
   });
   for (const b of document.querySelectorAll("[data-sample]")) b.addEventListener("click", () => loadSample(b.dataset.sample));
   $("cancel").addEventListener("click", () => state.abort && state.abort.abort());
-  const page = (p) => { state.page = Math.max(0, Math.min(pages() - 1, p)); renderPage(); };
+  // Changing page re-renders the table; if the button that was used is now disabled (first or last page), keep
+  // keyboard focus on the enabled button on the other side instead of losing it to the page body.
+  const page = (p) => {
+    const from = document.activeElement;
+    state.page = Math.max(0, Math.min(pages() - 1, p));
+    renderPage();
+    if (from && from.disabled) {
+      const other = { "pg-first": "pg-next", "pg-prev": "pg-next", "pg-next": "pg-prev", "pg-last": "pg-prev" }[from.id];
+      if (other && !$(other).disabled) $(other).focus();
+    }
+  };
   $("pg-first").addEventListener("click", () => page(0));
   $("pg-prev").addEventListener("click", () => page(state.page - 1));
   $("pg-next").addEventListener("click", () => page(state.page + 1));
