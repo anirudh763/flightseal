@@ -78,6 +78,8 @@ def main():
 
     # Receipt attacks on the untouched log.
     add("receipts-from-another-key", log, other_rec, pub)
+    add("torn+receipts-from-another-key", out / "torn.fseal", other_rec, pub)
+    add("flip+receipts-from-another-key", out / "flip.fseal", other_rec, pub)
     lines = rec.read_text().splitlines()
     sig_at = lines[0].index("sig=") + 4
     flipped = lines[0][:sig_at] + ("1" if lines[0][sig_at] != "1" else "2") + lines[0][sig_at + 1:]
@@ -183,6 +185,7 @@ def main():
         "zero-sig": {"log": str(log), "receipts": str(out / "zero-sig.receipts"), "pubkey": pub},
         "zero-sig-on-edited-log": {"log": str(out / "edit-fix-crc.fseal"), "receipts": str(out / "zero-sig.receipts"), "pubkey": pub},
         "zero-sig-on-torn-log": {"log": str(out / "torn.fseal"), "receipts": str(out / "zero-sig.receipts"), "pubkey": pub},
+        "other-key-on-torn-log": {"log": str(out / "torn.fseal"), "receipts": str(other_rec), "pubkey": pub},
         "bogus-count2-one-record": {"log": str(one), "receipts": str(out / "bogus-count2.receipts"), "pubkey": one_pub},
         "other-key-unsigned": {"log": str(log), "receipts": str(other_rec), "pubkey": pub},
     }

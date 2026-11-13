@@ -121,6 +121,15 @@ for (const name of ["receipts-from-another-key", "altered-signature", "altered-c
   assert.equal(got.code, 3);
 });
 
+test("a torn log with only untrusted receipts is INCOMPLETE in the CLI and the JS; a broken chain stays TAMPERED", async () => {
+  for (const [name, want] of [["torn+receipts-from-another-key", "INCOMPLETE"], ["flip+receipts-from-another-key", "TAMPERED"]]) {
+    const c = cases.find((x) => x.name === name);
+    const out = cli(c);
+    assert.match(out.stdout, new RegExp(`RESULT: ${want}`), name);
+    assert.equal((await js(c)).report, out.stdout, name);
+  }
+});
+
 test("the sample shipped with the page breaks where the page says", async () => {
   const c = cases.find((x) => x.name === "sample-tampered");
   const got = await js(c);
@@ -211,6 +220,7 @@ for (const [name, c] of Object.entries(unsigned)) {
         "zero-sig-on-edited-log": "TAMPERED", // the chain itself is broken: proved without signatures
         "zero-sig-on-torn-log": "INCOMPLETE",
         "other-key-unsigned": "UNVERIFIED", // a key you do not trust: anyone could have made these
+        "other-key-on-torn-log": "INCOMPLETE",
       }[name];
       assert.equal(s.result, expected);
       assert.ok(got.report.includes(`RESULT: ${expected}`));

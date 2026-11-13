@@ -160,18 +160,18 @@ int verify(const std::string& log, const std::vector<std::pair<std::string, std:
     size_t first_untrusted = 0;
     ReceiptCheck untrusted_check = ReceiptCheck::WrongKey;
     for (size_t i = 0; i < list.size(); ++i) {
+      ReceiptCheck c = check_receipt(list[i], trusted, s, links);
+      // A receipt that is not validly signed by the key you trust is not evidence either way: anyone can make one.
+      if (c == ReceiptCheck::WrongKey || c == ReceiptCheck::BadSignature) {
+        if (untrusted++ == 0) first_untrusted = i, untrusted_check = c;
+        continue;
+      }
       if (s.status != Status::Ok && list[i].count > s.records) {  // the log is already broken before this point
         ++unchecked;
         continue;
       }
-      ReceiptCheck c = check_receipt(list[i], trusted, s, links);
       if (c == ReceiptCheck::Ok) {
         covered = std::max(covered, list[i].count);
-        continue;
-      }
-      // A receipt that is not validly signed by the key you trust is not evidence either way: anyone can make one.
-      if (c == ReceiptCheck::WrongKey || c == ReceiptCheck::BadSignature) {
-        if (untrusted++ == 0) first_untrusted = i, untrusted_check = c;
         continue;
       }
       if (failed++ == 0)
@@ -191,8 +191,10 @@ int verify(const std::string& log, const std::vector<std::pair<std::string, std:
     std::cout << "RESULT: UNVERIFIED (receipts not validly signed by the key you trust)\n";
     return 3;
   }
+  // A torn final record is reported as tampering only when an authenticated receipt is present.
+  bool authenticated = list.size() > untrusted;
   std::cout << "RESULT: "
-            << (!bad ? "INTACT" : s.status == Status::TornTail && list.empty() ? "INCOMPLETE (if the writer crashed, run: fseal recover)"
+            << (!bad ? "INTACT" : s.status == Status::TornTail && !authenticated ? "INCOMPLETE (if the writer crashed, run: fseal recover)"
                                                                                : "TAMPERED")
             << "\n";
   return bad ? 1 : 0;

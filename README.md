@@ -143,6 +143,9 @@ build/fseal verify flight.fseal --receipts flight.receipts --pubkey <public key>
 
 `fseal append` reads `timestamp_us<TAB>payload` lines, so any telemetry source can feed it.
 
+`fseal verify` exit status: 0 intact, 1 tampered or incomplete, 2 usage or I/O error, 3 unverified (receipts not
+validly signed by the key you trust, so they prove nothing either way).
+
 ## Results
 
 Measured with `build-release/fseal-bench records.tsv <dir> 5` on the PX4 flight above (64,542 records, mean payload
@@ -175,7 +178,7 @@ Measured with `build-release/fseal-bench records.tsv <dir> 5` on the PX4 flight 
   ([tools/fseal_py.py](tools/fseal_py.py), no shared code) must agree with the CLI on 7 attacks; the real PX4 flight
   is sealed and an altitude edit is found at the right record. `append` must refuse a receipts path it cannot open
   (before sealing anything) and fail when a receipt cannot be written (`/dev/full`).
-- **JavaScript** ([tests/web/verifier.test.mjs](tests/web/verifier.test.mjs), 88 tests): the browser verifier must
+- **JavaScript** ([tests/web/verifier.test.mjs](tests/web/verifier.test.mjs), 92 tests): the browser verifier must
   print exactly the same report as `fseal verify` and find the same first problem, record, byte and head as the
   Python reader. The cases are the 7 attacks with and without receipts, a full rewrite, a deleted tail, receipts
   from another key, an altered signature and count, edits at the edges of the verifier's 256-record hashing batches,

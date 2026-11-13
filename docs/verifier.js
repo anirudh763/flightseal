@@ -334,11 +334,6 @@ export async function checkReceipts(receipts, trustedKey, scan) {
   for (let i = 0; i < receipts.length; i++) {
     const rc = receipts[i];
     const out = { index: i + 1, count: rc.count, result: "ok", sigChecked: false, receiptHead: hex(rc.head), logHead: null };
-    if (scan.status !== "ok" && rc.count > BigInt(scan.records)) {
-      out.result = "unchecked";
-      results.push(out);
-      continue;
-    }
     if (!equal(rc.key, trustedKey)) {
       out.result = "wrong-key";
       results.push(out);
@@ -355,6 +350,12 @@ export async function checkReceipts(receipts, trustedKey, scan) {
         results.push(out);
         continue;
       }
+    }
+    // Key and signature first: an untrusted receipt is untrusted wherever it points (as in `fseal verify`).
+    if (scan.status !== "ok" && rc.count > BigInt(scan.records)) {
+      out.result = "unchecked";
+      results.push(out);
+      continue;
     }
     if (rc.count > BigInt(scan.records)) {
       out.result = "log-shorter";
@@ -399,7 +400,8 @@ export function summarize(scan, receiptCheck) {
   let result;
   if (list.length === 0 || authenticated) {
     const bad = scan.status !== "ok" || failed > 0;
-    result = !bad ? (untrusted ? "UNVERIFIED" : "INTACT") : scan.status === "torn-tail" && list.length === 0 ? "INCOMPLETE" : "TAMPERED";
+    // A torn final record is reported as tampering only when an authenticated receipt is present.
+    result = !bad ? (untrusted ? "UNVERIFIED" : "INTACT") : scan.status === "torn-tail" && list.length === untrusted ? "INCOMPLETE" : "TAMPERED";
   } else if (scan.status !== "ok" && scan.status !== "torn-tail") result = "TAMPERED";
   else result = scan.status === "torn-tail" ? "INCOMPLETE" : "UNVERIFIED";
   return {

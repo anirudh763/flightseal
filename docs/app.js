@@ -476,7 +476,9 @@ function renderStrip(r) {
   strip.replaceChildren(...kids);
   const legend = [`Bytes 0 to ${n(scan.goodBytes)} of ${n(scan.size)} verified.`];
   if (scan.goodBytes < scan.size) legend.push(`The rest was not checked.`);
-  if (check && r.summary.authenticated) legend.push("Marks above the bar are receipts (thin: matches, thick: does not match).");
+  if (check && r.summary.authenticated) legend.push(r.summary.untrusted
+    ? "Marks above the bar are receipts: thin marks match or were not checked against your key (not signed by it), thick marks are receipts signed by your key that do not match."
+    : "Marks above the bar are receipts (thin: matches, thick: does not match).");
   else if (check) legend.push("Marks above the bar are receipts that could not be authenticated.");
   $("strip-legend").textContent = legend.join(" ");
   $("strip-wrap").hidden = false;

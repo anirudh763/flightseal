@@ -245,6 +245,7 @@ try {
     await page.press("#pubkey", "Tab");
     await page.waitForFunction(() => document.querySelector("#verdict-detail").textContent.includes("it names a different signing key"));
     assert.equal((await page.textContent("#verdict-line")).trim(), "Chain intact; receipts not valid for the key you trust");
+    assert.match(await page.textContent("#strip-legend"), /not checked against your key/);
     const out = spawnSync(FSEAL, ["verify", join(tmp, "own.fseal"), "--receipts", join(tmp, "own.receipts"), "--pubkey", PUB], { encoding: "utf8" });
     assert.equal(out.status, 3);
     assert.equal(await page.textContent("#report"), out.stdout.replace(join(tmp, "own.fseal"), "own.fseal"));

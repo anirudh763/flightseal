@@ -172,3 +172,16 @@ def test_receipts_signed_by_an_untrusted_key_are_unverified_not_tampered(fseal_b
     tamper.edit_field(log, tmp_path / "t.fseal", record=5, field="z", delta=10.0, fix_crc=True)
     r = verify(fseal_bin, tmp_path / "t.fseal", other_rec, pub)  # a broken chain is proof on its own
     assert r.returncode == 1 and "RESULT: TAMPERED" in r.stdout
+
+
+def test_a_torn_log_with_only_untrusted_receipts_is_incomplete_not_tampered(fseal_bin, tmp_path):
+    log, rec, pub = seal(fseal_bin, tmp_path)
+    other = tmp_path / "other"
+    other.mkdir()
+    _, other_rec, _ = seal(fseal_bin, other)
+    log.write_bytes(log.read_bytes()[:-5])  # a crash cut the last record short
+    r = verify(fseal_bin, log, other_rec, pub)
+    assert r.returncode == 1 and "RESULT: INCOMPLETE" in r.stdout and "TAMPERED" not in r.stdout, r.stdout
+    assert "cannot be checked" not in r.stdout  # an untrusted receipt is untrusted, wherever it points
+    r = verify(fseal_bin, log, rec, pub)  # authenticated receipts keep the documented TAMPERED
+    assert r.returncode == 1 and "RESULT: TAMPERED" in r.stdout
