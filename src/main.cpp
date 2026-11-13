@@ -67,8 +67,7 @@ const char* token(Status s) {
 }
 
 int keygen(const std::string& path) {
-  generate_key(path);
-  PublicKey pub = public_key(path);
+  PublicKey pub = generate_key(path);
   std::cout << hex(pub.data(), pub.size()) << "\n";
   return 0;
 }
@@ -79,9 +78,16 @@ int append(const std::string& log, const std::vector<std::pair<std::string, std:
   uint64_t every = option(opts, "every").empty() ? 1000 : std::strtoull(option(opts, "every").c_str(), nullptr, 10);
   if (every == 0) return usage();
 
-  // Check the key and open the receipts file before touching the log: sealing without a usable key or anywhere
-  // to put receipts would leave records that no witness ever covered.
-  if (!key.empty()) public_key(key);  // throws if the key file is missing or not an Ed25519 private key
+  // Check that hashing and signing work, then the key, then open the receipts file, all before touching the log:
+  // sealing with broken crypto, without a usable key or without anywhere to put receipts would leave records that
+  // nothing can check. A crypto failure throws CryptoError (exit 2) and no file is created or changed.
+  static const char kSha256Abc[] = "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad";
+  Hash kat = sha256("abc");
+  if (hex(kat.data(), kat.size()) != kSha256Abc) throw CryptoError("SHA-256 self-test failed; nothing was sealed");
+  if (!key.empty()) {  // throws if the key file is missing or not an Ed25519 private key
+    Receipt probe = sign_receipt(key, 0, Hash{});
+    if (!signature_ok(probe)) throw CryptoError("Ed25519 sign/verify self-test failed; nothing was sealed");
+  }
   std::ofstream out;
   if (!receipts.empty()) {
     out.open(receipts, std::ios::app);
@@ -119,6 +125,8 @@ int append(const std::string& log, const std::vector<std::pair<std::string, std:
       return stop("line " + std::to_string(n) + ": expected timestamp_us<TAB>payload");
     try {
       w.append(ts, std::string_view(line).substr(tab + 1));
+    } catch (const CryptoError&) {
+      throw;  // OpenSSL failed: sign nothing more, exit 2
     } catch (const std::exception& e) {
       return stop("line " + std::to_string(n) + ": " + e.what());
     }
@@ -173,6 +181,10 @@ int verify(const std::string& log, const std::vector<std::pair<std::string, std:
     std::cerr << log << ": cannot read\n";
     return 2;
   }
+  // All hashing and signature checks happen before the first line is printed, so a crypto failure (CryptoError,
+  // exit 2) leaves no partial report and never a RESULT line.
+  std::vector<ReceiptCheck> checks;
+  for (const Receipt& r : list) checks.push_back(check_receipt(r, trusted, s, links));
 
   std::cout << "FlightSeal verify: " << log << "\n";
   std::cout << "  records      " << s.records << (s.status == Status::Ok ? " intact" : " intact before the problem") << "\n";
@@ -188,7 +200,7 @@ int verify(const std::string& log, const std::vector<std::pair<std::string, std:
     size_t first_untrusted = 0;
     ReceiptCheck untrusted_check = ReceiptCheck::WrongKey;
     for (size_t i = 0; i < list.size(); ++i) {
-      ReceiptCheck c = check_receipt(list[i], trusted, s, links);
+      ReceiptCheck c = checks[i];
       // A receipt that is not validly signed by the key you trust is not evidence either way: anyone can make one.
       if (c == ReceiptCheck::WrongKey || c == ReceiptCheck::BadSignature) {
         if (untrusted++ == 0) first_untrusted = i, untrusted_check = c;

@@ -18,7 +18,8 @@ install -m 755 build-release/fseal "$OUT/$NAME"
 # The release notes say the binary is dynamically linked against OpenSSL 3: check that is still true.
 echo "--- shared libraries:"
 ldd "$OUT/$NAME"
-ldd "$OUT/$NAME" | grep -q 'libcrypto\.so\.3 ' || { echo "expected a dynamic link to OpenSSL 3 (libcrypto.so.3)" >&2; exit 1; }
+# Not grep -q: with pipefail, grep exiting at the first match can SIGPIPE ldd and fail the check at random.
+ldd "$OUT/$NAME" | grep 'libcrypto\.so\.3 ' >/dev/null || { echo "expected a dynamic link to OpenSSL 3 (libcrypto.so.3)" >&2; exit 1; }
 
 if [ "${FSEAL_SKIP_CONTAINER:-0}" = 1 ]; then
   echo "--- SKIPPED: clean ubuntu:24.04 container check (FSEAL_SKIP_CONTAINER=1); running the checks on this host instead"

@@ -25,6 +25,8 @@ jobs:
         run: tools/release_build.sh dist
       - name: The tag matches the version the binary prints
         run: test "$(dist/fseal-linux-x86_64 --version)" = "fseal ${GITHUB_REF_NAME#v}"
+      - name: The binary is hardened (readelf; PIE, full RELRO, NX stack, stack protector, _FORTIFY_SOURCE)
+        run: tools/check_hardening.sh dist/fseal-linux-x86_64 build-release
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: dist

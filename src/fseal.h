@@ -11,12 +11,19 @@
 #include <cstddef>
 #include <cstdint>
 #include <map>
+#include <stdexcept>
 #include <string>
 #include <string_view>
 
 namespace fseal {
 
 using Hash = std::array<uint8_t, 32>;
+
+// Thrown when an OpenSSL call fails. Nothing is hashed, signed or verified on such a failure, so a caller
+// must stop and report an error (the CLI exits 2), never a result.
+struct CryptoError : std::runtime_error {
+  using std::runtime_error::runtime_error;
+};
 
 uint32_t crc32(const void* data, size_t n, uint32_t crc = 0);  // IEEE 802.3, same as zlib
 Hash sha256(std::string_view data);
@@ -87,10 +94,11 @@ struct Receipt {
   Signature sig{};
 };
 
-void generate_key(const std::string& pem_path);  // Ed25519 private key, PEM, file mode 0600
+PublicKey generate_key(const std::string& pem_path);  // Ed25519 private key, PEM, file mode 0600; returns its public key
 PublicKey public_key(const std::string& pem_path);
 Receipt sign_receipt(const std::string& pem_path, uint64_t count, const Hash& head);
-bool signature_ok(const Receipt& r);  // checks the signature against the key inside the receipt
+// Checks the signature against the key inside the receipt; throws CryptoError if OpenSSL fails (not a verdict).
+bool signature_ok(const Receipt& r);
 std::string to_line(const Receipt& r);
 bool parse_line(const std::string& line, Receipt* out);
 bool parse_hex(std::string_view text, uint8_t* out, size_t n);
