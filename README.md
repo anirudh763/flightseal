@@ -83,7 +83,7 @@ locally and never uploaded.
 | Deleted, reordered or duplicated record | sequence numbers | that record |
 | Records deleted from the end | a receipt kept by someone else | that receipt |
 | Whole log rewritten after an edit | a receipt kept by someone else | first receipt after the edit |
-| Forged or altered receipt | Ed25519 signature, checked against a key you trust | that receipt |
+| Forged or altered receipt, or one signed by another key | Ed25519 signature, checked against a key you trust | that receipt, as UNVERIFIED (exit 3): a receipt anyone could write proves nothing about the log |
 | Crash in the middle of a write | torn final record | `fseal recover` trims only that |
 
 It does **not** prove that the data was true when it was sealed (a spoofed sensor or an edit before sealing looks
@@ -91,6 +91,13 @@ normal), it cannot protect records written after the last receipt, and it cannot
 the receipt holder is compromised too. Timestamps are stored but not trusted: clocks reset at boot, so ordering uses
 sequence numbers and `verify` reports timestamps that go backwards. The full list is in
 [THREAT_MODEL.md](THREAT_MODEL.md).
+
+Limits of this project:
+
+- The PX4 converter seals selected decoded ULog records, sorted by timestamp, after the log was downloaded; it does not preserve or authenticate every byte of the original .ulg file, or anything that happened before sealing. The ULog format is described in the [PX4 ULog specification](https://docs.px4.io/main/en/dev_log/ulog_file_format).
+- Keeping receipts with a separate witness is an operational assumption: the CLI writes receipts to a local file, and the protection holds only if someone other than the log's holder keeps a copy.
+- The tests use one real PX4 flight log (a public pyulog fixture); the browser samples are a synthetic 800-record flight.
+- FlightSeal is a narrow, documented workflow to support experiments. It is not proof of safe flight or of an accident's cause, and it is not a reproduction of RVFuzzer or PGFuzz. No user or field validation has been done.
 
 ## How it works
 
@@ -168,7 +175,7 @@ Measured with `build-release/fseal-bench records.tsv <dir> 5` on the PX4 flight 
   ([tools/fseal_py.py](tools/fseal_py.py), no shared code) must agree with the CLI on 7 attacks; the real PX4 flight
   is sealed and an altitude edit is found at the right record. `append` must refuse a receipts path it cannot open
   (before sealing anything) and fail when a receipt cannot be written (`/dev/full`).
-- **JavaScript** ([tests/web/verifier.test.mjs](tests/web/verifier.test.mjs), 85 tests): the browser verifier must
+- **JavaScript** ([tests/web/verifier.test.mjs](tests/web/verifier.test.mjs), 88 tests): the browser verifier must
   print exactly the same report as `fseal verify` and find the same first problem, record, byte and head as the
   Python reader. The cases are the 7 attacks with and without receipts, a full rewrite, a deleted tail, receipts
   from another key, an altered signature and count, edits at the edges of the verifier's 256-record hashing batches,
@@ -178,7 +185,9 @@ Measured with `build-release/fseal-bench records.tsv <dir> 5` on the PX4 flight 
   Deliberate bugs in the verifier (skipping the CRC, sequence, key or truncation check, or the link check at the
   start of each hashing batch) each make tests fail. These checks compare three readers with each other, so they
   cannot catch a mistake that all of them share, such as a misreading of the format description itself.
-- **Browser** ([tests/web/e2e.mjs](tests/web/e2e.mjs), Playwright, 32 checks): every sample shows the same broken
+- **Copy** ([tests/web/copy.test.mjs](tests/web/copy.test.mjs)): fails if the limits listed above are removed from
+  this README or from the verifier page.
+- **Browser** ([tests/web/e2e.mjs](tests/web/e2e.mjs), Playwright, 33 checks): every sample shows the same broken
   record or receipt as the CLI; hostile, empty and torn files, a forged signature, an empty receipts file, a
   network failure, no Ed25519 and no Web Workers each give the right result; keyboard-only use works; a 1,000,000-record log has
   no task over 200 ms and Cancel answers within 200 ms; no horizontal scroll at 375 and 320 px or at 200% text. The

@@ -32,7 +32,7 @@ jobs:
       - name: Python tests (CLI, independent reader, real PX4 flight)
         run: python -m pytest -q
       - name: JS verifier agrees with the CLI and the Python reader (every attack, hostile files, PX4 flight)
-        run: node --test tests/web/verifier.test.mjs
+        run: node --test tests/web/verifier.test.mjs tests/web/copy.test.mjs
       - name: Demo on a real PX4 flight
         run: tools/demo.sh
 
