@@ -35,15 +35,36 @@ uint32_t crc32(const void* data, size_t n, uint32_t crc) {
 }
 
 namespace {
+// OpenSSL objects are owned by unique_ptr, so no error path can leak one.
+struct PkeyDeleter { void operator()(EVP_PKEY* k) const { EVP_PKEY_free(k); } };
+struct PkeyCtxDeleter { void operator()(EVP_PKEY_CTX* c) const { EVP_PKEY_CTX_free(c); } };
+struct MdCtxDeleter { void operator()(EVP_MD_CTX* c) const { EVP_MD_CTX_free(c); } };
+using Pkey = std::unique_ptr<EVP_PKEY, PkeyDeleter>;
+using PkeyCtx = std::unique_ptr<EVP_PKEY_CTX, PkeyCtxDeleter>;
+using MdCtx = std::unique_ptr<EVP_MD_CTX, MdCtxDeleter>;
+
+// Every OpenSSL call is checked; a failure throws CryptoError, so no caller ever sees a zero hash or key.
+[[noreturn]] void crypto_fail(const char* what) {
+  throw CryptoError(std::string("OpenSSL ") + what + " failed; no result was produced");
+}
+void need(int rc, const char* what) {
+  if (rc != 1) crypto_fail(what);
+}
+template <typename P>
+P need_ptr(P p, const char* what) {
+  if (!p) crypto_fail(what);
+  return p;
+}
+
 // One-shot SHA-256 over several pieces, so link() never copies the payload.
 Hash sha256_parts(std::initializer_list<std::string_view> parts) {
-  EVP_MD_CTX* ctx = EVP_MD_CTX_new();
-  if (!ctx || EVP_DigestInit_ex(ctx, EVP_sha256(), nullptr) != 1) throw std::runtime_error("sha256 init failed");
-  for (std::string_view p : parts) EVP_DigestUpdate(ctx, p.data(), p.size());
+  MdCtx ctx = need_ptr(MdCtx(EVP_MD_CTX_new()), "EVP_MD_CTX_new");
+  need(EVP_DigestInit_ex(ctx.get(), EVP_sha256(), nullptr), "EVP_DigestInit_ex");
+  for (std::string_view p : parts) need(EVP_DigestUpdate(ctx.get(), p.data(), p.size()), "EVP_DigestUpdate");
   Hash h{};
   unsigned int len = 0;
-  EVP_DigestFinal_ex(ctx, h.data(), &len);
-  EVP_MD_CTX_free(ctx);
+  need(EVP_DigestFinal_ex(ctx.get(), h.data(), &len), "EVP_DigestFinal_ex");
+  if (len != h.size()) crypto_fail("EVP_DigestFinal_ex (wrong digest length)");
   return h;
 }
 
@@ -246,11 +267,6 @@ void Writer::sync() {
 // ---- receipts ----------------------------------------------------------------------------
 
 namespace {
-struct PkeyDeleter { void operator()(EVP_PKEY* k) const { EVP_PKEY_free(k); } };
-struct MdCtxDeleter { void operator()(EVP_MD_CTX* c) const { EVP_MD_CTX_free(c); } };
-using Pkey = std::unique_ptr<EVP_PKEY, PkeyDeleter>;
-using MdCtx = std::unique_ptr<EVP_MD_CTX, MdCtxDeleter>;
-
 Pkey load_private_key(const std::string& pem_path) {
   FILE* f = std::fopen(pem_path.c_str(), "r");
   if (!f) throw std::runtime_error(pem_path + ": " + std::strerror(errno));
@@ -267,29 +283,40 @@ std::string signed_message(uint64_t count, const Hash& head) {
   m.append(reinterpret_cast<const char*>(head.data()), head.size());
   return m;
 }
+
+PublicKey raw_public_key(const EVP_PKEY* k) {
+  PublicKey pub{};
+  size_t len = pub.size();
+  need(EVP_PKEY_get_raw_public_key(k, pub.data(), &len), "EVP_PKEY_get_raw_public_key");
+  if (len != pub.size()) crypto_fail("EVP_PKEY_get_raw_public_key (wrong key length)");
+  return pub;
+}
 }  // namespace
 
-void generate_key(const std::string& pem_path) {
-  EVP_PKEY_CTX* ctx = EVP_PKEY_CTX_new_id(EVP_PKEY_ED25519, nullptr);
+PublicKey generate_key(const std::string& pem_path) {
+  PkeyCtx ctx = need_ptr(PkeyCtx(EVP_PKEY_CTX_new_id(EVP_PKEY_ED25519, nullptr)), "EVP_PKEY_CTX_new_id");
+  need(EVP_PKEY_keygen_init(ctx.get()), "EVP_PKEY_keygen_init");
   EVP_PKEY* raw = nullptr;
-  bool ok = ctx && EVP_PKEY_keygen_init(ctx) == 1 && EVP_PKEY_keygen(ctx, &raw) == 1;
-  EVP_PKEY_CTX_free(ctx);
-  Pkey k(raw);
-  if (!ok) throw std::runtime_error("Ed25519 key generation failed");
+  int rc = EVP_PKEY_keygen(ctx.get(), &raw);
+  Pkey k(raw);  // owned before the check, so a failed call that still set it cannot leak
+  need(rc == 1 && k ? 1 : 0, "EVP_PKEY_keygen");
+  PublicKey pub = raw_public_key(k.get());  // before the file exists: a failure here leaves nothing behind
   int fd = ::open(pem_path.c_str(), O_WRONLY | O_CREAT | O_EXCL, 0600);  // never overwrite a key
   if (fd < 0) throw std::runtime_error(pem_path + ": " + std::strerror(errno));
   FILE* f = ::fdopen(fd, "w");
-  ok = f && PEM_write_PrivateKey(f, k.get(), nullptr, nullptr, 0, nullptr, nullptr) == 1;
-  if (f) std::fclose(f); else ::close(fd);
-  if (!ok) throw std::runtime_error(pem_path + ": could not write key");
+  bool ok = f && PEM_write_PrivateKey(f, k.get(), nullptr, nullptr, 0, nullptr, nullptr) == 1;
+  if (f) ok = (std::fclose(f) == 0) && ok;
+  else ::close(fd);
+  if (!ok) {
+    ::unlink(pem_path.c_str());  // we created it (O_EXCL); never leave a partial key file
+    throw std::runtime_error(pem_path + ": could not write key");
+  }
+  return pub;
 }
 
 PublicKey public_key(const std::string& pem_path) {
   Pkey k = load_private_key(pem_path);
-  PublicKey pub{};
-  size_t len = pub.size();
-  EVP_PKEY_get_raw_public_key(k.get(), pub.data(), &len);
-  return pub;
+  return raw_public_key(k.get());
 }
 
 Receipt sign_receipt(const std::string& pem_path, uint64_t count, const Hash& head) {
@@ -297,23 +324,27 @@ Receipt sign_receipt(const std::string& pem_path, uint64_t count, const Hash& he
   Receipt r;
   r.count = count;
   r.head = head;
-  size_t len = r.key.size();
-  EVP_PKEY_get_raw_public_key(k.get(), r.key.data(), &len);
+  r.key = raw_public_key(k.get());
   std::string m = signed_message(count, head);
-  MdCtx ctx(EVP_MD_CTX_new());
+  MdCtx ctx = need_ptr(MdCtx(EVP_MD_CTX_new()), "EVP_MD_CTX_new");
   size_t sig_len = r.sig.size();
-  if (!ctx || EVP_DigestSignInit(ctx.get(), nullptr, nullptr, nullptr, k.get()) != 1 ||
-      EVP_DigestSign(ctx.get(), r.sig.data(), &sig_len, reinterpret_cast<const uint8_t*>(m.data()), m.size()) != 1)
-    throw std::runtime_error("signing failed");
+  need(EVP_DigestSignInit(ctx.get(), nullptr, nullptr, nullptr, k.get()), "EVP_DigestSignInit");
+  need(EVP_DigestSign(ctx.get(), r.sig.data(), &sig_len, reinterpret_cast<const uint8_t*>(m.data()), m.size()),
+       "EVP_DigestSign");
+  if (sig_len != r.sig.size()) crypto_fail("EVP_DigestSign (wrong signature length)");
   return r;
 }
 
 bool signature_ok(const Receipt& r) {
-  Pkey k(EVP_PKEY_new_raw_public_key(EVP_PKEY_ED25519, nullptr, r.key.data(), r.key.size()));
-  MdCtx ctx(EVP_MD_CTX_new());
+  Pkey k = need_ptr(Pkey(EVP_PKEY_new_raw_public_key(EVP_PKEY_ED25519, nullptr, r.key.data(), r.key.size())),
+                    "EVP_PKEY_new_raw_public_key");
+  MdCtx ctx = need_ptr(MdCtx(EVP_MD_CTX_new()), "EVP_MD_CTX_new");
   std::string m = signed_message(r.count, r.head);
-  return k && ctx && EVP_DigestVerifyInit(ctx.get(), nullptr, nullptr, nullptr, k.get()) == 1 &&
-         EVP_DigestVerify(ctx.get(), r.sig.data(), r.sig.size(), reinterpret_cast<const uint8_t*>(m.data()), m.size()) == 1;
+  need(EVP_DigestVerifyInit(ctx.get(), nullptr, nullptr, nullptr, k.get()), "EVP_DigestVerifyInit");
+  int rc = EVP_DigestVerify(ctx.get(), r.sig.data(), r.sig.size(), reinterpret_cast<const uint8_t*>(m.data()), m.size());
+  if (rc == 1) return true;
+  if (rc == 0) return false;  // a well-formed check that says "not this key's signature"
+  crypto_fail("EVP_DigestVerify");  // anything else is an error, never a verdict
 }
 
 std::string to_line(const Receipt& r) {

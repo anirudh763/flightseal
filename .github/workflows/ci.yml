@@ -72,3 +72,5 @@ jobs:
         run: tools/release_build.sh dist
       - name: The binary prints the version in CMakeLists.txt
         run: test "$(dist/fseal-linux-x86_64 --version)" = "fseal $(sed -n 's/^project(flightseal VERSION \([0-9.]*\).*/\1/p' CMakeLists.txt)"
+      - name: The binary is hardened (readelf; PIE, full RELRO, NX stack, stack protector, _FORTIFY_SOURCE)
+        run: tools/check_hardening.sh dist/fseal-linux-x86_64 build-release
