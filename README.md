@@ -38,7 +38,7 @@ RESULT: TAMPERED
 $ fseal verify rewritten.fseal                      # the hash chain alone cannot tell
 RESULT: INTACT
 $ fseal verify rewritten.fseal --receipts flight.receipts --pubkey eed39ebf…681397
-  receipt 7 (count 35000): log does not match the receipt (it was rewritten after the receipt was issued)
+  receipt 7 (count 35000): log does not match this receipt: it was rewritten after the receipt was issued, or these receipts belong to another log sealed with the same key
 RESULT: TAMPERED
 
 # Attack 3: delete the last 2000 records (the end of the flight)
@@ -115,7 +115,9 @@ receipt  = fseal-receipt v1 count=N head=link[N-1] key=<Ed25519 public key> sig=
   `fseal recover` trims the torn record. If `append` cannot write a receipt, it stops with an error instead of
   reporting the receipt as issued.
 - **Recovery** trims a final record that a crash cut short, and nothing else. A bad record in the middle, or a complete
-  final record with a bad checksum, is reported and left in place: truncating it would destroy evidence.
+  final record with a bad checksum, is reported and left in place: truncating it would destroy evidence. A length
+  field that runs past the end of the file is a torn record only if no intact record follows it; if one does, the
+  length was corrupted and nothing is trimmed.
 - **Durability:** records are buffered and made durable every 1,000 records (or after every record with
   `--sync every`). Records acknowledged by a sync survive a crash; the kill -9 test checks exactly that.
 
@@ -143,7 +145,9 @@ build/fseal verify flight.fseal --receipts flight.receipts --pubkey <public key>
 
 `fseal append` reads `timestamp_us<TAB>payload` lines, so any telemetry source can feed it.
 
-`fseal verify` exit status: 0 intact, 1 tampered or incomplete, 2 usage or I/O error, 3 unverified (receipts not
+Unknown options are rejected, `--receipts` and `--pubkey` go together, and a receipts file with no receipts is an
+error, so a typo can never skip the receipts check. `fseal verify` exit status: 0 intact, 1 tampered or incomplete,
+2 usage or I/O error, 3 unverified (receipts not
 validly signed by the key you trust, so they prove nothing either way).
 
 ## Results
@@ -178,7 +182,7 @@ Measured with `build-release/fseal-bench records.tsv <dir> 5` on the PX4 flight 
   ([tools/fseal_py.py](tools/fseal_py.py), no shared code) must agree with the CLI on 7 attacks; the real PX4 flight
   is sealed and an altitude edit is found at the right record. `append` must refuse a receipts path it cannot open
   (before sealing anything) and fail when a receipt cannot be written (`/dev/full`).
-- **JavaScript** ([tests/web/verifier.test.mjs](tests/web/verifier.test.mjs), 92 tests): the browser verifier must
+- **JavaScript** ([tests/web/verifier.test.mjs](tests/web/verifier.test.mjs), 96 tests): the browser verifier must
   print exactly the same report as `fseal verify` and find the same first problem, record, byte and head as the
   Python reader. The cases are the 7 attacks with and without receipts, a full rewrite, a deleted tail, receipts
   from another key, an altered signature and count, edits at the edges of the verifier's 256-record hashing batches,
@@ -190,7 +194,7 @@ Measured with `build-release/fseal-bench records.tsv <dir> 5` on the PX4 flight 
   cannot catch a mistake that all of them share, such as a misreading of the format description itself.
 - **Copy** ([tests/web/copy.test.mjs](tests/web/copy.test.mjs)): fails if the limits listed above are removed from
   this README or from the verifier page.
-- **Browser** ([tests/web/e2e.mjs](tests/web/e2e.mjs), Playwright, 33 checks): every sample shows the same broken
+- **Browser** ([tests/web/e2e.mjs](tests/web/e2e.mjs), Playwright, 35 checks): every sample shows the same broken
   record or receipt as the CLI; hostile, empty and torn files, a forged signature, an empty receipts file, a
   network failure, no Ed25519 and no Web Workers each give the right result; keyboard-only use works; a 1,000,000-record log has
   no task over 200 ms and Cancel answers within 200 ms; no horizontal scroll at 375 and 320 px or at 200% text. The
@@ -208,6 +212,11 @@ was reviewed by hand for hostile input. No high-severity findings. Fixed:
 - `fseal append` ignored failures writing the receipts file and still counted the receipts as issued; it now checks
   the path before sealing and every write, and exits with an error.
 - The CI workflow pins its GitHub Actions to commit SHAs and runs with read-only permissions.
+- From an independent audit: `recover` and `append` trimmed complete records after one corrupted length field (now
+  reported as corruption and left in place); `verify` ignored a misspelt `--receipt`, a lone `--pubkey` or an empty
+  receipts file and printed INTACT (now exit 2); `append` could leave sealed records without a receipt when the key
+  was missing or a line was bad (the key is checked first, and a receipt is issued before stopping); receipts from
+  another flight sealed with the same key were called a rewrite (the message now names both causes).
 
 The browser page treats dropped files as hostile: it reads the log in 16 MB slices, never trusts a length field over
 1 MiB, caps receipts files at 16 MB and the table at 2,000,000 records, shows file contents only as text, and has a
