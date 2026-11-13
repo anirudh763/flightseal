@@ -551,7 +551,12 @@ function renderPage() {
   }
   $("rec-body").replaceChildren(...body);
   if (scan.problem && scan.status !== "bad-header" && end === total) fillProblemRow();
-  $("pg-label").textContent = total ? `Records ${n(start)} to ${n(Math.max(start, end - 1))} of ${n(total)}, page ${n(state.page + 1)} of ${n(pages())}` : "No records";
+  // After a break the table holds the records checked, not the whole log, so the count says so.
+  const range = end - start === 1 ? `Record ${n(start)}` : `Records ${n(start)} to ${n(end - 1)}`;
+  const of = scan.problem && scan.status !== "bad-header"
+    ? `${n(total)} checked (verification stopped at record ${n(scan.problem.record)})`
+    : n(total);
+  $("pg-label").textContent = total ? `${range} of ${of}, page ${n(state.page + 1)} of ${n(pages())}` : "No records";
   $("rec-caption").textContent = `Records, page ${state.page + 1} of ${pages()}`;
   $("pg-first").disabled = $("pg-prev").disabled = state.page === 0;
   $("pg-next").disabled = $("pg-last").disabled = state.page >= pages() - 1;
@@ -625,6 +630,15 @@ async function showDetail(record) {
   );
 }
 
+// On one column (phones) the Result box sits below the Files column, about 1,000 px under the sample buttons, so a
+// tap would change nothing on screen. Scroll it to the top then; focus stays on the button. No smooth scrolling
+// (DESIGN.md motion: none by default), and nothing moves when the result is already on screen.
+function revealVerdict() {
+  const box = $("verdict");
+  const top = box.getBoundingClientRect().top;
+  if (top < 0 || top > innerHeight - 80) box.scrollIntoView({ block: "start", behavior: "instant" });
+}
+
 // ---- events ---------------------------------------------------------------------------------
 function wire() {
   // The native file inputs stay hidden: their own text says "No file chosen" even while a sample is loaded.
@@ -647,7 +661,7 @@ function wire() {
     state.receipts = null; state.sample = null; $("rec-file").value = ""; $("rec-name").textContent = NO_FILE; $("rec-clear").hidden = true;
     syncUrl(); verify(); $("rec-choose").focus();
   });
-  for (const b of document.querySelectorAll("[data-sample]")) b.addEventListener("click", () => loadSample(b.dataset.sample));
+  for (const b of document.querySelectorAll("[data-sample]")) b.addEventListener("click", () => { revealVerdict(); loadSample(b.dataset.sample); });
   $("cancel").addEventListener("click", () => state.abort && state.abort.abort());
   // Changing page re-renders the table; if the button that was used is now disabled (first or last page), keep
   // keyboard focus on the enabled button on the other side instead of losing it to the page body.
