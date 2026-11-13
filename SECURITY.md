@@ -13,9 +13,10 @@ Only the latest tagged version and `main` get fixes.
 ## How to report
 
 - For a way to make `fseal verify` or the browser verifier report INTACT for a log that was changed, or to forge or
-  replay a receipt, please use GitHub's private reporting:
-  [Report a vulnerability](https://github.com/anirudh763/flightseal/security/advisories/new). If that page is not
-  available, open an issue that says only "security report, please get in touch", without the details.
+  replay a receipt, report it privately: open the repository's **Security** tab and choose **Report a
+  vulnerability** ([direct link](https://github.com/anirudh763/flightseal/security/advisories/new)). Only if that
+  button is missing for you, open an issue that says only "security report, please get in touch", without the
+  details.
 - Include the commit or version (`fseal --version`), the exact commands, and the files needed to reproduce it (a
   small log made with `fseal append` is best).
 - Replies are best effort. Fixes go in a pull request with a test that fails before the fix, and the CHANGELOG names
