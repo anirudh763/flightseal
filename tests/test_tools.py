@@ -197,7 +197,7 @@ def test_recover_refuses_to_trim_complete_records_after_a_corrupt_length(fseal_b
     data[off + 1] |= 0x40  # bit 14 of record 50's length
     log.write_bytes(bytes(data))
     r = run(fseal_bin, "recover", log)
-    assert r.returncode != 0 and "trimmed" not in r.stdout, r.stdout
+    assert r.returncode != 0 and not re.search(r"trimmed \d+ bytes", r.stdout), r.stdout
     assert log.read_bytes() == bytes(data)
     r = run(fseal_bin, "append", log, stdin="99999\t{}\n")
     assert r.returncode != 0 and log.read_bytes() == bytes(data)
@@ -245,3 +245,22 @@ def test_receipts_from_another_flight_with_the_same_key_are_not_called_a_rewrite
     r = verify(fseal_bin, tmp_path / "b.fseal", tmp_path / "a.receipts", pub)
     assert r.returncode == 1
     assert "or these receipts belong to another log sealed with the same key" in r.stdout
+
+
+def test_a_crafted_tail_of_follow_on_candidates_is_fast_in_the_cli_and_the_python_reader(fseal_bin, tmp_path):
+    import struct
+    import time
+
+    body = b"FLTSEAL1" + struct.pack("<IQQ", 0xF0000, 0, 0)
+    data = body + struct.pack("<IQ", 500_000, 1) * ((980_000 - len(body)) // 12)
+    log = tmp_path / "crafted.fseal"
+    log.write_bytes(data)
+    t = time.monotonic()
+    v = verify(fseal_bin, log)
+    r = run(fseal_bin, "recover", log)
+    assert time.monotonic() - t < 4.0  # both commands; about a minute each before the candidate cap
+    assert first_problem(v.stdout) == ("bad-length", 0)
+    assert r.returncode == 1 and log.read_bytes() == data
+    t = time.monotonic()
+    assert fseal_py.scan(log).problem == "bad-length"
+    assert time.monotonic() - t < 2.0

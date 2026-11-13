@@ -157,6 +157,21 @@ test("receipts of another flight sealed with the same key are not called only a 
   assert.equal((await js(c)).report, out.stdout);
 });
 
+test("a crafted tail of many follow-on candidates is fast in the JS and the CLI (bad-length, nothing trimmed)", async () => {
+  const c = cases.find((x) => x.name === "crafted-many-candidates");
+  let t = performance.now();
+  const got = await js(c);
+  const jsMs = performance.now() - t;
+  assert.equal(got.scan.status, "bad-length");
+  assert.equal(got.scan.problem.crafted, true);
+  assert.ok(jsMs < 2000, `JS took ${jsMs.toFixed(0)} ms`);
+  t = performance.now();
+  const out = cli(c);
+  const cliMs = performance.now() - t;
+  assert.ok(cliMs < 2000, `CLI took ${cliMs.toFixed(0)} ms`);
+  assert.equal(got.report, out.stdout);
+});
+
 test("the sample shipped with the page breaks where the page says", async () => {
   const c = cases.find((x) => x.name === "sample-tampered");
   const got = await js(c);

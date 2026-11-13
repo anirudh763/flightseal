@@ -31,6 +31,11 @@ def seal(fseal, folder, lines, every, tag):
     return log, rec, pub
 
 
+def crafted_candidates(size=980_000):
+    body = b"FLTSEAL1" + struct.pack("<IQQ", 0xF0000, 0, 0)
+    return body + struct.pack("<IQ", 500_000, 1) * ((size - len(body)) // 12)
+
+
 def with_first_seq(log, seq):
     """The log with record 0's sequence number replaced and its checksum recomputed (so the seq check fires)."""
     recs = fseal_py.scan(log).items
@@ -105,7 +110,7 @@ def main():
         "bad-header": b"NOTSEAL!" + data[8:],
         "short-garbage": b"\x00\xff",
         "length-0xffffffff": data[:second] + b"\xff\xff\xff\xff" + data[second + 4:],
-        "length-max-payload-torn": data[:second] + struct.pack("<I", fseal_py.MAX_PAYLOAD) + data[second + 4:],
+        "length-max-payload-bad-length": data[:second] + struct.pack("<I", fseal_py.MAX_PAYLOAD) + data[second + 4:],
         "length-max-plus-one": data[:second] + struct.pack("<I", fseal_py.MAX_PAYLOAD + 1) + data[second + 4:],
         "header-only": data[:second + 20],
         "seq-2^32": with_first_seq(log, 1 << 32),
@@ -120,6 +125,9 @@ def main():
     at = 8 + sum(len(r.encode()) for r in s100[:50])
     corrupt[at + 2] |= 0x08  # bit 19: about 512 KiB, past the end of this 110 KB file but under the 1 MiB limit
     hostile["corrupt-length-before-complete-records"] = bytes(corrupt)
+    # Crafted against the follow-on search: a first record that runs past the end, then ~980 KB of 12-byte
+    # [length 500000][sequence 1] candidates. Must stay fast (at most 16 candidates are checksummed).
+    hostile["crafted-many-candidates"] = crafted_candidates()
     for name, blob in hostile.items():
         (out / f"{name}.fseal").write_bytes(blob)
         add(name, out / f"{name}.fseal")

@@ -298,7 +298,9 @@ function verdictFor(r) {
       "bad-crc": `the checksum of record ${n(p.record)} does not match its bytes: they were changed or damaged`,
       "bad-seq": `record ${n(p.record)} has sequence number ${p.actual}, not ${p.expected}: a record was deleted, reordered or duplicated`,
       "bad-link": `the contents of record ${n(p.record)} changed after sealing: its link does not match the record and the one before it`,
-      "bad-length": p.nextAt != null
+      "bad-length": p.crafted
+        ? `record ${n(p.record)} claims a length of ${n(Number(p.actual))} bytes, which runs past the end of the file, and the bytes after it hold many possible starts of record ${n(p.record + 1)}: this is treated as corruption, not a crash, so fseal recover will not trim anything`
+        : p.nextAt != null
         ? `record ${n(p.record)} claims a length of ${n(Number(p.actual))} bytes, which runs past the end of the file, but a complete record ${n(p.record + 1)} starts at byte ${n(p.nextAt)}: the length field was corrupted. This is not what a crash leaves, so fseal recover will not trim anything; the records after it are evidence`
         : `record ${n(p.record)} claims a length of ${n(Number(p.actual))} bytes, more than any record can have: the file is corrupt`,
     }[scan.status];

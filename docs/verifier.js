@@ -12,6 +12,7 @@ export const MAGIC = new Uint8Array([0x46, 0x4c, 0x54, 0x53, 0x45, 0x41, 0x4c, 0
 export const HEADER = 20; // length u32 + seq u64 + timestamp u64
 export const TRAILER = 36; // link (32) + crc32 (4)
 export const MAX_PAYLOAD = 1 << 20;
+const MAX_CANDIDATES = 16; // same cap as the C++ and Python readers
 const CHUNK = 16 << 20; // bytes read from a File at a time; a record is at most MAX_PAYLOAD + 56 bytes
 const BATCH = 256; // records hashed in parallel (each link is checked against the stored previous link)
 const BATCH_BYTES = 2 << 20; // ... or fewer, so one batch never copies more than about 2 MiB of payload
@@ -32,7 +33,7 @@ function yieldToEventLoop() {
 export const PROBLEM_TEXT = {
   "torn-tail": "torn final record (the writer stopped mid-record, e.g. a crash)",
   "bad-header": "not a FlightSeal log (bad file header)",
-  "bad-length": "impossible record length (corruption)",
+  "bad-length": "impossible record length: corruption, not a crash (nothing is trimmed)",
   "bad-crc": "checksum mismatch (bytes were changed or damaged)",
   "bad-seq": "sequence break (a record was deleted, reordered or duplicated)",
   "bad-link": "hash-chain break (a record's contents changed after sealing)",
@@ -108,20 +109,25 @@ export function blobSource(blob) {
 
 // ---- log scan ---------------------------------------------------------------------------------
 
-// Offset in `tail` (which starts at a record whose length runs past the end of the file) of a complete record
-// with sequence number `seq` and a valid CRC, within one maximum-size record; -1 if there is none.
+// Whether a complete record with sequence number `seq` and a valid CRC follows in `tail` (which starts at a record
+// whose length runs past the end of the file), within one maximum-size record: { at, confirmed } or null.
+// confirmed is false when the candidate cap was reached and the answer is the safe "assume it follows".
 function recordFollows(tail, seq) {
   const view = new DataView(tail.buffer, tail.byteOffset, tail.length);
   const last = Math.min(tail.length - HEADER - TRAILER, HEADER + MAX_PAYLOAD + TRAILER);
   const lo = seq % 4294967296, hi = Math.floor(seq / 4294967296);
+  let candidates = 0;
   for (let p = 1; p <= last; p++) {
     if (view.getUint32(p + 4, true) !== lo || view.getUint32(p + 8, true) !== hi) continue;
+    // Only MAX_CANDIDATES sequence matches get a full checksum, so a crafted tail cannot make this slow; past
+    // that, report corruption (trim nothing), the safe direction.
+    if (++candidates > MAX_CANDIDATES) return { at: p, confirmed: false };
     const len = view.getUint32(p, true);
     const total = HEADER + len + TRAILER;
     if (len > MAX_PAYLOAD || p + total > tail.length) continue;
-    if (crc32(tail, p, p + total - 4) === view.getUint32(p + total - 4, true)) return p;
+    if (crc32(tail, p, p + total - 4) === view.getUint32(p + total - 4, true)) return { at: p, confirmed: true };
   }
-  return -1;
+  return null;
 }
 
 function growRows(rows, need, maxRows) {
@@ -221,8 +227,9 @@ export async function scanLog(source, options = {}) {
         // the records after it are evidence (fseal recover must not trim them).
         await ensure(pos, left);
         const next = recordFollows(win.subarray(pos - winStart, pos - winStart + left), index + 1);
-        fail = next >= 0
-          ? { token: "bad-length", record: index, offset: pos, expected: `${next - HEADER - TRAILER} or less (record ${index + 1} starts ${next} bytes later)`, actual: String(len), nextAt: pos + next }
+        fail = next
+          ? { token: "bad-length", record: index, offset: pos, actual: String(len), nextAt: next.confirmed ? pos + next.at : null, crafted: !next.confirmed,
+            expected: next.confirmed ? `${next.at - HEADER - TRAILER} or less (record ${index + 1} starts ${next.at} bytes later)` : "a length that ends inside the file" }
           : { token: "torn-tail", record: index, offset: pos, detail: `record needs ${total} bytes, ${left} left in the file` };
         break;
       }

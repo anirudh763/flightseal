@@ -12,6 +12,7 @@ MAGIC = b"FLTSEAL1"
 HEADER = struct.Struct("<IQQ")  # payload length, sequence number, timestamp_us
 TRAILER = 32 + 4  # link, crc32
 MAX_PAYLOAD = 1 << 20
+MAX_CANDIDATES = 16  # sequence-number matches checked in full when a length runs past the end of the file
 
 
 def link(prev: bytes, seq: int, timestamp_us: int, payload: bytes) -> bytes:
@@ -43,9 +44,15 @@ def _record_follows(data, start, seq) -> bool:
     """True if a complete record with this sequence number and a valid CRC starts after `start`, within one
     maximum-size record."""
     last = min(len(data), start + HEADER.size + MAX_PAYLOAD + TRAILER)
+    candidates = 0
     for p in range(start + 1, min(last, len(data) - HEADER.size - TRAILER) + 1):
         length, rseq, _ = HEADER.unpack_from(data, p)
-        if rseq != seq or length > MAX_PAYLOAD:
+        if rseq != seq:
+            continue
+        candidates += 1
+        if candidates > MAX_CANDIDATES:  # a crafted tail: report corruption, trim nothing (the safe direction)
+            return True
+        if length > MAX_PAYLOAD:
             continue
         end = p + HEADER.size + length + TRAILER
         if end <= len(data) and zlib.crc32(data[p : end - 4]) == struct.unpack_from("<I", data, end - 4)[0]:
