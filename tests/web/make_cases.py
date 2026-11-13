@@ -124,6 +124,14 @@ def main():
         add(f"sample-{s}", samples / f"{s}.fseal", samples / "flight.receipts", spub)
         add(f"sample-{s}-chain-only", samples / f"{s}.fseal")
 
+    # Edits around the verifier's 256-record hashing batches (records 255, 256, 257 of the 800-record sample),
+    # checksum fixed, so only the link check can catch them.
+    for n in (255, 256, 257, 511, 512):
+        path = out / f"batch-edge-{n}.fseal"
+        tamper.edit_field(samples / "intact.fseal", path, record=n, field="instance", delta=1, fix_crc=True)
+        add(f"batch-edge-{n}", path)
+        add(f"batch-edge-{n}+receipts", path, samples / "flight.receipts", spub)
+
     # The real PX4 flight (64,542 records), if it has been downloaded.
     if len(sys.argv) > 3 and Path(sys.argv[3]).exists():
         sys.path.insert(0, str(ROOT / "tools"))
@@ -161,8 +169,25 @@ def main():
         path = out / f"malformed-{name}.receipts"
         path.write_text(good + "\n" + line + "\n" + lines[1] + "\n")
         malformed.append({"name": name, "log": str(log), "receipts": str(path), "pubkey": pub, "line": 2})
+    # A UTF-8 byte-order mark: the CLI reads bytes and rejects line 1; a text decoder that strips it would not.
+    (out / "malformed-bom.receipts").write_bytes(b"\xef\xbb\xbf" + rec.read_bytes())
+    malformed.append({"name": "utf8-bom", "log": str(log), "receipts": str(out / "malformed-bom.receipts"), "pubkey": pub, "line": 1})
 
-    (out / "cases.json").write_text(json.dumps({"cases": cases, "malformed": malformed}, indent=1))
+    # Unauthenticated receipts: right key, counts and heads, but every signature replaced by zeros (a forgery
+    # anyone can write); and one bogus receipt claiming 2 records for a 1-record log.
+    zeroed = [ln[: ln.index("sig=") + 4] + "0" * 128 for ln in lines]
+    (out / "zero-sig.receipts").write_text("\n".join(zeroed) + "\n")
+    one, _, one_pub = seal(fseal, out, "1000\t{\"z\":1}\n", 100, "one")
+    (out / "bogus-count2.receipts").write_text(f"fseal-receipt v1 count=2 head={zero64} key={one_pub} sig={zero128}\n")
+    unsigned = {
+        "zero-sig": {"log": str(log), "receipts": str(out / "zero-sig.receipts"), "pubkey": pub},
+        "zero-sig-on-edited-log": {"log": str(out / "edit-fix-crc.fseal"), "receipts": str(out / "zero-sig.receipts"), "pubkey": pub},
+        "zero-sig-on-torn-log": {"log": str(out / "torn.fseal"), "receipts": str(out / "zero-sig.receipts"), "pubkey": pub},
+        "bogus-count2-one-record": {"log": str(one), "receipts": str(out / "bogus-count2.receipts"), "pubkey": one_pub},
+        "other-key-unsigned": {"log": str(log), "receipts": str(other_rec), "pubkey": pub},
+    }
+
+    (out / "cases.json").write_text(json.dumps({"cases": cases, "malformed": malformed, "unsigned": unsigned}, indent=1))
 
 
 if __name__ == "__main__":

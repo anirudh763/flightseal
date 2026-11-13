@@ -14,6 +14,19 @@ export const TRAILER = 36; // link (32) + crc32 (4)
 export const MAX_PAYLOAD = 1 << 20;
 const CHUNK = 16 << 20; // bytes read from a File at a time; a record is at most MAX_PAYLOAD + 56 bytes
 const BATCH = 256; // records hashed in parallel (each link is checked against the stored previous link)
+const BATCH_BYTES = 2 << 20; // ... or fewer, so one batch never copies more than about 2 MiB of payload
+const SLICE_MS = 8; // give the event loop a turn this often, so the page stays responsive and Cancel works
+
+// Lets other tasks (rendering, a click on Cancel) run. setTimeout would be clamped to 4 ms after nesting.
+function yieldToEventLoop() {
+  if (globalThis.scheduler && typeof globalThis.scheduler.yield === "function") return globalThis.scheduler.yield();
+  if (typeof setImmediate === "function") return new Promise((r) => setImmediate(r));
+  return new Promise((r) => {
+    const ch = new MessageChannel();
+    ch.port1.onmessage = () => r();
+    ch.port2.postMessage(0);
+  });
+}
 
 // Same wording as describe(Status) in src/fseal.cpp, so reports match the CLI.
 export const PROBLEM_TEXT = {
@@ -160,13 +173,19 @@ export async function scanLog(source, options = {}) {
   r.goodBytes = off;
   let lastTs = 0n;
   let fail = null; // structural failure found while gathering a batch
+  let sliceStart = Date.now();
+  const cancelled = () => new DOMException("verification cancelled", "AbortError");
 
   while (off < size && !fail) {
-    if (signal && signal.aborted) throw new DOMException("verification cancelled", "AbortError");
-    // Gather up to BATCH records that pass the length, checksum and sequence checks.
+    if (Date.now() - sliceStart >= SLICE_MS) {
+      await yieldToEventLoop();
+      sliceStart = Date.now();
+    }
+    if (signal && signal.aborted) throw cancelled();
+    // Gather up to BATCH records (and about BATCH_BYTES) that pass the length, checksum and sequence checks.
     const batch = [];
-    let pos = off;
-    while (batch.length < BATCH && pos < size) {
+    let pos = off, batchBytes = 0;
+    while (batch.length < BATCH && batchBytes < BATCH_BYTES && pos < size) {
       const left = size - pos;
       const index = r.records + batch.length;
       if (left < HEADER) {
@@ -202,6 +221,7 @@ export async function scanLog(source, options = {}) {
       }
       batch.push({ rec, pos, len, index, ts: view.getBigUint64(12, true) });
       pos += total;
+      batchBytes += total;
     }
 
     // Hash the batch in parallel. Each record's link is computed from the stored link of the record before it;
@@ -242,6 +262,7 @@ export async function scanLog(source, options = {}) {
     }
     if (onProgress) onProgress(off, size);
   }
+  if (signal && signal.aborted) throw cancelled();
   if (fail) {
     r.status = fail.token;
     r.problem = fail;
@@ -348,29 +369,52 @@ export async function checkReceipts(receipts, trustedKey, scan) {
   return { results, signaturesChecked: canVerify };
 }
 
-/** The overall verdict, with the same rules as verify() in src/main.cpp. */
+/**
+ * The overall verdict. With receipt signatures checked (or no receipts) it follows verify() in src/main.cpp
+ * exactly. Without Ed25519 in this runtime, receipts are not authenticated: anyone could have written them, so a
+ * receipt that disagrees with the log is not evidence of tampering and one that agrees is not evidence of
+ * integrity. Then the result is TAMPERED only for what is proved without signatures (a broken chain, a receipt
+ * naming a key other than the trusted one) and otherwise UNVERIFIED.
+ *
+ * Three things are reported separately: chain consistency (scan.status), authenticated receipt coverage
+ * (`covered`, records 0..covered-1 are pinned by a receipt you can trust) and the unprotected suffix
+ * (`uncovered` records after the last authenticated receipt).
+ */
 export function summarize(scan, receiptCheck) {
   const list = receiptCheck ? receiptCheck.results : [];
-  let covered = 0n, failed = 0, unchecked = 0, firstFailure = null;
+  const authenticated = list.length > 0 && receiptCheck.signaturesChecked;
+  let covered = 0n, failed = 0, unchecked = 0, unverifiedMismatches = 0, firstFailure = null;
   for (const x of list) {
     if (x.result === "unchecked") unchecked++;
     else if (x.result === "ok") covered = x.count > covered ? x.count : covered;
+    else if (!authenticated && x.result !== "wrong-key") unverifiedMismatches++;
     else if (failed++ === 0) firstFailure = x;
   }
-  const bad = scan.status !== "ok" || failed > 0;
-  const result = !bad ? "INTACT" : scan.status === "torn-tail" && list.length === 0 ? "INCOMPLETE" : "TAMPERED";
+  if (!authenticated) covered = 0n;
+  let result;
+  if (list.length === 0 || authenticated) {
+    const bad = scan.status !== "ok" || failed > 0;
+    result = !bad ? "INTACT" : scan.status === "torn-tail" && list.length === 0 ? "INCOMPLETE" : "TAMPERED";
+  } else if (failed > 0 || (scan.status !== "ok" && scan.status !== "torn-tail")) result = "TAMPERED";
+  else result = scan.status === "torn-tail" ? "INCOMPLETE" : "UNVERIFIED";
   return {
     result,
+    authenticated,
     receipts: list.length,
-    matched: list.length - failed - unchecked,
+    matched: list.length - failed - unchecked - unverifiedMismatches,
     failed,
     unchecked,
+    unverifiedMismatches,
     firstFailure,
+    covered,
     uncovered: BigInt(scan.records) - covered,
   };
 }
 
-/** Text identical to `fseal verify LOG [--receipts R --pubkey K]` stdout. Used by the cross-check tests. */
+/**
+ * Text identical to `fseal verify LOG [--receipts R --pubkey K]` stdout whenever signatures were checked; the
+ * cross-check tests compare it byte for byte. When they could not be checked it says so and never says INTACT.
+ */
 export function cliReport(path, scan, receiptCheck) {
   const s = summarize(scan, receiptCheck);
   const out = [];
@@ -380,16 +424,33 @@ export function cliReport(path, scan, receiptCheck) {
   out.push(`  time order   ${scan.timeReversals} backward timestamp(s)`);
   if (scan.status !== "ok")
     out.push(`  first problem  record ${scan.records}, byte ${scan.goodBytes}: ${PROBLEM_TEXT[scan.status]} [${scan.status}]`);
-  if (s.receipts > 0) {
+  if (s.receipts > 0 && s.authenticated) {
     if (s.firstFailure)
       out.push(`  receipt ${s.firstFailure.index} (count ${s.firstFailure.count}): ${RECEIPT_TEXT[s.firstFailure.result]}`);
     let line = `  receipts     ${s.matched} of ${s.receipts} match`;
     if (s.unchecked) line += `; ${s.unchecked} cannot be checked past the first problem`;
     else if (s.failed === 0) line += `; ${s.uncovered} record(s) after the last receipt are not covered`;
     out.push(line);
+  } else if (s.receipts > 0) {
+    out.push(`  signatures   NOT CHECKED: this browser cannot verify Ed25519, so the receipts are not authenticated`);
+    if (s.firstFailure)
+      out.push(`  receipt ${s.firstFailure.index} (count ${s.firstFailure.count}): ${RECEIPT_TEXT[s.firstFailure.result]}`);
+    let line = `  receipts     ${s.receipts} loaded, none authenticated; ${s.matched} agree with the log, ${s.unverifiedMismatches} do not`;
+    if (s.unchecked) line += `, ${s.unchecked} cannot be checked past the first problem`;
+    out.push(line);
+    out.push(`  coverage     no record is covered by an authenticated receipt`);
   }
-  out.push(`RESULT: ${s.result === "INCOMPLETE" ? "INCOMPLETE (if the writer crashed, run: fseal recover)" : s.result}`);
+  const why = {
+    INCOMPLETE: "INCOMPLETE (if the writer crashed, run: fseal recover)",
+    UNVERIFIED: "UNVERIFIED (hash chain intact; receipt signatures NOT CHECKED; run fseal verify)",
+  };
+  out.push(`RESULT: ${why[s.result] || s.result}`);
   return out.join("\n") + "\n";
+}
+
+/** Decodes a receipts file like the C++ reader sees it: a byte-order mark is kept (and rejected), not stripped. */
+export function decodeReceipts(bytes) {
+  return new TextDecoder("utf-8", { ignoreBOM: true }).decode(bytes);
 }
 
 /** Reads one record's bytes for the detail view. Returns null if the offset is not a whole record. */
