@@ -6,6 +6,7 @@
 #include <sys/stat.h>
 #include <unistd.h>
 
+#include <algorithm>
 #include <cerrno>
 #include <cstdio>
 #include <cstring>
@@ -98,6 +99,20 @@ bool read_all(const std::string& path, std::string* out) {
   }
   return !in.bad();
 }
+// True if a complete record with sequence number `seq` and a valid checksum starts somewhere in
+// (from, from + kRecordHeader + kMaxPayload + kRecordTrailer]. Used when a record's length runs past the end of
+// the file: if the next record is intact after it, the length was corrupted and this is not a crash's torn tail.
+bool complete_record_follows(const std::string& s, size_t from, uint64_t seq) {
+  size_t last = std::min(s.size(), from + kRecordHeader + kMaxPayload + kRecordTrailer);
+  for (size_t p = from + 1; p + kRecordHeader + kRecordTrailer <= s.size() && p <= last; ++p) {
+    if (get_le(s.data() + p + 4, 8) != seq) continue;  // cheap filter before the checksum
+    uint64_t len = get_le(s.data() + p, 4);
+    if (len > kMaxPayload || p + kRecordHeader + len + kRecordTrailer > s.size()) continue;
+    size_t total = kRecordHeader + len + kRecordTrailer;
+    if (crc32(s.data() + p, total - 4) == get_le(s.data() + p + total - 4, 4)) return true;
+  }
+  return false;
+}
 void write_all(int fd, const char* p, size_t n) {
   while (n > 0) {
     ssize_t w = ::write(fd, p, n);
@@ -134,7 +149,10 @@ ScanResult scan(const std::string& path, std::map<uint64_t, Hash>* links_at) {
     uint32_t len = static_cast<uint32_t>(get_le(rec, 4));
     if (len > kMaxPayload) { r.status = Status::BadLength; break; }
     size_t total = kRecordHeader + len + kRecordTrailer;
-    if (left < total) { r.status = Status::TornTail; break; }
+    if (left < total) {
+      r.status = complete_record_follows(s, off, r.records + 1) ? Status::BadLength : Status::TornTail;
+      break;
+    }
     if (crc32(rec, total - 4) != get_le(rec + total - 4, 4)) { r.status = Status::BadCrc; break; }
     uint64_t seq = get_le(rec + 4, 8), ts = get_le(rec + 12, 8);
     if (seq != r.records) { r.status = Status::BadSeq; break; }
@@ -336,7 +354,9 @@ const char* describe(ReceiptCheck c) {
     case ReceiptCheck::WrongKey: return "signed by a different key than the one you trust";
     case ReceiptCheck::BadSignature: return "signature invalid (the receipt itself was altered)";
     case ReceiptCheck::LogShorter: return "log is shorter than the receipt (records were removed from the end)";
-    case ReceiptCheck::HeadMismatch: return "log does not match the receipt (it was rewritten after the receipt was issued)";
+    case ReceiptCheck::HeadMismatch:
+      return "log does not match this receipt: it was rewritten after the receipt was issued, or these receipts belong to "
+             "another log sealed with the same key";
   }
   return "unknown";
 }

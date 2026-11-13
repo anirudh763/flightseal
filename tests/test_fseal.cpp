@@ -270,6 +270,25 @@ TEST(unreadable_path_is_an_io_error_not_an_exception) {
   ::rmdir(dir.c_str());
 }
 
+TEST(a_corrupt_length_before_complete_records_is_corruption_not_a_torn_tail) {
+  std::string p = make_log("corruptlen", 100);
+  std::string s = read_file(p);
+  auto offs = record_offsets(s);
+  put_u32(s, offs[50], get_u32(s, offs[50]) | 0x4000);  // record 50 now claims to run past the end of the file
+  write_file(p, s);
+  ScanResult r = scan(p);
+  CHECK(r.status == Status::BadLength);
+  CHECK(r.records == 50);
+  uint64_t trimmed = 0;
+  CHECK(recover(p, &trimmed).status != Status::Ok);
+  CHECK(trimmed == 0);
+  CHECK(read_file(p) == s);  // 50 complete records after it are evidence: nothing is trimmed
+  bool threw = false;
+  try { Writer w(p); } catch (const std::exception&) { threw = true; }
+  CHECK(threw);
+  CHECK(read_file(p) == s);
+}
+
 TEST(timestamps_going_backwards_are_counted_not_rejected) {
   std::string p = temp_path("time");
   { Writer w(p); w.append(10, "a"); w.append(5, "b"); w.append(20, "c"); }

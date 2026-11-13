@@ -39,6 +39,20 @@ class Scan:
     items: list = field(default_factory=list)
 
 
+def _record_follows(data, start, seq) -> bool:
+    """True if a complete record with this sequence number and a valid CRC starts after `start`, within one
+    maximum-size record."""
+    last = min(len(data), start + HEADER.size + MAX_PAYLOAD + TRAILER)
+    for p in range(start + 1, min(last, len(data) - HEADER.size - TRAILER) + 1):
+        length, rseq, _ = HEADER.unpack_from(data, p)
+        if rseq != seq or length > MAX_PAYLOAD:
+            continue
+        end = p + HEADER.size + length + TRAILER
+        if end <= len(data) and zlib.crc32(data[p : end - 4]) == struct.unpack_from("<I", data, end - 4)[0]:
+            return True
+    return False
+
+
 def scan(path) -> Scan:
     data = open(path, "rb").read()
     s = Scan()
@@ -57,7 +71,8 @@ def scan(path) -> Scan:
             break
         end = off + HEADER.size + length + TRAILER
         if end > len(data):
-            s.problem = "torn-tail"
+            # A crash leaves a torn tail; a corrupted length with intact records after it is corruption.
+            s.problem = "bad-length" if _record_follows(data, off, s.records + 1) else "torn-tail"
             break
         (crc,) = struct.unpack_from("<I", data, end - 4)
         if zlib.crc32(data[off : end - 4]) != crc:
