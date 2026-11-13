@@ -45,8 +45,10 @@ TEST(link_depends_on_every_field) {
 }
 
 // ---- helpers -------------------------------------------------------------------------------
+#include <sys/stat.h>
 #include <unistd.h>
 
+#include <cstdint>
 #include <cstdlib>
 #include <fstream>
 #include <sstream>
@@ -250,6 +252,24 @@ TEST(impossible_length_is_corruption_not_a_torn_tail) {
   CHECK(r.records == 1);
 }
 
+TEST(unreadable_path_is_an_io_error_not_an_exception) {
+  std::string dir = temp_path("dir");
+  CHECK(::mkdir(dir.c_str(), 0700) == 0);
+  bool threw = false;
+  Status s = Status::Ok, rs = Status::Ok;
+  uint64_t trimmed = 0;
+  try {
+    s = scan(dir).status;
+    rs = recover(dir, &trimmed).status;
+  } catch (...) {
+    threw = true;
+  }
+  CHECK(!threw);
+  CHECK(s == Status::IoError);
+  CHECK(rs == Status::IoError);
+  ::rmdir(dir.c_str());
+}
+
 TEST(timestamps_going_backwards_are_counted_not_rejected) {
   std::string p = temp_path("time");
   { Writer w(p); w.append(10, "a"); w.append(5, "b"); w.append(20, "c"); }
@@ -278,6 +298,23 @@ TEST(receipt_round_trips_through_its_text_line) {
   CHECK(parse_line(to_line(r), &back));
   CHECK(back.count == 7 && back.head == r.head && back.key == r.key && back.sig == r.sig);
   CHECK(!parse_line("fseal-receipt v1 count=7", &back));
+}
+
+TEST(receipt_with_a_count_above_2_to_the_64_is_rejected_not_thrown) {
+  const std::string z64(64, '0'), z128(128, '0');
+  const std::string tail = " head=" + z64 + " key=" + z64 + " sig=" + z128;
+  Receipt r;
+  CHECK(parse_line("fseal-receipt v1 count=18446744073709551615" + tail, &r));  // 2^64-1 is the largest count
+  CHECK(r.count == UINT64_MAX);
+  bool threw = false, ok = true;
+  try {
+    ok = parse_line("fseal-receipt v1 count=18446744073709551616" + tail, &r) ||
+         parse_line("fseal-receipt v1 count=99999999999999999999999" + tail, &r);
+  } catch (...) {
+    threw = true;
+  }
+  CHECK(!threw);
+  CHECK(!ok);
 }
 
 TEST(signature_breaks_if_any_field_changes) {

@@ -91,7 +91,11 @@ void put_le(std::string& out, uint64_t v, int n) {
 bool read_all(const std::string& path, std::string* out) {
   std::ifstream in(path, std::ios::binary);
   if (!in) return false;
-  out->assign(std::istreambuf_iterator<char>(in), std::istreambuf_iterator<char>());
+  try {  // libstdc++ throws from the iterator on a read error (e.g. a directory); scan() reports IoError instead
+    out->assign(std::istreambuf_iterator<char>(in), std::istreambuf_iterator<char>());
+  } catch (const std::exception&) {
+    return false;
+  }
   return !in.bad();
 }
 void write_all(int fd, const char* p, size_t n) {
@@ -315,7 +319,12 @@ bool parse_line(const std::string& line, Receipt* out) {
   };
   std::string_view c = value(count, "count=");
   if (c.empty() || c.find_first_not_of("0123456789") != std::string_view::npos) return false;
-  out->count = std::stoull(std::string(c));
+  uint64_t n = 0;  // not std::stoull: it throws on a count above 2^64-1, and this returns false on bad input
+  for (char d : c) {
+    if (n > (UINT64_MAX - static_cast<uint64_t>(d - '0')) / 10) return false;
+    n = n * 10 + static_cast<uint64_t>(d - '0');
+  }
+  out->count = n;
   return parse_hex(value(head, "head="), out->head.data(), out->head.size()) &&
          parse_hex(value(key, "key="), out->key.data(), out->key.size()) &&
          parse_hex(value(sig, "sig="), out->sig.data(), out->sig.size());
