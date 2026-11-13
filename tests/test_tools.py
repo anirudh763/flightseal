@@ -133,3 +133,23 @@ def test_receipts_past_a_damaged_record_are_not_blamed_on_deletion(fseal_bin, tm
     assert r.returncode == 1 and first_problem(r.stdout) == ("bad-crc", 2)
     assert "removed from the end" not in r.stdout
     assert "cannot be checked past the first problem" in r.stdout
+
+
+def test_append_refuses_a_receipts_path_it_cannot_open_before_sealing(fseal_bin, tmp_path):
+    key = tmp_path / "k.pem"
+    run(fseal_bin, "keygen", key)
+    log = tmp_path / "f.fseal"
+    r = run(fseal_bin, "append", log, "--key", key, "--receipts", tmp_path / "missing" / "f.receipts", stdin=LINES)
+    assert r.returncode == 2, r.stderr
+    assert "cannot write receipts" in r.stderr
+    assert "issued" not in r.stderr
+    assert not log.exists()  # nothing sealed without somewhere to put the receipts
+
+
+def test_append_fails_when_a_receipt_cannot_be_written(fseal_bin, tmp_path):
+    key = tmp_path / "k.pem"
+    run(fseal_bin, "keygen", key)
+    r = run(fseal_bin, "append", tmp_path / "f.fseal", "--key", key, "--receipts", "/dev/full", "--every", 4, stdin=LINES)
+    assert r.returncode == 2, r.stderr
+    assert "cannot write receipts" in r.stderr
+    assert "issued" not in r.stderr
