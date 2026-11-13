@@ -117,7 +117,9 @@ receipt  = fseal-receipt v1 count=N head=link[N-1] key=<Ed25519 public key> sig=
 - **Recovery** trims a final record that a crash cut short, and nothing else. A bad record in the middle, or a complete
   final record with a bad checksum, is reported and left in place: truncating it would destroy evidence. A length
   field that runs past the end of the file is a torn record only if no intact record follows it; if one does, the
-  length was corrupted and nothing is trimmed.
+  length was corrupted and nothing is trimmed. Residual: a crash whose torn final record happens to contain bytes that
+  look like a valid next record makes `recover` refuse; that fails safe (nothing is deleted), is very unlikely by
+  accident, and can be caused by a crafted payload.
 - **Durability:** records are buffered and made durable every 1,000 records (or after every record with
   `--sync every`). Records acknowledged by a sync survive a crash; the kill -9 test checks exactly that.
 
@@ -182,7 +184,7 @@ Measured with `build-release/fseal-bench records.tsv <dir> 5` on the PX4 flight 
   ([tools/fseal_py.py](tools/fseal_py.py), no shared code) must agree with the CLI on 7 attacks; the real PX4 flight
   is sealed and an altitude edit is found at the right record. `append` must refuse a receipts path it cannot open
   (before sealing anything) and fail when a receipt cannot be written (`/dev/full`).
-- **JavaScript** ([tests/web/verifier.test.mjs](tests/web/verifier.test.mjs), 96 tests): the browser verifier must
+- **JavaScript** ([tests/web/verifier.test.mjs](tests/web/verifier.test.mjs), 98 tests): the browser verifier must
   print exactly the same report as `fseal verify` and find the same first problem, record, byte and head as the
   Python reader. The cases are the 7 attacks with and without receipts, a full rewrite, a deleted tail, receipts
   from another key, an altered signature and count, edits at the edges of the verifier's 256-record hashing batches,
@@ -194,11 +196,11 @@ Measured with `build-release/fseal-bench records.tsv <dir> 5` on the PX4 flight 
   cannot catch a mistake that all of them share, such as a misreading of the format description itself.
 - **Copy** ([tests/web/copy.test.mjs](tests/web/copy.test.mjs)): fails if the limits listed above are removed from
   this README or from the verifier page.
-- **Browser** ([tests/web/e2e.mjs](tests/web/e2e.mjs), Playwright, 35 checks): every sample shows the same broken
+- **Browser** ([tests/web/e2e.mjs](tests/web/e2e.mjs), Playwright, 37 checks): every sample shows the same broken
   record or receipt as the CLI; hostile, empty and torn files, a forged signature, an empty receipts file, a
   network failure, no Ed25519 and no Web Workers each give the right result; keyboard-only use works; a 1,000,000-record log has
   no task over 200 ms and Cancel answers within 200 ms; no horizontal scroll at 375 and 320 px or at 200% text. The
-  page passes automated axe-core checks with 0 violations in light and dark themes. A manual screen-reader check
+  page passes automated axe-core checks with 0 violations in light and dark themes, at 1280 and 375 px wide. A manual screen-reader check
   has not been done.
 
 ## Security review

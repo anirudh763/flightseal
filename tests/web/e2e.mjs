@@ -431,9 +431,9 @@ try {
     await p2.close();
   });
 
-  for (const scheme of ["light", "dark"]) {
-    await check(`axe-core: 0 violations, ${scheme}, every sample and the empty state`, async () => {
-      const c = await browser.newContext({ colorScheme: scheme, viewport: { width: 1280, height: 900 } });
+  for (const scheme of ["light", "dark"]) for (const width of [1280, 375]) {
+    await check(`axe-core: 0 violations, ${scheme}, ${width} px, every sample and the empty state`, async () => {
+      const c = await browser.newContext({ colorScheme: scheme, viewport: { width, height: 900 } });
       const p = await c.newPage();
       const all = [];
       for (const s of ["tampered", "intact", "rewritten", "truncated"]) {

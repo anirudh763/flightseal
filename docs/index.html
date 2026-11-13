@@ -104,7 +104,7 @@
           <button type="button" class="btn small" id="show-break" hidden>Show first break</button>
         </form>
       </div>
-      <div class="table-scroll">
+      <div class="table-scroll" tabindex="0" role="region" aria-label="Records table">
         <table id="rec-table">
           <caption class="sr-only" id="rec-caption">Records</caption>
           <thead><tr><th scope="col">Record</th><th scope="col">Sequence</th><th scope="col">Timestamp (µs)</th><th scope="col">Payload bytes</th><th scope="col">File offset</th><th scope="col">Check</th></tr></thead>
@@ -122,7 +122,7 @@
 
   <section class="box receipts" id="receipts-area" aria-labelledby="receipts-h" hidden>
     <h2 class="box-header" id="receipts-h">Receipts</h2>
-    <div class="table-scroll">
+    <div class="table-scroll" tabindex="0" role="region" aria-label="Receipts table">
       <table class="receipts-table">
         <caption class="sr-only">Receipts and how each compares with the log</caption>
         <thead><tr><th scope="col">Receipt</th><th scope="col">After record count</th><th scope="col">Result</th><th scope="col">Signature</th><th scope="col">Head link in the receipt</th></tr></thead>
