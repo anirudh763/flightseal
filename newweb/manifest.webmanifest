@@ -1,0 +1,15 @@
+{
+  "id": "/flightseal/console/",
+  "name": "FlightSeal Console",
+  "short_name": "FlightSeal",
+  "description": "Local flight-log integrity and receipt verification",
+  "start_url": "/flightseal/console/#/sandbox",
+  "scope": "/flightseal/console/",
+  "display": "standalone",
+  "background_color": "#f1f8f3",
+  "theme_color": "#195944",
+  "icons": [
+    {"src": "/flightseal/icon-192.png", "sizes": "192x192", "type": "image/png"},
+    {"src": "/flightseal/icon-512.png", "sizes": "512x512", "type": "image/png"}
+  ]
+}

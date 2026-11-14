@@ -109,17 +109,6 @@ uint64_t get_le(const char* p, int n) {
 void put_le(std::string& out, uint64_t v, int n) {
   for (int i = 0; i < n; ++i) out.push_back(static_cast<char>((v >> (8 * i)) & 0xFF));
 }
-// shortcut: reads the whole log into memory, fine for flight logs of a few hundred MB; stream it beyond that.
-bool read_all(const std::string& path, std::string* out) {
-  std::ifstream in(path, std::ios::binary);
-  if (!in) return false;
-  try {  // libstdc++ throws from the iterator on a read error (e.g. a directory); scan() reports IoError instead
-    out->assign(std::istreambuf_iterator<char>(in), std::istreambuf_iterator<char>());
-  } catch (const std::exception&) {
-    return false;
-  }
-  return !in.bad();
-}
 // True if a complete record with sequence number `seq` and a valid checksum starts somewhere in
 // (from, from + kRecordHeader + kMaxPayload + kRecordTrailer]. Used when a record's length runs past the end of
 // the file: if the next record is intact after it, the length was corrupted and this is not a crash's torn tail.
@@ -152,45 +141,56 @@ void write_all(int fd, const char* p, size_t n) {
 
 ScanResult scan(const std::string& path, std::map<uint64_t, Hash>* links_at) {
   ScanResult r;
-  std::string s;
-  if (!read_all(path, &s)) {
-    r.status = Status::IoError;
+  std::unique_ptr<char[]> read_buffer(new char[1u << 20]);
+  std::ifstream input;
+  input.rdbuf()->pubsetbuf(read_buffer.get(), 1u << 20);
+  input.open(path, std::ios::binary);
+  auto io_error = [] { ScanResult failure; failure.status = Status::IoError; return failure; };
+  if (!input) return io_error();
+  std::string header(kMagic.size(), '\0');
+  input.read(header.data(), static_cast<std::streamsize>(header.size()));
+  if (input.bad() || (input.fail() && !input.eof())) return io_error();
+  header.resize(static_cast<size_t>(input.gcount()));
+  if (header.size() < kMagic.size()) {
+    r.status = header.empty() ? Status::Ok : kMagic.substr(0, header.size()) == header ? Status::TornTail : Status::BadHeader;
     return r;
   }
-  if (s.size() < kMagic.size()) {  // empty, or the header itself was torn
-    r.status = (s.empty() || kMagic.substr(0, s.size()) == s) ? (s.empty() ? Status::Ok : Status::TornTail) : Status::BadHeader;
-    return r;
-  }
-  if (std::string_view(s).substr(0, kMagic.size()) != kMagic) {
-    r.status = Status::BadHeader;
-    return r;
-  }
-  size_t off = kMagic.size();
-  r.good_bytes = off;
+  if (header != kMagic) { r.status = Status::BadHeader; return r; }
+  r.good_bytes = kMagic.size();
   uint64_t last_ts = 0;
-  while (off < s.size()) {
-    size_t left = s.size() - off;
-    if (left < kRecordHeader) { r.status = Status::TornTail; break; }
-    const char* rec = s.data() + off;
-    uint32_t len = static_cast<uint32_t>(get_le(rec, 4));
+  std::string record;
+  for (;;) {
+    record.resize(kRecordHeader);
+    input.read(record.data(), static_cast<std::streamsize>(record.size()));
+    if (input.bad() || (input.fail() && !input.eof())) return io_error();
+    size_t got = static_cast<size_t>(input.gcount());
+    if (got == 0) break;
+    if (got < kRecordHeader) { r.status = Status::TornTail; break; }
+    uint32_t len = static_cast<uint32_t>(get_le(record.data(), 4));
     if (len > kMaxPayload) { r.status = Status::BadLength; break; }
-    size_t total = kRecordHeader + len + kRecordTrailer;
-    if (left < total) {
-      r.status = complete_record_follows(s, off, r.records + 1) ? Status::BadLength : Status::TornTail;
+    const size_t total = kRecordHeader + len + kRecordTrailer;
+    record.resize(total);
+    input.read(record.data() + kRecordHeader, static_cast<std::streamsize>(total - kRecordHeader));
+    if (input.bad() || (input.fail() && !input.eof())) return io_error();
+    got = kRecordHeader + static_cast<size_t>(input.gcount());
+    if (got < total) {
+      // A short read contains the entire remaining tail. Preserve the existing bounded
+      // search for a complete following record before deciding that recovery may trim it.
+      record.resize(got);
+      r.status = complete_record_follows(record, 0, r.records + 1) ? Status::BadLength : Status::TornTail;
       break;
     }
+    const char* rec = record.data();
     if (crc32(rec, total - 4) != get_le(rec + total - 4, 4)) { r.status = Status::BadCrc; break; }
     uint64_t seq = get_le(rec + 4, 8), ts = get_le(rec + 12, 8);
     if (seq != r.records) { r.status = Status::BadSeq; break; }
-    std::string_view payload(rec + kRecordHeader, len);
-    Hash h = link(r.head, seq, ts, payload);
+    Hash h = link(r.head, seq, ts, std::string_view(rec + kRecordHeader, len));
     if (std::memcmp(h.data(), rec + kRecordHeader + len, h.size()) != 0) { r.status = Status::BadLink; break; }
     if (r.records > 0 && ts < last_ts) ++r.time_reversals;
     last_ts = ts;
     r.head = h;
     ++r.records;
-    off += total;
-    r.good_bytes = off;
+    r.good_bytes += total;
     if (links_at) {
       auto it = links_at->find(r.records);
       if (it != links_at->end()) it->second = h;

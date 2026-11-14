@@ -65,9 +65,13 @@ C++ happens to do.
 The PX4 sample log is fetched by pinned commit and checked by SHA-256. That keeps the repository small and its
 licensing clean, and it means the tests always use the same bytes.
 
-### 14. Known shortcut: `scan` reads the whole file into memory
-That is fine for flight logs of tens or hundreds of megabytes and keeps the code short. Logs measured in gigabytes
-would need a streaming reader; the code marks this with a `shortcut:` comment.
+### 14. Stream verification instead of reading the whole log into memory
+The earlier `scan` loaded the whole file. Native and C++ WebAssembly verification now stream through bounded buffers
+with explicit input limits; browser files are read-only in a disposable worker. The compiled Wasm module is about
+1.8 MB. Native and Node evidence covers a 500 MiB input; the browser run is pending, so this is not a browser
+capacity claim. The browser heap cap is 256 MiB and the input limit 500 MiB. **Rejected:** undocumented whole-file
+buffering. Sandbox sealing is not durable on-drone signing; its private key is ephemeral. See [Wasm notes](wasm/README.md)
+and [architecture/readiness](ARCHITECTURE.md).
 
 ### 15. Receipts not validly signed by the trusted key are UNVERIFIED, not TAMPERED
 A receipt that names another key, or carries a signature that does not verify, can be written by anyone, so it is
@@ -92,3 +96,27 @@ A receipt says "after N records the head was H", signed by the drone's key, but 
 two flights are sealed with the same key, checking one against the other's receipts fails exactly as a rewrite
 would, so `verify` names both causes. A log identifier in the file header, included in every receipt, would tell
 them apart; it would change the file format, so it is left for a future version.
+
+### 17. Keep cloud archive and managed signing optional until implemented and interoperable
+The static verifier and CLI are local; no AWS account or resources are configured. S3 Object Lock/Lambda/Athena are
+only a possible archive design. Although AWS KMS documents Ed25519, v1 interoperability needs a cross-verification
+fixture for exact message bytes, message type, and public-key encoding; ECDSA cannot replace Ed25519.
+**Rejected:** inferring source-data truth from object immutability or treating a proposal as free hosting/a deployed
+backend. See [architecture](ARCHITECTURE.md) and [FinOps](FINOPS_AND_PRICING.md).
+
+### 18. Reuse the native engine, keep the independent reader
+The console calls C++/OpenSSL in a disposable WebAssembly worker, while the existing JavaScript reader supplies
+bounded record rows and a cross-check. Reject a disagreement instead of choosing the more reassuring result.
+This increases download size and local work, but avoids reimplementing signing in a new frontend. Missing-key
+receipt status belongs to application evidence completeness; preserve the native chain result separately.
+
+### 19. Static product first, no fictitious hosted tier
+The console starts with an 800-record synthetic example. The 64,542-record PX4 example is optional because its
+28.9 MiB transfer is unnecessary for the first check. Keep current GitHub Pages and prepare portable Amplify
+artifacts without provisioning a billable backend. The proposed team price is a validation question; no checkout,
+email collection or analytics runs without configured services. This gives up managed collaboration and custody.
+
+### 20. Local media conversion stays isolated from verification
+Video metadata helps inspect accompanying evidence, but video does not become a signed flight record. The static
+UI cannot truthfully offer server transcoding at zero compute cost, so FFmpeg conversion is an explicit bounded
+local tool and AVFoundation is an optional native helper. They do not change the FLTSEAL1 format or verification.

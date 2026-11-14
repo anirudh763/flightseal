@@ -13,3 +13,6 @@ build-release/
 tests/web/node_modules/
 build-asan/
 dist/
+newweb/node_modules/
+newweb/.test-artifacts/
+.test-artifacts/
