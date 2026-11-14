@@ -1,4 +1,5 @@
 #include "fseal.h"
+#include "import.h"
 #include <emscripten/emscripten.h>
 #include <emscripten/heap.h>
 #include <algorithm>
@@ -147,5 +148,44 @@ EMSCRIPTEN_KEEPALIVE const char* fseal_seal(const char* path, unsigned int every
     response = "{\"records\":" + std::to_string(writer.count()) + ",\"publicKey\":" + json_quote(fseal::hex(key.data(), key.size())) + ",\"receipts\":" + json_quote(receipts) + "}";
     return response.c_str();
   } catch (const std::exception& e) { std::remove("/sealed.fseal"); return fail(e); }
+}
+
+EMSCRIPTEN_KEEPALIVE const char* fseal_import(const char* path, const char* output_path, unsigned int every) {
+  struct RemoveKey { ~RemoveKey() { std::remove("/ephemeral-import.pem"); } } remove_key;
+  try {
+    std::remove(output_path);
+    std::remove("/ephemeral-import.pem");
+    const fseal::ImportResult imported = fseal::import_ulog(
+        path, output_path, "/ephemeral-import.pem", every);
+    std::ostringstream telemetry;
+    for (size_t i = 0; i < imported.telemetry.size(); ++i) {
+      const auto& point = imported.telemetry[i];
+      if (i) telemetry << ',';
+      telemetry << "{\"record\":" << (point.source_offset / (fseal::kMaxPayload - 18))
+                << ",\"sourceOffset\":" << json_quote(std::to_string(point.source_offset))
+                << ",\"timestampUs\":" << json_quote(std::to_string(point.timestamp_us));
+      if (point.has_altitude) telemetry << ",\"altitudeM\":" << point.altitude_m;
+      if (point.has_latitude) telemetry << ",\"latitudeDeg\":" << point.latitude_deg;
+      if (point.has_longitude) telemetry << ",\"longitudeDeg\":" << point.longitude_deg;
+      if (point.has_speed) telemetry << ",\"speedMps\":" << point.speed_mps;
+      if (point.has_battery) telemetry << ",\"batteryV\":" << point.battery_v;
+      telemetry << '}';
+    }
+    std::ostringstream out;
+    out << "{\"records\":" << imported.records
+        << ",\"receipts\":" << json_quote(imported.receipts)
+        << ",\"publicKey\":" << json_quote(fseal::hex(imported.public_key.data(), imported.public_key.size()))
+        << ",\"source\":{\"format\":\"ULog\",\"bytes\":" << imported.bytes
+        << ",\"sha256\":" << json_quote(fseal::hex(imported.sha256.data(), imported.sha256.size())) << '}'
+        << ",\"telemetry\":[" << telemetry.str() << ']'
+        << ",\"telemetryCount\":" << imported.telemetry_total
+        << ",\"telemetryDecimated\":" << (imported.telemetry_decimated ? "true" : "false")
+        << ",\"telemetryPolicy\":\"first-20000\"}";
+    response = out.str();
+    return response.c_str();
+  } catch (const std::exception& e) {
+    std::remove(output_path);
+    return fail(e);
+  }
 }
 }

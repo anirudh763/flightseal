@@ -5,12 +5,35 @@
   "sha256": {
     "src/fseal.cpp": "e066a816a1d604ca4a0de9b2994cca99a341e87965b03eb10c0fcfee8b1d9091",
     "src/fseal.h": "25185aa6c274d8d58a3f9201357c78af387630cb9cf35af7fc5edff31474a507",
-    "wasm/bridge.cpp": "176a3e3b0c67769067f1fd9c8d998fafc9ad02f3bb0cdb0d6ea8e35b65786a65",
-    "CMakeLists.txt": "902baa56cbd68a2f039b42c3e36023c68f23b66d98d0ea884f23f9ebb98508a8",
-    "wasm/CMakeLists.txt": "1cc3004add0329e6df68eb6fc5a9100c43b85254f21224a876390e5ab5a9ec39",
-    "scripts/build_wasm.sh": "9ea41f7e44673fa745b67a1d2f8ecbbb5d14f4f0086f832d8422549cd92d6dcb",
+    "src/import.cpp": "db54461d848b81f0fd28bbda5fb719ebeea842105af67d41b00b026ecf4f73d0",
+    "src/import.h": "53ad9658244edade906942774bc8d9e673b3dbfb1a2f3206ef626ca1745dd88f",
+    "wasm/bridge.cpp": "db2c54918c6ac49860f71696922d28421912c897acb3c730e8604b49acf72d8d",
+    "CMakeLists.txt": "62056dae9d8ddbf0acdf4221bac3d2b795a82bb68e1ce9280f308a55a36e2df6",
+    "wasm/CMakeLists.txt": "a97bf06ca9ddadc9be9b2ebc78495441d54d08bf26631011519b9ec853e50085",
+    "scripts/build_wasm.sh": "1b6e416f5202395cad0d6ac76e6d19cc7f846b355baeaff330086fef5a9d008f",
     "scripts/build_wasm_inner.sh": "5e37cf1f41cfea4ab82b012eb7e484d684ef383ef1448cc2a72ea6dcd45a55ac",
-    "docs/wasm/flightseal.mjs": "c7f21ea2bea34702c28d6cdb19dddd1c47199ade54b5633c6a87c074dbcd3ba4",
-    "docs/wasm/flightseal.wasm": "f0df4b71d3da3822b57e86cac1e64cc62c6275e55d6cab4c544de495448d9635"
+    "docs/wasm/flightseal.mjs": "ee8cfc99674ec4234c693b28e959b9737b93fea17a9d439864f77b9097ab0c1e",
+    "docs/wasm/flightseal.wasm": "b2d53ed19636aa8039952511bf6f16fdc2719aad619f72d1ff4ff15104ce9e2c"
+  },
+  "telemetry_schema": {
+    "basis": "PX4 ULog/uORB field-name, scalar type, and unit conventions",
+    "vehicle_global_position": {
+      "lat": "double degrees",
+      "lon": "double degrees",
+      "alt": "float metres",
+      "vel_n": "float metres/second",
+      "vel_e": "float metres/second"
+    },
+    "vehicle_gps_position": {
+      "lat": "int32 degrees * 1e7",
+      "lon": "int32 degrees * 1e7",
+      "alt": "int32 millimetres",
+      "vel_m_s": "float metres/second"
+    },
+    "battery_status": {
+      "voltage_v": "float volts"
+    },
+    "policy": "Only exact scalar field types are decoded; type/count mismatches are omitted while raw source bytes remain sealed.",
+    "trust_limit": "Schema names and types are decoded metadata, not sensor-truth, capture-origin, or source-authenticity evidence."
   }
 }

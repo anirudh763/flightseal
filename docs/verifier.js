@@ -150,7 +150,9 @@ function growRows(rows, need, maxRows) {
  * options.onProgress(bytesDone, size), options.signal (AbortSignal).
  */
 export async function scanLog(source, options = {}) {
-  const { linksAt = [], maxRows = 5_000_000, onProgress, signal } = options;
+  const { linksAt = [], maxRows = 5_000_000, sparse = false, onProgress, signal } = options;
+  if (sparse && (!Number.isSafeInteger(maxRows) || maxRows < 2 || maxRows > 5_000_000))
+    throw new RangeError('Sparse index capacity must be at least 2 and at most 5,000,000.');
   const size = source.size;
   if (!Number.isSafeInteger(size) || size < 0) throw new Error("file size is not a safe integer");
   const wanted = new Set([...linksAt].map((c) => String(c)));
@@ -163,7 +165,7 @@ export async function scanLog(source, options = {}) {
     timeReversals: 0,
     problem: null, // { token, record, offset, expected, actual, detail }
     links: new Map(), // String(count) -> Uint8Array(32)
-    rows: { count: 0, capacity: 0, offset: new Float64Array(0), ts: new BigUint64Array(0), len: new Uint32Array(0) },
+    rows: { count: 0, capacity: 0, stride: 1, offset: new Float64Array(0), ts: new BigUint64Array(0), len: new Uint32Array(0) },
     rowsTruncated: false,
   };
 
@@ -278,12 +280,23 @@ export async function scanLog(source, options = {}) {
       if (r.records > 0 && b.ts < lastTs) r.timeReversals++;
       lastTs = b.ts;
       r.head = stored.slice();
-      if (growRows(r.rows, r.rows.count + 1, maxRows)) {
-        const k = r.rows.count++;
-        r.rows.offset[k] = b.pos;
-        r.rows.ts[k] = b.ts;
-        r.rows.len[k] = b.len;
-      } else r.rowsTruncated = true;
+      if (sparse && r.records % r.rows.stride === 0 && r.rows.count === maxRows) {
+        for (let from = 0, to = 0; from < r.rows.count; from += 2, to++) {
+          r.rows.offset[to] = r.rows.offset[from];
+          r.rows.ts[to] = r.rows.ts[from];
+          r.rows.len[to] = r.rows.len[from];
+        }
+        r.rows.count = Math.ceil(r.rows.count / 2);
+        r.rows.stride *= 2;
+      }
+      if (!sparse || r.records % r.rows.stride === 0) {
+        if (growRows(r.rows, r.rows.count + 1, maxRows)) {
+          const k = r.rows.count++;
+          r.rows.offset[k] = b.pos;
+          r.rows.ts[k] = b.ts;
+          r.rows.len[k] = b.len;
+        } else r.rowsTruncated = true;
+      }
       r.records++;
       off = b.pos + HEADER + b.len + TRAILER;
       r.goodBytes = off;

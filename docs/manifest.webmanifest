@@ -1,15 +1,27 @@
 {
-  "name": "FlightSeal verifier",
-  "short_name": "FlightSeal",
+  "name": "HashWing flight-log workbench",
+  "short_name": "HashWing",
   "description": "Check a sealed drone flight log, its receipts and public key in your browser. Files are read locally and never uploaded.",
   "start_url": "./",
   "scope": "./",
   "display": "standalone",
-  "background_color": "#eff7f2",
-  "theme_color": "#eff7f2",
+  "background_color": "#f8fafc",
+  "theme_color": "#f8fafc",
   "icons": [
-    { "src": "favicon.svg", "sizes": "any", "type": "image/svg+xml" },
-    { "src": "icon-192.png", "sizes": "192x192", "type": "image/png" },
-    { "src": "icon-512.png", "sizes": "512x512", "type": "image/png" }
+    {
+      "src": "favicon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml"
+    },
+    {
+      "src": "icon-192.png",
+      "sizes": "192x192",
+      "type": "image/png"
+    },
+    {
+      "src": "icon-512.png",
+      "sizes": "512x512",
+      "type": "image/png"
+    }
   ]
 }

@@ -52,7 +52,8 @@ function acquireBrowserLock() {
 async function route(page, screen) {
   await page.evaluate(value => { location.hash = `/${value}`; }, screen);
   await page.waitForFunction(value => location.hash === `#/${value}`, screen);
-  await page.waitForFunction(value => document.querySelector('.page-heading h1')?.textContent === value[0].toUpperCase() + value.slice(1), screen);
+  const heading = ({ sandbox: 'Workbench', verify: 'Verify file', records: 'Records', receipts: 'Receipts', video: 'Video sync', help: 'Trust limits' })[screen];
+  await page.waitForFunction(value => document.querySelector('.commandbar h1')?.textContent === value, heading);
 }
 
 async function waitForResult(page, label) {
@@ -105,7 +106,7 @@ try {
   metrics.default800ElapsedMs = Math.round(performance.now() - initialStarted);
 
   await check('a: 800-record demo shows a real native verification with trusted receipt coverage', async () => {
-    assert.match(await page.locator('.result-top .eyebrow').textContent(), /C\+\+ \/ OpenSSL \/ WebAssembly/);
+    assert.match(await page.locator('.result-top .eyebrow').textContent(), /NATIVE C\+\+ \/ OPENSSL RESULT/);
     assert.match(await page.locator('#result-heading').textContent(), /Intact/);
     assert.match(await page.locator('.stats-grid').textContent(), /800 covered · 0 uncovered/);
     await route(page, 'records');
@@ -114,9 +115,9 @@ try {
     assert.equal(await page.locator('tbody tr').count(), 8);
     await route(page, 'sandbox');
     const text = await downloadText(page, 'Download text report');
-    assert.equal(text.filename, 'flightseal-verification-report.txt');
+    assert.equal(text.filename, 'hashwing-verification-report.txt');
     assert.match(text.contents, /Records checked: 800/);
-    const summary = await downloadText(page, 'Download JSON summary');
+    const summary = await downloadText(page, 'Download JSON');
     assert.equal(JSON.parse(summary.contents).nativeVerdict, 'intact');
     return { elapsedMs: metrics.default800ElapsedMs, receiptRows: 8, inspectedRecords: true, reportDownloads: 2 };
   });
@@ -170,7 +171,7 @@ try {
     await page.waitForFunction(() => document.querySelector('.first-failure')?.textContent.includes('bad-link'), null, { timeout: 15000 });
     assert.match(await page.locator('#result-heading').textContent(), /Tampered/);
     assert.match(await page.locator('.first-failure').textContent(), /bad-link/);
-    const summary = JSON.parse((await downloadText(page, 'Download JSON summary')).contents);
+    const summary = JSON.parse((await downloadText(page, 'Download JSON')).contents);
     assert.equal(summary.nativeVerdict, 'tampered');
     assert.equal(summary.overallVerdict, 'tampered');
     const text = await downloadText(page, 'Download text report');
@@ -189,7 +190,8 @@ try {
     await page.waitForFunction(() => document.querySelector('.first-failure')?.textContent.includes('bad-seq'), null, { timeout: 15000 });
     assert.match(await page.locator('.first-failure').textContent(), /bad-seq/);
     const report = await downloadText(page, 'Download text report');
-    assert.match(report.contents, /First failure: record 400, byte \d+ \[bad-seq\]/);
+    assert.match(report.contents, /First failure: Sequence mismatch \(bad-seq\) at record 400/);
+    assert.match(report.contents, /Expected: 400\nActual: 401/);
     return { nativeFailure: 'bad-seq', firstBadSequenceIndex: 400, tamperedTextReportDownloaded: true };
   });
 
@@ -223,16 +225,16 @@ try {
     await page.locator('#log-input').setInputFiles(join(DOCS, 'samples/intact.fseal'));
     await page.locator('#receipt-input').setInputFiles(join(DOCS, 'samples/flight.receipts'));
     await page.locator('#trusted-key').fill(readFileSync(join(DOCS, 'samples/pubkey.txt'), 'utf8').trim());
-    await page.getByRole('button', { name: 'Run C++ check' }).click();
+    await page.getByRole('button', { name: 'Run check' }).click();
     await waitForResult(page, 'Intact');
     await page.locator('#log-input').setInputFiles({ name: 'not-a-flight-log.fseal', mimeType: 'application/octet-stream', buffer: Buffer.from('this is not FlightSeal data\n') });
     await page.waitForFunction(() => !document.querySelector('#result-heading'));
     assert.equal(await page.locator('#result-heading').count(), 0, 'old intact result must disappear when new evidence is selected');
-    await page.getByRole('button', { name: 'Run C++ check' }).click();
+    await page.getByRole('button', { name: 'Run check' }).click();
     await waitForResult(page, 'Tampered');
     assert.match(await page.locator('.first-failure').textContent(), /bad-header/);
     await page.locator('#log-input').setInputFiles(join(DOCS, 'samples/intact.fseal'));
-    await page.getByRole('button', { name: 'Run C++ check' }).click();
+    await page.getByRole('button', { name: 'Run check' }).click();
     await waitForResult(page, 'Intact');
     return { stalePositiveCleared: true, nonLogResult: 'tampered/bad-header', validRetry: 'intact' };
   });
@@ -299,7 +301,7 @@ try {
   const notRun = requiredChecks.filter(name => !completed.has(name));
   const allPassed = records.length === requiredChecks.length && passed === requiredChecks.length && failed === 0 && notRun.length === 0 && runtimeErrors.length === 0 && !fatalError && cleanupErrors.length === 0;
   writeFileSync(evidence, JSON.stringify({
-    suite: 'FlightSeal console nine-case edge matrix',
+    suite: 'HashWing console nine-case edge matrix',
     baseUrl: url,
     requiredChecks,
     checks: records,

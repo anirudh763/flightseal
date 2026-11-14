@@ -16,3 +16,8 @@ dist/
 newweb/node_modules/
 newweb/.test-artifacts/
 .test-artifacts/
+# Local secrets/configuration. Keep the checked-in examples visible.
+.env
+.env.*
+!.env.example
+!docs/samples/telemetry-demo.ulg
