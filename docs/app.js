@@ -200,6 +200,8 @@ const NO_FILE = "No file chosen";
 // A file of the user's own replaces every input that came from a sample, so a sample's receipts and key are
 // never checked against the user's log (an honest log sealed with another key would look rewritten).
 function clearSampleInputs() {
+  ++state.run;
+  if (state.abort) state.abort.abort();
   state.sample = null;
   if (state.log && state.log.fromSample) clearLog();
   if (state.receipts && state.receipts.fromSample) clearReceipts();
@@ -217,7 +219,7 @@ function clearReceipts() {
   $("rec-name").textContent = NO_FILE;
   $("rec-clear").hidden = true;
 }
-async function setLog(blob, name, fromSample = false) {
+function setLog(blob, name, fromSample = false) {
   if (!fromSample) clearSampleInputs();
   state.log = { blob, name, fromSample };
   $("log-name").textContent = `${name}, ${n(blob.size)} bytes`;
@@ -226,13 +228,18 @@ async function setLog(blob, name, fromSample = false) {
 }
 async function setReceipts(blob, name, fromSample = false) {
   if (!fromSample) clearSampleInputs();
+  let receipts;
   if (blob.size > MAX_RECEIPTS_BYTES) {
-    state.receipts = { error: `${name} is ${n(blob.size)} bytes; a receipts file over 16 MB is not read here. Use the fseal CLI.`, name, fromSample };
+    receipts = { error: `${name} is ${n(blob.size)} bytes; a receipts file over 16 MB is not read here. Use the fseal CLI.`, name, fromSample };
   } else {
     // Decoded without stripping a byte-order mark, so a file the CLI rejects is rejected here too.
-    state.receipts = { text: decodeReceipts(new Uint8Array(await blob.arrayBuffer())), name, fromSample };
+    receipts = { text: decodeReceipts(new Uint8Array(await blob.arrayBuffer())), name, fromSample };
   }
-  $("rec-name").textContent = `${name}, ${n(blob.size)} bytes`;
+  applyReceipts(receipts, blob.size);
+}
+function applyReceipts(receipts, size) {
+  state.receipts = receipts;
+  $("rec-name").textContent = `${receipts.name}, ${n(size)} bytes`;
   $("rec-clear").hidden = false;
 }
 function setKey(text, fromSample = false) {
@@ -251,6 +258,7 @@ async function classify(file) {
 }
 
 async function addFiles(files) {
+  clearSampleInputs();
   try {
     for (const f of files) {
       const kind = await classify(f);
@@ -262,6 +270,7 @@ async function addFiles(files) {
       }
     }
   } catch (e) {
+    state.busy = false;
     showError(`Could not read the dropped file (a folder cannot be checked): ${e.message || e}`);
     return;
   }
@@ -291,9 +300,12 @@ async function loadSample(name) {
   try {
     const [log, rec, key] = await Promise.all([get(def.log), get(def.receipts), get(def.key)]);
     if (run !== state.run) return;
-    await setLog(log, `${def.log} (sample)`, true);
-    await setReceipts(rec, `${def.receipts} (sample)`, true);
-    setKey(await key.text(), true);
+    if (rec.size > MAX_RECEIPTS_BYTES) throw new Error("the sample receipts exceed the 16 MB limit");
+    const [receiptBytes, keyText] = await Promise.all([rec.arrayBuffer(), key.text()]);
+    if (run !== state.run) return;
+    setLog(log, `${def.log} (sample)`, true);
+    applyReceipts({ text: decodeReceipts(new Uint8Array(receiptBytes)), name: `${def.receipts} (sample)`, fromSample: true }, rec.size);
+    setKey(keyText, true);
     $("log-file").value = "";
     $("rec-file").value = "";
     state.page = 0;

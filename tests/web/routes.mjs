@@ -139,6 +139,48 @@ try {
     await c.close();
   });
 
+  await check("a user file supersedes a sample whose receipt read is still pending", async () => {
+    const c = await browser.newContext({ serviceWorkers: "block" });
+    const p = await c.newPage();
+    const receiptSize = readFileSync(new URL("../../docs/samples/flight.receipts", import.meta.url)).length;
+    await p.addInitScript((size) => {
+      const read = Blob.prototype.arrayBuffer;
+      Blob.prototype.arrayBuffer = function () {
+        if (this.size === size && !window.__sampleReadReleased) {
+          window.__receiptReadHeld = true;
+          return new Promise((resolve) => {
+            window.__releaseReceiptRead = async () => {
+              window.__sampleReadReleased = true;
+              resolve(await read.call(this));
+            };
+          });
+        }
+        return read.call(this);
+      };
+    }, receiptSize);
+    await p.goto(url + "#/findings?sample=intact");
+    await p.waitForFunction(() => window.__receiptReadHeld, null, T);
+    await p.click('nav a[href="#/verify"]');
+    await p.setInputFiles("#log-file", { name: "own-px4.fseal", mimeType: "application/octet-stream",
+      buffer: readFileSync(new URL("../../docs/samples/px4-intact.fseal", import.meta.url)) });
+    await p.waitForFunction(() => document.getElementById("run-status").textContent.includes("Chain intact; no receipts checked"), null, T);
+    await p.evaluate(async () => {
+      await window.__releaseReceiptRead();
+      // The sample's read continuations finish before the next browser task.
+      await new Promise((resolve) => {
+        const ch = new MessageChannel();
+        ch.port1.onmessage = () => { ch.port1.close(); ch.port2.close(); resolve(); };
+        ch.port2.postMessage(0);
+      });
+    });
+    assert.match(await p.textContent("#log-name"), /^own-px4.fseal,/);
+    assert.equal(await p.textContent("#rec-name"), "No file chosen");
+    assert.equal(await p.inputValue("#pubkey"), "");
+    assert.match(await p.textContent("#run-status"), /Chain intact; no receipts checked/);
+    assert.doesNotMatch(p.url(), /sample=/);
+    await c.close();
+  });
+
   await check("Back and Forward restore the screen and its state (selected record, form text)", async () => {
     const c = await browser.newContext({ viewport: { width: 1280, height: 900 } });
     const p = await c.newPage();
