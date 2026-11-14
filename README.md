@@ -68,7 +68,7 @@ first failure and its record, then download a text or JSON summary. No account o
 ![FlightSeal console showing the checked sample, receipt coverage and local sandbox actions](docs/screenshots/console-1440.png)
 
 The React/Tailwind console calls the same C++/OpenSSL core compiled to WebAssembly. It also checks its record index
-against the existing independent JavaScript reader. Verify, Records, Receipts, Video and Trust help have separate
+against the existing independent JavaScript reader. Verify, Records, Receipts, Video sync and Trust help have separate
 addresses. The optional full PX4 example contains **64,542 converted records and 13 receipts** and downloads
 28.9 MiB only when requested; [provenance](docs/samples/px4-full-provenance.json) records its source and transforms.
 The bundled key verifies this demo artifact, not the original flight identity or events before sealing.
@@ -96,7 +96,7 @@ Open `http://127.0.0.1:4173/flightseal/console/`. Browser regression tests are `
 after installing Playwright Chromium. The original verifier below and its links remain available.
 
 Local [FFmpeg video tools](tools/video/README.md) inspect actual codecs and convert a bounded local video to a new
-H.264/AAC MP4. The browser Video screen checks playback metadata and warns when it cannot identify or play a codec;
+H.264/AAC MP4. The browser Video sync screen checks playback metadata, aligns a selected record with a manual offset, and warns when it cannot identify or play a codec;
 it does not upload or convert media. The [AVFoundation helper](native/README-video.md) was compiled and its local-URL
 guards exercised on macOS; there is no Xcode/iOS app target in this repository.
 

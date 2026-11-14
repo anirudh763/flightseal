@@ -15,3 +15,4 @@ build-asan/
 dist/
 newweb/node_modules/
 newweb/.test-artifacts/
+.test-artifacts/

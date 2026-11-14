@@ -109,3 +109,16 @@ The browser inspects local playback metadata and reports unknown codecs honestly
 limits. They expose no server route and are not invoked by the static host. Run untrusted media in the documented
 restricted container. `native/VideoAssetInspector.swift` typechecks against the local macOS SDK; there is no iOS
 app target, App Store package, or verified iOS build in this repository.
+
+## Enterprise console acceptance (2026-11-14)
+
+The console uses Lucide navigation without decorative step numbers and a collapsible text report. Video sync is an
+HTML5 playback aid: it subtracts actual indexed flight timestamps, then applies a manual offset. A generated H.264
+clip was actually decoded and sought across record navigation; metadata and playback were not mocked in the final
+regression. This does not prove physical association or authenticate video capture time.
+
+The native and browser nine-case matrices cover both PX4 sizes, mutations, torn-write/receipt semantics, reversed
+timestamps, malformed uploads, and native custom sealing. A valid reversed timestamp remains an intact chain;
+chronology and receipt completeness are separate evidence. UI responsiveness observations are workload-specific,
+not an uptime/latency guarantee. Pricing/notary panels show an actual local receipt and explicitly unavailable cloud
+services. No private pilot email endpoint or AWS signer is configured.

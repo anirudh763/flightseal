@@ -15,7 +15,7 @@ ENV FSEAL_BIN=/tmp/fseal-build/fseal
 RUN ctest --test-dir /tmp/fseal-build --output-on-failure \
     && python -m pytest -q \
     && node --test tests/web/verifier.test.mjs tests/web/copy.test.mjs \
-    && node --test tests/wasm/bridge.test.mjs \
+    && node --test tests/wasm/bridge.test.mjs tests/wasm/enterprise-edge.test.mjs \
     && python tools/verify_wasm_provenance.py \
     && npm --prefix newweb ci \
     && npm --prefix newweb run build \

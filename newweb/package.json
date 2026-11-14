@@ -5,11 +5,12 @@
   "type": "module",
   "scripts": {
     "dev": "vite --host 127.0.0.1",
-    "build": "vite build && python3 ../tools/refresh_console_cache.py",
+    "build": "vite build && node scripts/copy-notices.mjs && python3 ../tools/refresh_console_cache.py",
     "preview": "node ../tests/web/serve.mjs 4173 /flightseal",
     "test:browser": "node tests/console.mjs"
   },
   "dependencies": {
+    "lucide-react": "1.73.0",
     "react": "19.3.1",
     "react-dom": "19.3.1"
   },

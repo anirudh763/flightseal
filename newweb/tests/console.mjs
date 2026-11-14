@@ -36,7 +36,8 @@ async function loadFreshDemo(page) {
 async function route(page, screen) {
   await page.evaluate((s) => { location.hash = `/${s}`; }, screen);
   await page.waitForFunction((s) => location.hash === `#/${s}`, screen);
-  await page.waitForFunction((s) => document.querySelector('.page-heading h1')?.textContent === s[0].toUpperCase() + s.slice(1), screen);
+  const heading = screen === 'video' ? 'Video sync' : screen[0].toUpperCase() + screen.slice(1);
+  await page.waitForFunction((expected) => document.querySelector('.page-heading h1')?.textContent === expected, heading);
 }
 async function auditAxe(page, label) {
   await page.evaluate(AXE);
@@ -62,6 +63,9 @@ try {
     assert.ok(metrics.firstVisit800DemoMs < 3000, `first included demo took ${metrics.firstVisit800DemoMs}ms`);
     assert.match(await page.locator('.result-top .eyebrow').textContent(), /C\+\+ \/ OpenSSL \/ WebAssembly/);
     assert.match(await page.locator('#result-heading').textContent(), /Intact/);
+    const verdictSummary = await page.locator('.result-top').innerText();
+    assert.equal((verdictSummary.match(/\bIntact\b/g) || []).length, 1, verdictSummary);
+    assert.match(verdictSummary, /800 records checked; 800 receipt-covered; 0 uncovered/);
     await route(page, 'receipts');
     assert.equal(await page.locator('tbody tr').count(), 8);
     assert.equal(runtimeErrors.length, 0, runtimeErrors.join('\n'));
@@ -100,7 +104,7 @@ try {
     await page.waitForFunction(() => document.querySelector('.result-stat')?.textContent.includes('64,542'), null, { timeout: 60000 });
     metrics.fullPX4NativeAndIndexMs = Math.round(performance.now() - start);
     assert.match(await page.locator('#result-heading').textContent(), /Intact/);
-    assert.match(await page.locator('.hero-fact').textContent(), /28\.\d+ MiB/);
+    assert.match(await page.locator('.sample-current').textContent(), /28\.\d+ MiB/);
     assert.match(await page.locator('.sample-note').textContent(), /selected decoded records/);
     await route(page, 'receipts');
     assert.equal(await page.locator('tbody tr').count(), 13);
@@ -110,7 +114,7 @@ try {
 
   await check('text and JSON downloads are bounded summaries with no payload and text matches display', async () => {
     await loadFreshDemo(page);
-    await page.locator('.report-details summary').click();
+    await page.getByText('Text verification report', { exact: true }).click();
     const expected = await page.locator('.report-text').textContent();
     const [textDownload] = await Promise.all([page.waitForEvent('download'), page.getByRole('button', { name: 'Download text report' }).click()]);
     assert.equal(textDownload.suggestedFilename(), 'flightseal-verification-report.txt');
@@ -181,7 +185,10 @@ try {
     await page.locator('#trusted-key').fill('');
     await page.getByRole('button', { name: 'Run C++ check' }).click(); await waitResult(page, 'Unverified');
     assert.match(await page.locator('.operation-status').textContent(), /trusted public key/);
-    await page.locator('.report-details summary').click();
+    const evidenceDifference = await page.locator('.result-top').innerText();
+    assert.match(evidenceDifference, /Native chain: Intact/);
+    assert.match(evidenceDifference, /Application evidence: Receipt signatures unchecked: trusted key missing/);
+    await page.getByText('Text verification report', { exact: true }).click();
     assert.match(await page.locator('.report-text').textContent(), /Native chain result: INTACT/);
     assert.match(await page.locator('.report-text').textContent(), /Overall evidence status: UNVERIFIED/);
     const [unverifiedDownload] = await Promise.all([page.waitForEvent('download'), page.getByRole('button', { name: 'Download JSON summary' }).click()]);
@@ -247,11 +254,29 @@ try {
     assert.equal(runtimeErrors.length, 0, runtimeErrors.join('\n'));
   });
 
-  await check('video screen reports local metadata and unknown codec honestly', async () => {
+  await check('video sync decodes real H.264, preserves it across record navigation and seeks native timestamps', async () => {
+    await route(page, 'sandbox'); await loadFreshDemo(page);
+    await route(page, 'records');
+    await page.getByRole('button', { name: 'First', exact: true }).click();
+    await page.locator('.record-list button').first().click();
     await route(page, 'video');
-    await page.locator('#video-input').setInputFiles({ name: 'local-sample.mp4', mimeType: 'video/mp4', buffer: Buffer.from('not a real video') });
-    await page.waitForFunction(() => document.querySelector('.video-meta')?.textContent.includes('Codec identification is unknown'), null, { timeout: 10000 });
-    assert.match(await page.locator('.video-meta').textContent(), /local-sample\.mp4/);
+    await page.locator('#video-input').setInputFiles(join(HERE, 'fixtures/synthetic-sync.mp4'));
+    await page.waitForFunction(() => document.querySelector('video')?.duration === 10 && document.querySelector('video').videoWidth === 160);
+    await page.locator('#video-offset').fill('3.5');
+    await page.getByRole('button', { name: 'Sync to selected record' }).click();
+    await page.waitForFunction(() => !document.querySelector('video').seeking && Math.abs(document.querySelector('video').currentTime - 3.5) < 0.01);
+    assert.match(await page.locator('.video-meta').textContent(), /Codec identification is unknown/);
+    await route(page, 'records');
+    await page.locator('.record-list button').nth(1).click();
+    await page.waitForFunction(() => document.querySelector('#record-detail-heading')?.textContent === 'Record 1');
+    await route(page, 'video');
+    await page.waitForFunction(() => document.querySelector('video')?.duration === 10 && !!document.querySelector('video').currentSrc, null, { timeout: 3000 });
+    await page.getByRole('button', { name: 'Sync to selected record' }).click();
+    await page.waitForFunction(() => !document.querySelector('video').seeking && Math.abs(document.querySelector('video').currentTime - 3.51) < 0.01);
+    assert.match(await page.locator('.video-meta').textContent(), /positioned at 3.510 seconds for record 1/);
+    await page.locator('#video-offset').fill('200');
+    await page.getByRole('button', { name: 'Sync to selected record' }).click();
+    assert.match(await page.locator('.video-meta').textContent(), /outside this video/);
   });
 
   await check('320/768/1440 layouts have no page overflow and pass axe; keyboard skip link works', async () => {
@@ -261,6 +286,8 @@ try {
       await page.waitForTimeout(80);
       const dimensions = await page.evaluate(() => ({ doc: document.documentElement.scrollWidth, client: document.documentElement.clientWidth }));
       assert.ok(dimensions.doc <= dimensions.client + 1, `${width}px overflow: ${JSON.stringify(dimensions)}`);
+      const targets = await page.locator('.sample-toolbar button').evaluateAll((elements) => elements.map((element) => ({ name: element.textContent, width: element.getBoundingClientRect().width, height: element.getBoundingClientRect().height })));
+      assert.ok(targets.every((target) => target.width >= 44 && target.height >= 44), `${width}px sample targets: ${JSON.stringify(targets)}`);
       await auditAxe(page, `${width}px sandbox`);
       await page.screenshot({ path: join(EVIDENCE, `react-console-${width}.png`), fullPage: true });
     }
@@ -320,10 +347,15 @@ try {
   });
 
   await check('team pricing dialog is keyboard accessible and does not pretend to collect email or sell a plan', async () => {
+    await page.goto(url); await waitResult(page, 'Intact');
     await page.getByRole('button', { name: 'Team options' }).click({ timeout: 1500 });
-    const dialog = page.getByRole('dialog', { name: 'Team workflow options' });
-    assert.match(await dialog.textContent(), /\$49\/month/);
-    assert.match(await dialog.textContent(), /not available/);
+    const dialog = page.getByRole('dialog', { name: 'Commercial fleet and cloud notary' });
+    assert.match(await dialog.textContent(), /Starter · proposed \$49\/month/);
+    assert.match(await dialog.textContent(), /Fleet · proposed \$299\/month/);
+    assert.match(await dialog.textContent(), /both unavailable/);
+    assert.match(await dialog.textContent(), /AWS archive\/notary not connected/);
+    assert.match(await dialog.locator('.receipt-preview').textContent(), /Native check/);
+    assert.ok(await dialog.locator('.receipt-preview dd code').count() >= 2, 'preview must show the actual receipt head and key');
     assert.equal(await dialog.locator('input, form').count(), 0);
     assert.match(await dialog.getByRole('link', { name: 'Share team requirements' }).getAttribute('href'), /^https:\/\/github\.com\/anirudh763\/flightseal\/issues\/new\?/);
     await page.keyboard.press('Escape');

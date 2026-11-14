@@ -1,7 +1,7 @@
 // FlightSeal verifier service worker: keeps the page, its scripts and the samples so the verifier opens offline
 // after one visit. Network first, so a new version is used as soon as it is online; the cache is the fallback.
 // Files dropped on the page are never sent anywhere and never cached. Bump VERSION when a cached file or the list changes.
-const VERSION = "0.2.0-native-console-1";
+const VERSION = "0.2.0-enterprise-console-2";
 const CACHE = `flightseal-${VERSION}`;
 const FILES = [
   "./", "index.html", "ui.css", "app.css", "theme.js", "app.js", "verifier.js", "scan-worker.js",

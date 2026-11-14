@@ -90,7 +90,7 @@ jobs:
           python3 tools/verify_wasm_provenance.py
           scripts/build_wasm.sh
       - name: Test the compiled native bridge
-        run: node --test tests/wasm/bridge.test.mjs
+        run: node --test tests/wasm/bridge.test.mjs tests/wasm/enterprise-edge.test.mjs
       - name: Install browser dependencies
         working-directory: tests/web
         run: |
@@ -106,6 +106,17 @@ jobs:
       - name: Console flows, mobile layouts and accessibility
         working-directory: newweb
         run: npm run test:browser
+      - name: Nine real-engine edge cases and tampered report exports
+        run: node newweb/tests/edge-matrix.mjs
+      - name: Preserve the browser and native edge-case proof
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: flightseal-enterprise-qa
+          path: |
+            .test-artifacts/
+            newweb/.test-artifacts/
+          if-no-files-found: warn
 
   docker:
     runs-on: ubuntu-24.04
