@@ -1,25 +1,21 @@
-/* Shared UI base for Anirudh's tools, round 4 light system (rebuild.md). Light by default, also when the OS prefers
-   dark; dark only after an explicit choice (html[data-theme=dark], set by theme.js). Per-app primary: FlightSeal
-   #174b5a. WCAG 2.2 AA: text >= 4.5:1, borders/focus >= 3:1. */
-@font-face{font-family:"Atkinson Hyperlegible";font-weight:400;font-display:swap;src:url(atkinson-hyperlegible-latin-400-normal.woff2) format("woff2")}
-@font-face{font-family:"Atkinson Hyperlegible";font-weight:700;font-display:swap;src:url(atkinson-hyperlegible-latin-700-normal.woff2) format("woff2")}
+/* FlightSeal evidence folio. Light is the default; only an explicit choice enables dark. */
 :root{
-  --canvas:#f7f8fa; --surface:#ffffff; --rail:#f0f3f5; --ink:#152536; --muted:#4b5e6f; --input:#748694; --divider:#dce2e8;
-  --primary:#174b5a; --primary-fg:#ffffff; --primary-subtle:#e3eef1;
+  --canvas:#eff7f2; --surface:#ffffff; --rail:#eff7f2; --ink:#19362b; --muted:#4b6358; --input:#688173; --divider:#ccdcd1;
+  --primary:#195944; --primary-fg:#ffffff; --primary-subtle:#deeee4;
   --ok:#12633c; --ok-subtle:#e6f2eb; --bad:#b42318; --bad-subtle:#fcebe9; --warn:#925400; --warn-subtle:#fdf3e2;
   /* names the app code already uses */
-  --bg:var(--surface); --bg-subtle:#f2f5f7; --bg-inset:#e8edf1; --fg:var(--ink); --fg-muted:var(--muted);
+  --bg:var(--surface); --bg-subtle:#f1f7f3; --bg-inset:#e2eee6; --fg:var(--ink); --fg-muted:var(--muted);
   --border:var(--divider); --border-strong:var(--input); --accent:var(--primary); --accent-fg:var(--primary-fg);
-  --accent-subtle:var(--primary-subtle); --focus:#174b5a;
-  --radius:7px; --font:"Atkinson Hyperlegible",system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;
+  --accent-subtle:var(--primary-subtle); --focus:#195944;
+  --radius:6px; --font:system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;
   --mono:ui-monospace,SFMono-Regular,Menlo,Consolas,"Liberation Mono",monospace;
   color-scheme:light;
 }
 :root[data-theme=dark]{
-  --canvas:#0f171f; --surface:#16212b; --rail:#121c25; --ink:#e4ebf1; --muted:#a7b5c2; --input:#8696a4; --divider:#2d3c49;
-  --primary:#8ccbd9; --primary-fg:#0f171f; --primary-subtle:#1c3640;
+  --canvas:#10251c; --surface:#172f24; --rail:#10251c; --ink:#e5f1e9; --muted:#acc5b5; --input:#88a593; --divider:#3a5646;
+  --primary:#9cd6b7; --primary-fg:#10251c; --primary-subtle:#254b37;
   --ok:#73d29e; --ok-subtle:#15301f; --bad:#ff9a8f; --bad-subtle:#3a1e1c; --warn:#ebb65e; --warn-subtle:#33280f;
-  --bg-subtle:#1c2833; --bg-inset:#0c131a; --focus:#8ccbd9;
+  --bg-subtle:#1d392b; --bg-inset:#0c1d15; --focus:#9cd6b7;
   color-scheme:dark;
 }
 *,*::before,*::after{box-sizing:border-box}
@@ -31,9 +27,9 @@ a{color:var(--primary);text-underline-offset:2px} :focus-visible{outline:2px sol
 .btn:hover{background:var(--bg-subtle)} .btn:active{background:var(--bg-inset)}
 .btn.primary{background:var(--primary);border-color:var(--primary);color:var(--primary-fg)}
 .btn.primary:hover{filter:brightness(.92)} .btn.primary:active{filter:brightness(.88)}
-.btn[disabled]{opacity:.55;cursor:not-allowed}
+.btn[disabled]{background:var(--bg-subtle);color:var(--muted);border-style:dashed;cursor:not-allowed}
 .input,select,textarea{font:inherit;color:var(--ink);background:var(--surface);border:1px solid var(--input);border-radius:var(--radius);padding:8px 12px;min-height:44px}
-.label{display:inline-flex;align-items:center;gap:4px;padding:0 8px;border:1px solid currentColor;border-radius:2em;font-size:.875rem;line-height:22px}
+.label{display:inline-flex;align-items:center;gap:4px;padding:0 8px;border:1px solid currentColor;border-radius:3px;font-size:.875rem;line-height:22px}
 .label.ok{color:var(--ok)} .label.bad{color:var(--bad)} .label.warn{color:var(--warn)}
 table{border-collapse:collapse;width:100%} th,td{text-align:left;padding:8px 12px;border-bottom:1px solid var(--divider);vertical-align:top}
 th{font-size:.875rem;color:var(--muted);font-weight:700;background:var(--bg-subtle)}

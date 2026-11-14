@@ -8,7 +8,7 @@
 <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; font-src 'self'; connect-src 'self'; object-src 'none'; base-uri 'none'; form-action 'none'">
 <link rel="icon" href="favicon.svg" type="image/svg+xml">
 <link rel="manifest" href="manifest.webmanifest">
-<meta name="theme-color" content="#f7f8fa">
+<meta name="theme-color" content="#eff7f2">
 <link rel="stylesheet" href="ui.css">
 <link rel="stylesheet" href="app.css">
 <script src="theme.js"></script>
@@ -21,16 +21,16 @@
     <div class="rail-top">
       <div class="wordmark">
         <a class="wm" href="#/verify">FlightSeal</a>
-        <p class="purpose">Check a sealed flight log</p>
+        <p class="purpose">Flight log evidence</p>
       </div>
       <button type="button" class="btn" id="menu-close">Close menu</button>
     </div>
     <p class="nav-group" id="nav-work">Work</p>
     <ul class="nav-list" aria-labelledby="nav-work">
-      <li><a href="#/verify">Verify a file</a></li>
-      <li><a href="#/findings">Findings</a></li>
-      <li><a href="#/records">Records</a></li>
-      <li><a href="#/receipts">Receipts</a></li>
+      <li><a href="#/verify"><span class="nav-index" aria-hidden="true">01</span> Verify a file</a></li>
+      <li><a href="#/findings"><span class="nav-index" aria-hidden="true">02</span> Findings</a></li>
+      <li><a href="#/records"><span class="nav-index" aria-hidden="true">03</span> Records</a></li>
+      <li><a href="#/receipts"><span class="nav-index" aria-hidden="true">04</span> Receipts</a></li>
     </ul>
     <p class="nav-group" id="nav-learn">Learn</p>
     <ul class="nav-list" aria-labelledby="nav-learn">
@@ -46,9 +46,11 @@
 
   <div class="frame" id="frame">
     <header class="loc">
+      <a class="mobile-brand" href="#/verify">FlightSeal</a>
       <button type="button" class="btn" id="menu-btn" aria-expanded="false" aria-controls="rail">Menu</button>
       <a class="back" id="back" href="#/verify" hidden><span aria-hidden="true">←</span> Back</a>
       <p class="crumb" id="crumb">FlightSeal / Verify a file</p>
+      <p class="local-context">Local file verification <span aria-hidden="true">·</span> No uploads</p>
     </header>
 
     <main id="content">
@@ -68,7 +70,7 @@
           <div class="panel" id="dropzone">
             <ol class="steps">
               <li class="step">
-                <span class="step-n" aria-hidden="true">1</span>
+                <span class="step-n" aria-hidden="true">01</span>
                 <div class="field">
                   <label for="log-file" id="log-label">Sealed log <span class="muted">(.fseal)</span></label>
                   <div class="file-row">
@@ -81,7 +83,7 @@
                 </div>
               </li>
               <li class="step">
-                <span class="step-n" aria-hidden="true">2</span>
+                <span class="step-n" aria-hidden="true">02</span>
                 <div class="field">
                   <label for="rec-file" id="rec-label">Receipts <span class="muted">(.receipts, optional)</span></label>
                   <div class="file-row">
@@ -94,7 +96,7 @@
                 </div>
               </li>
               <li class="step">
-                <span class="step-n" aria-hidden="true">3</span>
+                <span class="step-n" aria-hidden="true">03</span>
                 <div class="field">
                   <label for="pubkey">Public key you trust <span class="muted">(64 hex digits, needed with receipts)</span></label>
                   <input type="text" id="pubkey" class="input mono" spellcheck="false" autocomplete="off" aria-describedby="pubkey-help">
@@ -105,11 +107,14 @@
             <p class="drop-hint muted">You can also drop the log and receipts anywhere on this page.</p>
             <div class="actions">
               <button type="button" class="btn primary" id="show-findings">Show findings</button>
+              <p class="trust-reminder">Chain integrity is not data authenticity.</p>
             </div>
           </div>
-          <aside class="panel status-panel" aria-labelledby="run-h">
-            <h2 id="run-h">This check</h2>
-            <div id="run-status" role="status" aria-live="polite" aria-atomic="true"><p>No file checked yet.</p></div>
+          <aside class="status-panel" aria-labelledby="run-h">
+            <div class="check-state">
+              <h2 id="run-h">This check</h2>
+              <div id="run-status" role="status" aria-live="polite" aria-atomic="true"><p>No file checked yet.</p></div>
+            </div>
             <p class="muted">No file at hand? <a href="#/examples">Open an example</a>: a synthetic flight or a real PX4 flight log, each sealed with receipts.</p>
           </aside>
         </div>
@@ -122,6 +127,7 @@
         <div class="empty" data-empty></div>
         <div id="findings-body" hidden>
           <div class="verdict" id="verdict" tabindex="-1">
+            <p class="section-label"><span aria-hidden="true">01</span> Check conclusion</p>
             <div id="status" role="status" aria-live="polite" aria-atomic="true">
               <p class="verdict-line" id="verdict-line"></p>
             </div>
@@ -129,12 +135,12 @@
           </div>
           <div class="findings-cols" id="findings-cols">
             <div class="panel next">
-              <h2 class="panel-h" id="next-h">Where to look first</h2>
+              <div class="panel-h next-heading"><span class="section-number" aria-hidden="true">02</span><h2 id="next-h">Where to look first</h2></div>
               <div class="panel-b">
                 <p id="next-text"></p>
+                <div class="actions" id="next-actions"></div>
                 <dl class="facts" id="facts"></dl>
                 <div id="break"></div>
-                <div class="actions" id="next-actions"></div>
               </div>
             </div>
             <aside class="interp" aria-labelledby="interp-h">
@@ -145,7 +151,7 @@
             </aside>
           </div>
           <section class="panel chain-panel" aria-labelledby="chain-h" id="chain-panel">
-            <h2 class="panel-h" id="chain-h">Evidence chain</h2>
+            <h2 class="panel-h" id="chain-h"><span class="section-number" aria-hidden="true">03</span> Evidence chain</h2>
             <div class="panel-b">
               <p class="muted" id="chain-legend"></p>
               <ol class="chain summary" id="chain-summary"></ol>
@@ -257,7 +263,7 @@
           <li>After a record length that runs past the end of the file, at most 16 possible starts of the next record get a full checksum (the same cap as the C++ and Python readers), so a crafted file cannot make the check slow.</li>
           <li>Verification runs in a background worker; Cancel stops it while the log is scanned and while receipt signatures are checked, and no verdict is shown after Cancel.</li>
         </ul>
-        <p class="muted small-print">The verifier is plain JavaScript using your browser's WebCrypto for SHA-256 and Ed25519; its tests require it to print the same report as the C++ CLI on every attack the project tests (when the browser can check signatures). Matching the CLI cannot catch a mistake both share. Built with AI assistance (Claude); see the README. Font: Atkinson Hyperlegible, <a href="OFL-atkinson-hyperlegible.txt">SIL Open Font License 1.1</a>.</p>
+        <p class="muted small-print">The verifier is plain JavaScript using your browser's WebCrypto for SHA-256 and Ed25519; its tests require it to print the same report as the C++ CLI on every attack the project tests (when the browser can check signatures). Matching the CLI cannot catch a mistake both share. Built with AI assistance (Claude); see the README. Type uses your system's sans-serif and monospace fonts.</p>
       </section>
 
       <!-- Examples -->
