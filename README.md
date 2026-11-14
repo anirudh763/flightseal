@@ -66,7 +66,7 @@ the public key you trust. It runs in the page with the browser's WebCrypto (SHA-
 locally and never uploaded. After one visit it also opens offline (a service worker keeps the page and the samples;
 files you check are never cached), and it can be installed as an app from the browser menu.
 
-![Findings for the tampered example: the verdict, where to look first, and the evidence chain with the covered prefix, the break at record 150 and the receipts attached where they were issued](docs/screenshots/findings-1440.png)
+![Findings for the tampered example: the first chain break at record 150, receipt coverage and the limits of the trust conclusion](docs/screenshots/findings-1440.png)
 
 - Screens, each with its own address so a view can be shared: **Verify a file** (the log, optional receipts, the
   key you trust), **Findings** (verdict, coverage and one next action), **Records** (every record as a link in the
