@@ -149,7 +149,7 @@ sequence numbers and `verify` reports timestamps that go backwards. The full lis
 
 Limits of this project:
 
-- The Python PX4 converter seals selected decoded ULog records, sorted by timestamp. The native raw ULog importer preserves source bytes and a source digest in chunk envelopes, so integrity localization is at sealed-chunk granularity. Neither path authenticates events before sealing. The ULog format is described in the [PX4 ULog specification](https://docs.px4.io/main/en/dev_log/ulog_file_format).
+- The PX4 converter seals selected decoded ULog records, sorted by timestamp, after the log was downloaded; it does not preserve or authenticate every byte of the original .ulg file, or anything that happened before sealing. This describes the Python converter; the separate native raw ULog importer preserves source bytes and a source digest in chunk envelopes, so integrity localization is at sealed-chunk granularity. Neither path authenticates events before sealing. The ULog format is described in the [PX4 ULog specification](https://docs.px4.io/main/en/dev_log/ulog_file_format).
 - Keeping receipts with a separate witness is an operational assumption: the CLI writes receipts to a local file, and the protection holds only if someone other than the log's holder keeps a copy.
 - The tests use one real PX4 flight log (a public pyulog fixture); the browser examples are a synthetic 800-record flight and 2,422 records selected from that PX4 log, with no position or GPS topics.
 - HashWing is a narrow, documented workflow to support experiments. It is not proof of safe flight or of an accident's cause, and it is not a reproduction of RVFuzzer or PGFuzz. No user or field validation has been done.

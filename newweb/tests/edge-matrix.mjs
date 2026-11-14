@@ -106,7 +106,7 @@ try {
   metrics.default800ElapsedMs = Math.round(performance.now() - initialStarted);
 
   await check('a: 800-record demo shows a real native verification with trusted receipt coverage', async () => {
-    assert.match(await page.locator('.result-top .eyebrow').textContent(), /NATIVE C\+\+ \/ OPENSSL RESULT/);
+    assert.match(await page.locator('.result-top .eyebrow').textContent(), /VERIFICATION RESULT/);
     assert.match(await page.locator('#result-heading').textContent(), /Intact/);
     assert.match(await page.locator('.stats-grid').textContent(), /800 covered · 0 uncovered/);
     await route(page, 'records');

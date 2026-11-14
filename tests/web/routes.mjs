@@ -122,7 +122,16 @@ try {
         });
         const overflow = nodes.filter((element) => element.right > viewport + 1 && element.overflowAncestors.length === 0)
           .sort((a, b) => b.right - a.right).slice(0, 8);
-        return { viewport, page: document.documentElement.scrollWidth, heading: getComputedStyle(document.querySelector('h1')).fontSize, overflow };
+        const textOverflow = [];
+        const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT);
+        while (walker.nextNode()) {
+          const node = walker.currentNode;
+          if (!node.textContent.trim()) continue;
+          const range = document.createRange(); range.selectNodeContents(node);
+          const rect = range.getBoundingClientRect();
+          if (rect.right > viewport + 1) textOverflow.push({ text: node.textContent.trim().slice(0, 48), parent: node.parentElement.className, right: Math.round(rect.right) });
+        }
+        return { viewport, page: document.documentElement.scrollWidth, heading: getComputedStyle(document.querySelector('h1')).fontSize, overflow, textOverflow: textOverflow.slice(0, 10) };
       });
       assert.ok(result.page <= result.viewport + 1, `200% text sizing overflowed at 320px: ${JSON.stringify(result)}`);
       assert.ok(parseFloat(result.heading) >= 27, `200% text sizing did not enlarge the heading: ${JSON.stringify(result)}`);
