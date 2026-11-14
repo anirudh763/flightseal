@@ -88,10 +88,11 @@
                   <label for="rec-file" id="rec-label">Receipts <span class="muted">(.receipts, optional)</span></label>
                   <div class="file-row">
                     <input type="file" id="rec-file" hidden>
-                    <button type="button" class="btn" id="rec-choose" aria-labelledby="rec-choose rec-label" aria-describedby="rec-name rec-help">Choose file</button>
+                    <button type="button" class="btn" id="rec-choose" aria-labelledby="rec-choose rec-label" aria-describedby="rec-name rec-error rec-help">Choose file</button>
                     <span class="file-name mono" id="rec-name">No file chosen</span>
                     <button type="button" class="btn" id="rec-clear" hidden>Remove</button>
                   </div>
+                  <p class="field-error" id="rec-error" role="status" aria-live="polite"></p>
                   <p class="help" id="rec-help">Receipts catch a shortened or rebuilt log. They count only if someone other than the log's holder kept them: a separate witness.</p>
                 </div>
               </li>
@@ -162,6 +163,7 @@
             <summary>Report as text (same format as <code>fseal verify</code>)</summary>
             <pre class="report mono" id="report" tabindex="0" aria-label="Report as text"></pre>
             <button type="button" class="btn" id="copy-report">Copy report</button>
+            <button type="button" class="btn" id="download-report">Download report</button>
             <span class="muted" id="copy-status" role="status"></span>
           </details>
         </div>

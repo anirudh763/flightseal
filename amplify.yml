@@ -1,0 +1,19 @@
+version: 1
+frontend:
+  phases:
+    preBuild:
+      commands:
+        - nvm use 24
+        - npm --prefix newweb ci
+    build:
+      commands:
+        - npm --prefix newweb run build
+        - python3 tools/verify_wasm_provenance.py
+        - python3 tools/package_static.py
+  artifacts:
+    baseDirectory: dist/static
+    files:
+      - '**/*'
+  cache:
+    paths:
+      - newweb/node_modules/**/*

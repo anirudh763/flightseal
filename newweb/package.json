@@ -1,0 +1,24 @@
+{
+  "name": "flightseal-console",
+  "private": true,
+  "version": "1.0.0",
+  "type": "module",
+  "scripts": {
+    "dev": "vite --host 127.0.0.1",
+    "build": "vite build && python3 ../tools/refresh_console_cache.py",
+    "preview": "node ../tests/web/serve.mjs 4173 /flightseal",
+    "test:browser": "node tests/console.mjs"
+  },
+  "dependencies": {
+    "react": "19.3.1",
+    "react-dom": "19.3.1"
+  },
+  "devDependencies": {
+    "@tailwindcss/vite": "4.3.5",
+    "@vitejs/plugin-react": "6.3.0",
+    "axe-core": "4.14.0",
+    "playwright": "1.63.0",
+    "tailwindcss": "4.3.5",
+    "vite": "8.3.8"
+  }
+}
