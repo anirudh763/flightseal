@@ -12,6 +12,7 @@ from pathlib import Path
 import pytest
 
 from conftest import ROOT
+from fseal_py import scan
 
 LINES = "".join(f"{1000 * (i + 1)}\t{{\"z\":{i}}}\n" for i in range(6))
 
@@ -24,8 +25,11 @@ def fault_shim(fseal_bin):
     return str(path)
 
 
-def run_faulty(shim, spec, *args, stdin=None):
+def run_faulty(shim, spec, *args, stdin=None, sha256_only=False):
     env = dict(os.environ, FSEAL_EVP_FAIL=spec, LD_PRELOAD=shim)
+    env.pop("FSEAL_EVP_SHA256_ONLY", None)
+    if sha256_only:
+        env["FSEAL_EVP_SHA256_ONLY"] = "1"
     # An ASan binary refuses to start unless libasan is first in the preload list; the shim does not need that.
     env["ASAN_OPTIONS"] = ":".join(filter(None, [os.environ.get("ASAN_OPTIONS"), "verify_asan_link_order=0"]))
     return subprocess.run([str(a) for a in args], input=stdin, capture_output=True, text=True, env=env)
@@ -98,14 +102,23 @@ def test_append_fails_closed_before_touching_any_file(fseal_bin, fault_shim, sea
     assert not rec.exists(), "no receipt may be written"
 
 
-@pytest.mark.parametrize("spec", ["EVP_DigestFinal_ex@6", "EVP_DigestSign@2"])
-def test_append_stops_on_a_later_failure_and_signs_nothing_more(fseal_bin, fault_shim, sealed, tmp_path, spec):
+@pytest.mark.parametrize("spec,sha256_only,expected_records", [
+    ("EVP_DigestFinal_ex@6", True, 4),  # SHA-256 self-test, four records, then the failed fifth record
+    ("EVP_DigestSign@2", False, 6),  # self-test signature, then the failed final receipt
+])
+def test_append_stops_on_a_later_failure_and_signs_nothing_more(
+        fseal_bin, fault_shim, sealed, tmp_path, spec, sha256_only, expected_records):
     key = sealed[0]
     log, rec = tmp_path / "new.fseal", tmp_path / "new.receipts"
     r = run_faulty(fault_shim, spec, fseal_bin, "append", log, "--key", key, "--receipts", rec, "--every", "100",
-                   stdin=LINES)
+                   stdin=LINES, sha256_only=sha256_only)
     assert_failed_closed(r, spec)
     assert rec.read_text() == "", "no receipt after a crypto failure"
     # Whatever was sealed before the failure is still a valid chain (no zero hashes written).
     v = subprocess.run([str(Path(fseal_bin)), "verify", log], capture_output=True, text=True)
     assert v.returncode == 0 and "RESULT: INTACT" in v.stdout, v.stdout
+    prefix = scan(log)
+    assert prefix.problem is None
+    assert prefix.records == expected_records
+    assert [record.timestamp_us for record in prefix.items] == [1000 * (i + 1) for i in range(expected_records)]
+    assert [record.payload for record in prefix.items] == [f'{{"z":{i}}}'.encode() for i in range(expected_records)]

@@ -1,0 +1,3 @@
+# Preserve the upstream license byte-for-byte, including its original whitespace.
+docs/wasm/LICENSE-Emscripten.txt -whitespace
+docs/console/licenses/* -whitespace

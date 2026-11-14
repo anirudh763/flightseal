@@ -3,6 +3,7 @@
 //
 //   FSEAL_EVP_FAIL=EVP_DigestFinal_ex      fail the first call of that function
 //   FSEAL_EVP_FAIL=EVP_DigestFinal_ex@3    fail only the third call
+//   FSEAL_EVP_SHA256_ONLY=1              count only SHA-256 EVP_DigestFinal_ex calls
 //
 // A failing call returns what OpenSSL returns on error (0, -1 or NULL) without calling the real function, so
 // nothing is allocated. Every other call goes to the real libcrypto through dlsym(RTLD_NEXT).
@@ -11,6 +12,7 @@
 #endif
 #include <dlfcn.h>
 #include <openssl/evp.h>
+#include <openssl/obj_mac.h>
 #include <openssl/pem.h>
 
 #include <cstdio>
@@ -49,7 +51,14 @@ F real(const char* name) {
 FAULT(EVP_MD_CTX*, EVP_MD_CTX_new, nullptr, (void), ())
 FAULT(int, EVP_DigestInit_ex, 0, (EVP_MD_CTX * c, const EVP_MD* t, ENGINE* e), (c, t, e))
 FAULT(int, EVP_DigestUpdate, 0, (EVP_MD_CTX * c, const void* d, size_t n), (c, d, n))
-FAULT(int, EVP_DigestFinal_ex, 0, (EVP_MD_CTX * c, unsigned char* md, unsigned int* s), (c, md, s))
+extern "C" int EVP_DigestFinal_ex(EVP_MD_CTX* c, unsigned char* md, unsigned int* s) {
+  // Ed25519's internal SHA-512 calls vary across OpenSSL versions; a later chain failure must count SHA-256.
+  const char* filter = std::getenv("FSEAL_EVP_SHA256_ONLY");
+  const bool eligible = !filter || std::strcmp(filter, "1") != 0 || EVP_MD_CTX_type(c) == NID_sha256;
+  if (eligible && should_fail("EVP_DigestFinal_ex")) return 0;
+  static auto fn = real<int (*)(EVP_MD_CTX*, unsigned char*, unsigned int*)>("EVP_DigestFinal_ex");
+  return fn(c, md, s);
+}
 FAULT(int, EVP_PKEY_get_raw_public_key, 0, (const EVP_PKEY* k, unsigned char* p, size_t* n), (k, p, n))
 FAULT(EVP_PKEY_CTX*, EVP_PKEY_CTX_new_id, nullptr, (int id, ENGINE* e), (id, e))
 FAULT(int, EVP_PKEY_keygen_init, 0, (EVP_PKEY_CTX * c), (c))

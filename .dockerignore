@@ -1,0 +1,12 @@
+.git
+build*
+dist
+newweb/node_modules
+newweb/.test-artifacts
+.test-artifacts
+tests/web/node_modules
+tests/.data
+demo-out
+**/__pycache__
+**/.pytest_cache
+*.pem

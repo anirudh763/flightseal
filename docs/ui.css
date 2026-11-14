@@ -22,7 +22,7 @@
 html{font-size:100%} body{margin:0;background:var(--canvas);color:var(--ink);font-family:var(--font);font-size:1rem;line-height:1.5}
 code,kbd,pre,.mono{font-family:var(--mono);font-size:.875rem}
 a{color:var(--primary);text-underline-offset:2px} :focus-visible{outline:2px solid var(--focus);outline-offset:2px;border-radius:2px}
-.skip{position:absolute;left:-9999px}.skip:focus{left:8px;top:8px;z-index:30;background:var(--surface);padding:8px 16px;border:1px solid var(--divider);border-radius:var(--radius)}
+.skip{position:absolute;left:8px;top:-60px;z-index:30;display:inline-flex;align-items:center;min-height:44px;padding:8px 16px;background:var(--surface);border:1px solid var(--divider);border-radius:var(--radius)}.skip:focus{top:8px}
 .btn{display:inline-flex;align-items:center;justify-content:center;gap:8px;min-height:44px;padding:8px 16px;border:1px solid var(--input);border-radius:var(--radius);background:var(--surface);color:var(--ink);font:inherit;font-weight:700;cursor:pointer;text-decoration:none}
 .btn:hover{background:var(--bg-subtle)} .btn:active{background:var(--bg-inset)}
 .btn.primary{background:var(--primary);border-color:var(--primary);color:var(--primary-fg)}

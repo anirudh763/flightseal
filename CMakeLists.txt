@@ -9,6 +9,8 @@ if(NOT CMAKE_BUILD_TYPE)
 endif()
 add_compile_options(-Wall -Wextra -Wpedantic)
 
+option(BUILD_WASM "Build the optional Emscripten browser module" OFF)
+
 option(FSEAL_SANITIZE "Build with AddressSanitizer and UndefinedBehaviorSanitizer" OFF)
 if(FSEAL_SANITIZE)
   add_compile_options(-fsanitize=address,undefined -fno-omit-frame-pointer -fno-sanitize-recover=all)
@@ -52,6 +54,11 @@ find_package(OpenSSL 1.1.1 REQUIRED)
 add_library(fseal src/fseal.cpp)
 target_include_directories(fseal PUBLIC src)
 target_link_libraries(fseal PUBLIC OpenSSL::Crypto)
+
+if(BUILD_WASM)
+  add_subdirectory(wasm)
+  return()
+endif()
 
 add_executable(fseal-cli src/main.cpp)
 set_target_properties(fseal-cli PROPERTIES OUTPUT_NAME fseal)

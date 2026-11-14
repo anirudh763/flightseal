@@ -1,0 +1,12 @@
+title = "FlightSeal secret scan"
+
+[extend]
+useDefault = true
+
+[[allowlists]]
+description = "Public Ed25519 keys in the published signed receipt fixtures"
+targetRules = ["generic-api-key"]
+condition = "AND"
+paths = ['''^docs/samples/(px4-flight|px4-full|flight)\.receipts$''']
+regexTarget = "line"
+regexes = ['''^\n?fseal-receipt v1 count=[0-9]+ head=[a-f0-9]{64} key=[a-f0-9]{64} sig=[a-f0-9]{128}$''']

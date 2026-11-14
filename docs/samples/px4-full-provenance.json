@@ -1,0 +1,54 @@
+{
+  "artifact": "Optional full PX4/pyulog sample sealed as a FlightSeal demonstration fixture.",
+  "source": {
+    "url": "https://raw.githubusercontent.com/PX4/pyulog/0b392f8444f843b796405b9766cc15a6dddedf62/test/sample.ulg",
+    "repository": "PX4/pyulog",
+    "commit": "0b392f8444f843b796405b9766cc15a6dddedf62",
+    "path": "test/sample.ulg",
+    "sha256": "81952e6059bc095717e7911c010e07f85749d6b04d332a5ffc51575a3fd0a558",
+    "bytes": 4053364,
+    "license": "BSD-3-Clause",
+    "license_path": "LICENSE.md at the pinned commit",
+    "license_url": "https://github.com/PX4/pyulog/blob/0b392f8444f843b796405b9766cc15a6dddedf62/LICENSE.md"
+  },
+  "conversion": {
+    "command": "python tools/ulog_to_records.py tests/.data/px4-sample.ulg",
+    "script": "tools/ulog_to_records.py",
+    "python": "3.13.1",
+    "pyulog": "1.3.0",
+    "numpy": "2.5.4",
+    "record_count": 64542,
+    "records_sha256": "1939b0c3f1235db79ff03893bb61e6c6b8f11e3f5323e28568a110fde221f4f0",
+    "records_bytes": 27225867
+  },
+  "sealing": {
+    "native_cli": "/private/tmp/flightseal-wasm-build/native/fseal",
+    "cli_version": "fseal 0.1.0",
+    "cli_sha256": "5456804ab28d8dd069a2f8b759910f163bbe6876fd593cd286527b1395b2feb4",
+    "execution": "Docker emscripten/emsdk:4.0.23, linux/arm64 (aarch64)",
+    "append_command": "fseal append px4-full.fseal --key <temporary private key> --receipts px4-full.receipts --every 5000 < records.tsv",
+    "verification_command": "fseal verify px4-full.fseal --receipts px4-full.receipts --pubkey <docs/samples/px4-full-pubkey.txt>",
+    "receipt_interval": 5000,
+    "receipts_issued": 13,
+    "verification": "RESULT: INTACT; 64542 records intact; 13 of 13 receipts match; 0 records after final receipt are uncovered.",
+    "sample_key_note": "The private key was generated for this demonstration fixture and discarded. The public key verifies this fixture only; it does not authenticate flight origin or source-log provenance."
+  },
+  "outputs": {
+    "px4-full.fseal": {
+      "path": "docs/samples/px4-full.fseal",
+      "bytes": 30294365,
+      "sha256": "b27c7cb8d3209fd5b7a7709cb9392fd44a676061fbaeee3ddb5dc03bfe5cbbf8"
+    },
+    "px4-full.receipts": {
+      "path": "docs/samples/px4-full.receipts",
+      "bytes": 3912,
+      "sha256": "adee6e03c647dab846bc370a6f889b926c5a3b6e6df574a259554cdac7f27104"
+    },
+    "px4-full-pubkey.txt": {
+      "path": "docs/samples/px4-full-pubkey.txt",
+      "bytes": 65,
+      "sha256": "285b38fad943bc7cc6b06205c1fec1d8b58569d5031d02a21b15a32991cc0925"
+    }
+  },
+  "authenticity_limit": "Sealing proves that these converted records match the bundled receipts under the bundled public key. It makes no claim that the source log is authentic, unaltered before sealing, or attributable to a particular operator."
+}

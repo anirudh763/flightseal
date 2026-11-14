@@ -1,0 +1,21 @@
+{
+  "files": [
+    "console/",
+    "console/index.html",
+    "console/assets/favicon-BlHey7lB.svg",
+    "console/assets/flightseal-UduKZpUJ.wasm",
+    "console/assets/index-C_GbBxdw.js",
+    "console/assets/index-Dn1IWGhb.css",
+    "console/assets/manifest-DpuKQ33f.webmanifest",
+    "console/assets/worker-D4RN48jI.js"
+  ],
+  "sha256": {
+    "console/index.html": "1fb736c261a36cf4dc22faeade391e21b22516be0a6b1675b6b1ab6c54d761b1",
+    "console/assets/favicon-BlHey7lB.svg": "a1d441c54f298679bcfbae1e0e069bddd9a88e3340a189a931654b46db252924",
+    "console/assets/flightseal-UduKZpUJ.wasm": "f0df4b71d3da3822b57e86cac1e64cc62c6275e55d6cab4c544de495448d9635",
+    "console/assets/index-C_GbBxdw.js": "7b6568aace3b8817956c6ffcfffd0b59f6a0bb4ec9cc984f2ae3eab53f5f6d9c",
+    "console/assets/index-Dn1IWGhb.css": "979689aece5df685d1ff304f88155144c82bb8bcec0a0506db8ec6b6ce45fdb0",
+    "console/assets/manifest-DpuKQ33f.webmanifest": "d237d661706e7e3c7ed80de978eb0a1c8e76fb76c181e9d7742d69e0da97cf0c",
+    "console/assets/worker-D4RN48jI.js": "ff8435e9dbe3d28d22b6c450b1cd7a541e47445b58a08d75cf8dfbe0ab94f12e"
+  }
+}

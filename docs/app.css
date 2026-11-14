@@ -22,7 +22,6 @@ h1:focus-visible{outline:none;text-decoration:underline;text-decoration-color:va
 .nav-list a:hover{background:var(--bg-subtle);color:var(--ink)}
 .nav-list a:active{background:var(--bg-inset)}
 .nav-list a[aria-current=page]{background:var(--primary-subtle);border-bottom-color:var(--primary);color:var(--primary);font-weight:700}
-.nav-index{font-size:.6875rem;font-variant-numeric:tabular-nums}
 .rail-foot{margin-left:auto;display:flex;align-items:center;gap:12px;font-size:.75rem}
 .rail-foot a{display:inline-flex;align-items:center;min-height:44px;white-space:nowrap}
 .btn.theme{font-weight:400}

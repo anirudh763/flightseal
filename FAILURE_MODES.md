@@ -1,0 +1,32 @@
+# Failure modes and effects (FMEA)
+
+This is a planning aid for the current local/static workflow and a possible AWS archive. Ratings are qualitative;
+there are no deployed service-level measurements. Residual risk remains where FlightSeal cannot establish source
+truth or independent custody.
+
+| Failure mode | Cause | Blast radius | Detection | Mitigation | Residual risk |
+|---|---|---|---|---|---|
+| Source log already false or incomplete | Sensor spoofing, controller bug, malicious edits before sealing, or converter omission | Affected flight's sealed records can be internally consistent but misleading | Compare against independent sensors, original `.ulg`, operator records, and converter scope | Preserve original `.ulg`; document conversion/version and selected topics; treat seal as post-download integrity only | Cryptographic verification cannot prove telemetry truth or pre-seal completeness |
+| Tail records changed after last receipt | Receipt cadence too sparse, receipt not delivered, or witness stores it with operator | Uncovered suffix of the flight | Verification reports uncovered records / last receipt count | Choose cadence from tolerable exposure; transmit receipt to separately administered witness as each batch closes; alert on missing receipt delivery | Records since last acknowledged receipt remain rewriteable |
+| Signing key stolen or misused | Workstation compromise, copied private key, weak access controls | Attacker may create apparently valid future receipts under that key | Key inventory, access audit, witness reports unexpected receipt; no native revocation check | Keep key offline or in controlled signer; rotate through an independently published key history; invalidate affected time window operationally | No trusted timestamp or built-in revocation means old/new key boundaries require external evidence |
+| Witness copy lost or replaced | Same administrator controls log and receipts, account compromise, retention misconfiguration | Whole-log rewrite may become undetectable if no surviving trusted receipt | Independent restore/read test and access audit; compare copies held by parties | Separate principal/account and backup; record receipt delivery acknowledgements; apply Object Lock where justified | Collusion or compromise of all independent copies defeats this trust assumption |
+| Wrong key or receipts from another flight | Key copied from untrusted source; v1 receipt has no flight ID | False UNVERIFIED result, or mismatch misread as tampering | Verifier reports key mismatch/UNVERIFIED or count/head mismatch | Obtain public key through an authenticated independent channel; maintain external flight-to-key/receipt inventory | v1 cannot distinguish a rewrite from another flight sealed with the same key |
+| Torn write or local disk failure | Process/power loss, full disk, filesystem/device not honoring durability | Current append may be incomplete; unsynced batch may be lost | CLI verify reports incomplete/torn tail; compare receipts to file | Preserve original, stop writes, copy evidence, run `fseal recover` only on a working copy; receipt issued after sync | Power-loss guarantees depend on storage honoring `fsync`; this is not established by kill tests |
+| WASM memory or browser limit reached | Large/malformed input, browser memory pressure, unsupported WebCrypto/worker | One local verification/sealing session fails | Explicit error/rejection; no verdict on failure; monitor browser suite and real-device trials | Keep file/receipt bounds; worker cancellation; fall back to native CLI; do not convert failure into INTACT | A Chrome 500 MiB / 500-record probe used 32 MiB native heap; this does not establish whole-browser memory or device coverage |
+| Malicious or malformed upload (proposed AWS) | Oversize object, parser edge case, duplicate event, forged metadata | One job or, if parser bug, service account/data integrity | Lambda structured errors, bounded metrics/alerts; replay/version checks | Size/count/time bounds, least-privilege IAM, isolated parser, idempotency by S3 version ID, quarantine without deleting source | No AWS implementation or production security testing exists today |
+| Retention bypass or accidental deletion (proposed AWS) | Governance bypass privilege, lifecycle/bucket policy error, account compromise | Archived log/receipt versions become unavailable | S3 version/retention inventory and scheduled restore checks | Split admin roles, deny bypass by default, review retention and lifecycle; use compliance mode only with legal/operational approval | Object Lock protects retention behavior, not correctness of uploaded data or account availability |
+| KMS signing incompatibility (proposed AWS) | Wrong Ed25519 algorithm/message type/serialization or changed receipt message | New receipts fail existing v1 verification or fail to interoperate | Cross-verify KMS-produced fixture in C++, Python, JS and WASM | Do not switch signer before fixture passes; ECDSA cannot replace v1 Ed25519 | KMS support is documented, but this application's exact v1 interop is untested |
+| Cloud region/provider outage (proposed AWS) | Regional service interruption, account suspension, misconfiguration | Upload, archive, or query unavailable; local verification remains available | Independent uptime checks and billing/control-plane alerts once deployed | Retain local copies; define multi-region only after cost/legal review; restore from independently held data | No RPO/RTO evidence exists; targets are design goals, not guarantees |
+
+
+An intermediate 1 MiB stack read buffer caused seven crypto-fault tests to abort under the fault harness.
+The buffer now has heap ownership whose lifetime outlives the stream. The final crypto-fault suite and independent
+ASan/UBSan tests pass. The regression test evidence is retained with the release audit; increasing buffer sizes
+must continue to run fault-injection tests.
+
+The new clean Debian container also exposed a test harness dependency on OpenSSL internal call order: the
+`EVP_DigestFinal_ex@6` injection reached Ed25519 SHA-512 internals before any append. The application correctly
+failed closed, but the test did not exercise its intended later-record path. The test-only shim now optionally
+counts SHA-256 finalizations for that case and verifies the exact surviving payload/timestamp prefix and empty
+receipt output. Production crypto code is unchanged. Both newer Debian and original Ubuntu sanitizer environments
+are required before accepting the harness adjustment.

@@ -1,0 +1,16 @@
+{
+  "emscripten_image": "emscripten/emsdk:4.0.23@sha256:86537645c51e44899812d29820ee3b64b96c321ebb2aba4416a04ceeb1bcde62",
+  "openssl_version": "3.5.8",
+  "openssl_archive_sha256": "a8f84a39918ec6415ce765d9b429d313ba97b8143169c172e734b9514464f5b2",
+  "sha256": {
+    "src/fseal.cpp": "e066a816a1d604ca4a0de9b2994cca99a341e87965b03eb10c0fcfee8b1d9091",
+    "src/fseal.h": "25185aa6c274d8d58a3f9201357c78af387630cb9cf35af7fc5edff31474a507",
+    "wasm/bridge.cpp": "176a3e3b0c67769067f1fd9c8d998fafc9ad02f3bb0cdb0d6ea8e35b65786a65",
+    "CMakeLists.txt": "902baa56cbd68a2f039b42c3e36023c68f23b66d98d0ea884f23f9ebb98508a8",
+    "wasm/CMakeLists.txt": "1cc3004add0329e6df68eb6fc5a9100c43b85254f21224a876390e5ab5a9ec39",
+    "scripts/build_wasm.sh": "9ea41f7e44673fa745b67a1d2f8ecbbb5d14f4f0086f832d8422549cd92d6dcb",
+    "scripts/build_wasm_inner.sh": "5e37cf1f41cfea4ab82b012eb7e484d684ef383ef1448cc2a72ea6dcd45a55ac",
+    "docs/wasm/flightseal.mjs": "c7f21ea2bea34702c28d6cdb19dddd1c47199ade54b5633c6a87c074dbcd3ba4",
+    "docs/wasm/flightseal.wasm": "f0df4b71d3da3822b57e86cac1e64cc62c6275e55d6cab4c544de495448d9635"
+  }
+}

@@ -218,6 +218,7 @@ function clearReceipts() {
   $("rec-file").value = "";
   $("rec-name").textContent = NO_FILE;
   $("rec-clear").hidden = true;
+  $("rec-error").textContent = "";
 }
 function setLog(blob, name, fromSample = false) {
   if (!fromSample) clearSampleInputs();
@@ -228,12 +229,22 @@ function setLog(blob, name, fromSample = false) {
 }
 async function setReceipts(blob, name, fromSample = false) {
   if (!fromSample) clearSampleInputs();
+  if (!fromSample) {
+    state.receipts = { error: "Reading receipts…", name, fromSample };
+    clearResult();
+    state.error = null;
+    renderStates();
+  }
   let receipts;
   if (blob.size > MAX_RECEIPTS_BYTES) {
     receipts = { error: `${name} is ${n(blob.size)} bytes; a receipts file over 16 MB is not read here. Use the fseal CLI.`, name, fromSample };
   } else {
-    // Decoded without stripping a byte-order mark, so a file the CLI rejects is rejected here too.
-    receipts = { text: decodeReceipts(new Uint8Array(await blob.arrayBuffer())), name, fromSample };
+    try {
+      // Decoded without stripping a byte-order mark, so a file the CLI rejects is rejected here too.
+      receipts = { text: decodeReceipts(new Uint8Array(await blob.arrayBuffer())), name, fromSample };
+    } catch {
+      receipts = { error: `Could not read ${name}. Choose the receipts file again to retry.`, name, fromSample };
+    }
   }
   applyReceipts(receipts, blob.size);
 }
@@ -241,6 +252,7 @@ function applyReceipts(receipts, size) {
   state.receipts = receipts;
   $("rec-name").textContent = `${receipts.name}, ${n(size)} bytes`;
   $("rec-clear").hidden = false;
+  $("rec-error").textContent = receipts.error || "";
 }
 function setKey(text, fromSample = false) {
   state.pubkey = text.trim().toLowerCase();
@@ -271,7 +283,9 @@ async function addFiles(files) {
     }
   } catch (e) {
     state.busy = false;
-    showError(`Could not read the dropped file (a folder cannot be checked): ${e.message || e}`);
+    clearReceipts();
+    clearResult();
+    showError("Could not read the dropped file (a folder cannot be checked). Choose it again to retry.");
     return;
   }
   state.selected = null;
@@ -645,7 +659,7 @@ function render() {
   $("next-text").textContent = next.text;
   $("next-actions").replaceChildren(
     el("a", { class: "btn primary", href: next.href, text: next.label }),
-    next.secondary ? el("a", { href: next.secondary[0], text: next.secondary[1] }) : null,
+    ...(next.secondary ? [el("a", { href: next.secondary[0], text: next.secondary[1] })] : []),
   );
 
   renderBreak(r);
@@ -960,9 +974,21 @@ async function showDetail(record) {
   if (idx == null) return;
   const token = ++detailToken;
   const offset = idx < scan.rows.count ? scan.rows.offset[idx] : scan.problem.offset;
-  const rec = await readRecord(source, offset);
-  if (token !== detailToken || result !== state.result) return; // a newer selection or log replaced this one
   const box = $("detail");
+  $("detail-h").textContent = `Record ${n(record)}`;
+  box.replaceChildren(el("p", { class: "muted", role: "status", text: `Loading record ${n(record)}…` }));
+  let rec;
+  try {
+    rec = await readRecord(source, offset);
+  } catch {
+    if (token !== detailToken || result !== state.result) return;
+    const message = `Could not read record ${n(record)}. Retry loading this record.`;
+    const retry = el("button", { class: "btn", type: "button", text: "Retry" });
+    retry.addEventListener("click", () => showDetail(record));
+    box.replaceChildren(el("p", { class: "field-error", role: "alert", text: message }), retry);
+    return;
+  }
+  if (token !== detailToken || result !== state.result) return; // a newer selection or log replaced this one
   $("detail-h").textContent = `Record ${n(record)}`;
   if (!rec) {
     box.replaceChildren(el("p", { text: `Only ${n(scan.size - offset)} bytes are left at offset ${n(offset)}: not enough for a record header.` }));
@@ -1063,6 +1089,15 @@ function wire() {
     } catch {
       $("copy-status").textContent = "Copy is blocked here; select the text above instead.";
     }
+  });
+  $("download-report").addEventListener("click", () => {
+    const report = $("report").textContent;
+    const url = URL.createObjectURL(new Blob([report], { type: "text/plain;charset=utf-8" }));
+    const link = el("a", { href: url, download: "flightseal-verification-report.txt" });
+    document.body.append(link);
+    link.click();
+    link.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 0);
   });
   // Skip link: focus the current screen's H1 without changing the route.
   $("skip").addEventListener("click", (e) => {
