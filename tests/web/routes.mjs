@@ -58,6 +58,7 @@ try {
     await p.goto(url);
     await waitH1(p, "Verify a file");
     assert.equal(await p.title(), "Verify a file – FlightSeal");
+    assert.equal(await p.getByRole("banner").count(), 1, "exactly one page banner");
     assert.equal(await p.getAttribute('nav a[aria-current="page"]', "href"), "#/verify");
     // Verify is a guided form: the log, optional receipts and the key you trust, plus one primary action.
     for (const id of ["log-choose", "rec-choose", "pubkey"]) assert.ok(await p.isVisible(`#${id}`), `#${id} not visible`);
@@ -136,6 +137,8 @@ try {
     await waitH1(p, "Receipts");
     await p.waitForFunction(() => /Receipt 2/.test(document.querySelector("#receipt-detail-h").textContent), null, T);
     assert.match(await p.textContent("#receipt-detail"), /does not match/);
+    const receiptHeading = await p.locator("#receipt-detail-h").boundingBox();
+    assert.ok(receiptHeading.y < 900, "selected receipt comparison starts below the initial viewport");
     await c.close();
   });
 
@@ -249,6 +252,9 @@ try {
     const primary = p.locator(".screen:not([hidden]) .btn.primary");
     assert.equal(await primary.count(), 1);
     assert.equal((await primary.textContent()).trim(), "Inspect record 150");
+    assert.equal(await p.textContent(".next-heading .section-number"), "02", "dynamic next heading lost its folio number");
+    const action = await primary.boundingBox();
+    assert.ok(action.y + action.height <= 900, "next action is below the initial viewport");
     await primary.click();
     await waitH1(p, "Records");
     assert.match(p.url(), /#\/records\/150\?sample=tampered$/);
@@ -337,14 +343,19 @@ try {
     assert.deepEqual(small, []);
   });
 
-  await check("1440 px: the 216 px rail is shown and there is no Menu button", async () => {
+  await check("1440 px: a horizontal folio index and the complete verification form fit the initial viewport", async () => {
     const c = await browser.newContext({ viewport: { width: 1440, height: 900 } });
     const p = await c.newPage();
     await p.goto(url + "#/verify");
     await waitH1(p, "Verify a file");
     assert.equal(await p.isVisible("#menu-btn"), false);
     const box = await p.locator("#rail").boundingBox();
-    assert.equal(Math.round(box.width), 216);
+    assert.equal(Math.round(box.width), 1440);
+    assert.ok(box.height < 140, `folio index is ${box.height}px tall`);
+    const action = await p.locator("#show-findings").boundingBox();
+    assert.ok(action.y + action.height <= 900, "Show findings is below the initial viewport");
+    const sheet = await p.locator("#dropzone").boundingBox();
+    assert.ok(Math.abs(sheet.x + sheet.width / 2 - 720) < 1, "verification sheet is not centered");
     await c.close();
   });
 
@@ -386,28 +397,28 @@ try {
     await p.goto(url + "#/verify");
     await waitH1(p, "Verify a file");
     const bg = () => p.evaluate(() => getComputedStyle(document.body).backgroundColor);
-    assert.equal(await bg(), "rgb(247, 248, 250)", "canvas is not #f7f8fa under OS dark");
-    assert.equal(await p.evaluate(() => getComputedStyle(document.body).color), "rgb(21, 37, 54)");
+    assert.equal(await bg(), "rgb(239, 247, 242)", "canvas is not mint #eff7f2 under OS dark");
+    assert.equal(await p.evaluate(() => getComputedStyle(document.body).color), "rgb(25, 54, 43)");
     const t = p.locator("#theme-toggle");
     assert.equal(await t.getAttribute("aria-pressed"), "false");
     await t.click();
     assert.equal(await t.getAttribute("aria-pressed"), "true");
-    assert.notEqual(await bg(), "rgb(247, 248, 250)");
+    assert.notEqual(await bg(), "rgb(239, 247, 242)");
     await p.reload();
     await waitH1(p, "Verify a file");
     assert.equal(await p.getAttribute("#theme-toggle", "aria-pressed"), "true", "dark choice not remembered");
-    assert.notEqual(await bg(), "rgb(247, 248, 250)");
+    assert.notEqual(await bg(), "rgb(239, 247, 242)");
     await p.click("#theme-toggle");
-    assert.equal(await bg(), "rgb(247, 248, 250)");
+    assert.equal(await bg(), "rgb(239, 247, 242)");
     await c.close();
   });
 
-  await check("the primary colour is FlightSeal #174b5a on the primary action", async () => {
+  await check("the primary colour is FlightSeal forest #195944 on the primary action", async () => {
     const c = await browser.newContext({ viewport: { width: 1280, height: 900 } });
     const p = await c.newPage();
     await p.goto(url + "#/verify");
     await waitH1(p, "Verify a file");
-    assert.equal(await p.evaluate(() => getComputedStyle(document.querySelector(".screen:not([hidden]) .btn.primary")).backgroundColor), "rgb(23, 75, 90)");
+    assert.equal(await p.evaluate(() => getComputedStyle(document.querySelector(".screen:not([hidden]) .btn.primary")).backgroundColor), "rgb(25, 89, 68)");
     const h = await p.locator(".screen:not([hidden]) .btn.primary").boundingBox();
     assert.ok(h.height >= 44, `primary action is ${h.height}px tall`);
     await c.close();

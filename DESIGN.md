@@ -1,89 +1,59 @@
 ---
-version: 2
-name: flightseal
-extends: ui.css            # docs/ui.css, the shared round-4 light base; app layout and the chain in docs/app.css
-dial: ENERGY 1 / RHYTHM 2 / MOTION 1
-signature: EVIDENCE CHAIN  # records drawn as a vertical hash chain, break and covered boundary marked on it
-colors:                    # light is the default for everyone; dark only after the "Dark theme" button
-  canvas:   { light: "#f7f8fa", dark: "#0f171f", use: "page behind the workspace" }
-  surface:  { light: "#ffffff", dark: "#16212b", use: "panels, header, verdict, inputs" }
-  rail:     { light: "#f0f3f5", dark: "#121c25", use: "left rail and Menu sheet" }
-  ink:      { light: "#152536", dark: "#e4ebf1", use: "text" }
-  muted:    { light: "#4b5e6f", dark: "#a7b5c2", use: "secondary text, dt labels, chain metadata" }
-  input:    { light: "#748694", dark: "#8696a4", use: "input and button borders, the chain line" }
-  divider:  { light: "#dce2e8", dark: "#2d3c49", use: "panel borders and row rules" }
-  primary:  { light: "#174b5a", dark: "#8ccbd9", use: "primary action, links, current nav item, covered-prefix line, focus" }
-  ok:       { light: "#12633c", dark: "#73d29e", use: "Intact, covered links (always with a word)" }
-  warn:     { light: "#925400", dark: "#ebb65e", use: "Unverified/Incomplete, receipts not checked (always with a word)" }
-  bad:      { light: "#b42318", dark: "#ff9a8f", use: "Tampered, the break (always with a word and a diamond)" }
-typography:
-  ui:   { family: "Atkinson Hyperlegible (local woff2, SIL OFL 1.1)", size: "16px / 1.5", h1: "30px / 1.2", h2: "20px" }
-  mono: { family: "system monospace", size: "14px", use: "hashes, links, CRCs, file names, the text report, payload only" }
-spacing: [4, 8, 16, 24, 32]
-rounded: { control: 7px, label: 2em }
-targets: { controls: "44px min", inline record and receipt links: "24px min (WCAG 2.5.8)" }
-elevation: flat               # 1px divider borders, no shadows, no gradients
-motion: { default: none, allowed: "120ms button background change; off under prefers-reduced-motion" }
+version: 3
+name: FlightSeal evidence folio
+styles: docs/ui.css, docs/app.css
+dial: ENERGY 2 / RHYTHM 3 / MOTION 1
+signature: centered verification sheet, numbered findings, chronological evidence chain, receipt comparison sheets
 ---
 
-# FlightSeal verifier design
+# FlightSeal evidence folio
 
-## Frame
+FlightSeal is a local file verification workspace. The central decision is whether the supplied log agrees with its hash chain and any independently kept receipts. The interface keeps that result separate from a conclusion about the source data's authenticity.
 
-- Wide screens (1000px and up): a 216px left rail (text wordmark "FlightSeal", one-line purpose, a **Work** group:
-  Verify a file, Findings, Records, Receipts; a separate **Learn** group: Trust help, Examples; the Dark theme button
-  and the source link at the foot), a white location header (Back on screens that depend on a run, breadcrumb
-  "FlightSeal / Screen"), and the workspace with a 32px gutter, at most about 1100px of content.
-- Below 1000px there is no permanent rail: a labelled **Menu** button opens it as a sheet. While it is open the rest
-  of the page is inert, Tab stays inside, Escape or Close menu closes it and focus returns to Menu.
-- Below 600px the gutter is 16px and the breadcrumb wraps under Menu and Back.
+## Identity and purpose
 
-## Routes
+The council's mint / forest / amber direction replaces the former shared 216px left rail. A horizontal folio index leads into one centered input sheet. Numbered input rows establish the order of the check; numbered findings separate the conclusion, first useful action and chronological evidence. Receipt comparison sheets stack beneath the receipts register. System sans-serif keeps reading and controls familiar; tabular figures align sequence numbers, with monospace reserved for filenames, hashes, byte values and reports.
 
-Hash routes so GitHub Pages serves every screen from one file: `#/verify` (default), `#/findings`, `#/records`,
-`#/records/<n>`, `#/receipts`, `#/receipts/<n>`, `#/help`, `#/examples`, and Not found for anything else under `#/`.
-A loaded example is part of the address (`?sample=tampered`), so a view can be shared; files of your own are never
-in the URL. Old `?sample=name&record=N` links are rewritten to `#/records/N?sample=name` (or `#/findings?...`).
-Every route change sets `document.title` to "Screen – FlightSeal", marks the nav item with `aria-current="page"`,
-and moves focus to the screen's H1 (no outline on the workspace). Selecting a record or receipt keeps focus on it.
+The opaque white sheets separate evidence from the mint workspace. Forest marks the verification action and current destination. Amber means an actual warning or unverified result, always in words. Fine rules separate fields and evidence rows; no decorative graph paper, shadows, glass, invented scores or trust shields are used. The three input rows represent the real inputs. The only motion is 120ms control feedback, disabled by reduced-motion preference.
 
-## Screens
+## Tokens
 
-- **Verify a file**: three numbered steps (sealed log, optional receipts, the key you trust), one primary action
-  (Show findings), and a status card that announces the current check. The witness assumption is stated next to
-  the receipts field.
-- **Findings**: the verdict (bordered in its status colour, with an icon and words), "where to look first" with
-  the facts, the expected-versus-stored link and exactly one primary next action (Inspect record N, Review receipt
-  N, Add receipts and a key...), an Interpretation aside that keeps file integrity and trust apart, then the
-  evidence chain summary.
-- **Records**: the evidence chain, one link per record, 50 per page, with the record detail beside it.
-- **Receipts**: the receipts table (scrolls inside its own labelled region) and a receipt detail that compares the
-  head in the receipt with the link in the log.
-- Without a run, Findings, Records and Receipts show an empty state that says why and links to Verify; while a
-  check runs they say what is being checked; after an error they say what failed. The run bar with progress and
-  Cancel is shared by all screens.
+| Role | Light | Explicit dark |
+|---|---|---|
+| Canvas | `#EFF7F2` | `#10251C` |
+| Sheet | `#FFFFFF` | `#172F24` |
+| Text | `#19362B` | `#E5F1E9` |
+| Secondary text | `#4B6358` | `#ACC5B5` |
+| Control boundary | `#688173` | `#88A593` |
+| Divider | `#CCDCD1` | `#3A5646` |
+| Forest action / focus | `#195944` | `#9CD6B7` |
+| On action | `#FFFFFF` | `#10251C` |
+| Intact | `#12633C` | `#73D29E` |
+| Warning / unverified | `#925400` | `#EBB65E` |
+| Tampered / break | `#B42318` | `#FF9A8F` |
 
-## The evidence chain (signature)
+The page defaults to light even under OS dark preference. Only the explicit, remembered theme control selects dark. Body text is 16px / 1.5; H1 is 32px desktop and 28px on phones. Buttons and data-route links are at least 44px high and wide. Prose links remain inline. Small 4px sheet corners distinguish sheets from 6px controls; status labels have square 3px corners. Disabled controls retain readable text and a dashed boundary.
 
-Modelled on the commit graph of `git log --graph`: a vertical line on the left with one node per link, the content
-to its right. Each link names the record (or run of records), its byte range and its status in words. Marks:
+## Composition and reflow
 
-- filled dot: passes and covered by a matching receipt; hollow dot: passes, not covered;
-- diamond on a tinted row: the first break ("chain breaks here [bad-link]"); dashed node: bytes not checked;
-- small square: a receipt, attached after the record it pins, with its result as a labelled chip and a link to its
-  detail; runs of receipts with the same result past the end are grouped;
-- dashed primary line: the end of the covered prefix, with a sentence saying what lies below it.
+At desktop width the folio index spans the top of the page. It contains Verify, Findings, Records, Receipts, Trust help and Examples, plus theme and source. A single page banner below it contains the breadcrumb, Back where relevant and local-file context. The content width is at most 1120px; the Verify sheet is centered at 900px and its primary action fits the initial 1440 × 900 viewport.
 
-Colour never carries meaning alone: every mark has text, and a legend sentence explains the shapes.
+Below 1000px the labelled Menu opens an inset, scrollable sheet with the same destinations. The page behind it becomes inert; Tab stays inside, Escape closes it and focus returns to Menu. At 768px the input sheet remains a single column with numbered rows and the check context in two columns. At 320px the fields, file names and trust instructions stack deliberately, with a full-width primary action. No content is clipped to conceal overflow. Technical receipt tables scroll inside their labelled region.
 
-## Trust copy rules
+Findings starts with the actual conclusion, then the first useful action alongside Interpretation, followed by the evidence chain. Records pair the chronological chain and a selected record at desktop, stacking on tablets. Receipts use a full-width register followed by a centered selected comparison sheet. Trust help is a readable document sheet; examples are descriptive rows containing the existing sample controls.
 
-Say what was checked and what was not. Never promise that the source data or every original byte is authentic. Wrong
-key, bad signature or no Ed25519 is Unverified (not evidence either way). A receipt mismatch says "rewritten, or
-these receipts belong to another log sealed with the same key". Receipts protect only if a separate witness kept
-them.
+## Routes and state
 
-## Known gaps
+Preserve `#/verify`, `#/findings`, `#/records`, `#/records/<n>`, `#/receipts`, `#/receipts/<n>`, `#/help`, `#/examples` and Not found. Sample identity remains in the route query; local filenames and payloads never enter the URL. Existing legacy links, Back/Forward, selection, title changes, current navigation and H1 focus remain in `docs/app.js`. This visual revision does not change that file, the sample-loading race guard, Cancel, missing-key logic, crypto or parser behavior.
 
-- Manual screen-reader check not run; automated axe-core only.
-- Contrast was checked by axe-core on every screen in both themes, not computed per token pair as in version 1.
+Without a run, data screens explain why they are empty and link to Verify. Loading names the work in progress and exposes Cancel; errors explain the failure. The same existing run state appears in the Verify sheet footer.
+
+## Evidence chain and trust language
+
+The vertical line is the actual record sequence: a filled dot means a checked, receipt-covered link; a hollow dot means checked but uncovered; a diamond and words mark the first break; dashed nodes mean unchecked bytes. Square receipt pins attach where issued. A dashed boundary names the end of receipt coverage. Status text and shape carry meaning independently of color.
+
+Keep the qualified conclusions: a hash chain is not data authenticity; wrong keys, failed signatures and unavailable Ed25519 are Unverified. A receipt mismatch may mean a rewritten log or receipts for another log sealed with the same key. Receipt protection assumes a separate witness kept them. PX4 examples contain selected decoded records and do not authenticate every byte of the original ULog. Keep the documented limits and AI-assistance disclosure.
+
+## Verification boundary
+
+Use the existing browser route, keyboard, axe, offline, cancellation, trust and input-state regressions. Palette and desktop silhouette assertions change with this deliberate design; privacy and behavior assertions remain intact. Capture actual desktop, 768px, 320px and grayscale views. Native CLI comparison tests require a compatible built `fseal`; full native/parity checks run in release CI. No manual screen-reader or real-device keyboard testing is claimed.
