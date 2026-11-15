@@ -25,7 +25,7 @@ async function withPage(callback) {
   let browser, context, profile;
   try {
     const channel = process.env.PLAYWRIGHT_CHANNEL || (process.platform === 'darwin' ? 'chrome' : undefined);
-    const options = { headless: true, ...(channel ? { channel } : {}) };
+    const options = { headless: true, ...(channel ? { channel } : {}), ...(process.env.CHROME_PATH ? { executablePath: process.env.CHROME_PATH } : {}) };
     if (process.env.FSEAL_PERSISTENT_BROWSER === '1') {
       profile = await mkdtemp(resolve(tmpdir(), 'hashwing-browser-'));
       context = await chromium.launchPersistentContext(profile, options);
@@ -168,6 +168,11 @@ test('temporary-output ownership protects active tabs and recovers files after t
     }, name);
     assert.deepEqual(active, { removed: 0, exists: true });
     await page.close();
+    // Closing a renderer and releasing its browser-process locks are asynchronous.
+    await second.waitForFunction(async name => {
+      const { held } = await navigator.locks.query();
+      return !held.some(lock => lock.name === `flightseal-output:${name}`);
+    }, name, { timeout: 5000 });
     const recovered = await second.evaluate(async () => {
       const { recoverTemporaryOutputs } = await import('/wasm/client.mjs');
       return recoverTemporaryOutputs();
