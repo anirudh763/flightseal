@@ -70,7 +70,7 @@ function numberPattern(value) {
 async function verifyInBrowser(context, testCase, { run = true } = {}) {
   const page = await context.newPage();
   await page.goto(`${url}#/verify`);
-  await page.waitForFunction(() => document.querySelector('.commandbar h1')?.textContent === 'Verify file');
+  await page.waitForFunction(() => document.querySelector('.commandbar h1')?.textContent === 'Verify');
   await page.locator('#log-input').setInputFiles(testCase.log);
   if (testCase.receipts !== null) await page.locator('#receipt-input').setInputFiles(testCase.receipts);
   await page.locator('#trusted-key').fill(testCase.key || '');

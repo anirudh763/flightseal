@@ -55,7 +55,7 @@ try {
       await page.goto(`${rootUrl}console/#/sandbox`);
       await page.waitForFunction(() => document.querySelector('#result-heading')?.textContent.includes('Intact'), null, { timeout: 30000 });
       assert.equal((await page.locator('.brand span:not(.brand-mark)').textContent()).trim(), 'HashWing');
-      assert.equal(await page.title(), 'Workbench · HashWing');
+      assert.equal(await page.title(), 'Samples · HashWing');
       const state = await page.evaluate(() => {
         const color = getComputedStyle(document.body).backgroundColor.match(/[\d.]+/g)?.map(Number) || [];
         const brightness = color.length >= 3 ? (Math.max(...color.slice(0, 3)) + Math.min(...color.slice(0, 3))) / 510 : 0;
@@ -143,12 +143,12 @@ try {
     try {
       const page = await context.newPage();
       await page.goto(`${rootUrl}?sample=rewritten`);
-      await waitHeading(page, 'sandbox', 'Workbench');
+      await waitHeading(page, 'sandbox', 'Samples');
       await page.waitForFunction(() => document.querySelector('#result-heading')?.textContent.includes('Tampered'), null, { timeout: 30000 });
       assert.match(page.url(), /\/console\/#\/sandbox\?sample=rewritten$/);
 
       await page.goto(`${rootUrl}#/findings?sample=rewritten`);
-      await waitHeading(page, 'sandbox', 'Workbench');
+      await waitHeading(page, 'sandbox', 'Samples');
       await page.waitForFunction(() => document.querySelector('#result-heading')?.textContent.includes('Tampered'), null, { timeout: 30000 });
       assert.match(page.url(), /\/console\/#\/sandbox\?sample=rewritten$/);
 
@@ -179,7 +179,7 @@ try {
       const page = await context.newPage();
       await page.goto(`${rootUrl}console/#/records?sample=intact&record=742`);
       await page.waitForFunction(() => document.querySelector('#record-detail-title')?.textContent === 'Record 742', null, { timeout: 30000 });
-      await page.getByRole('navigation', { name: 'Workbench sections' }).getByRole('link', { name: 'Receipts' }).click();
+      await page.getByRole('navigation', { name: 'Primary navigation' }).getByRole('link', { name: 'Receipts' }).click();
       await waitHeading(page, 'receipts', 'Receipts');
       await page.goBack();
       await waitHeading(page, 'records', 'Records');
@@ -204,7 +204,7 @@ try {
       await page.keyboard.press('Enter');
       assert.equal(await page.evaluate(() => document.activeElement.tagName), 'H1');
       await page.locator('.skip-link').focus();
-      await page.getByRole('navigation', { name: 'Workbench sections' }).getByRole('link', { name: 'Records' }).focus();
+      await page.getByRole('navigation', { name: 'Primary navigation' }).getByRole('link', { name: 'Records' }).focus();
       await page.keyboard.press('Enter');
       await waitHeading(page, 'records', 'Records');
       await page.waitForFunction(() => document.activeElement.id === 'page-records', null, { timeout: 3000 });
