@@ -8,7 +8,15 @@ docker run --rm --mount "type=bind,source=$repo_dir,target=/src" --mount "type=b
 python3 - "$repo_dir" "$image" <<'PY'
 import hashlib,json,pathlib,sys
 root=pathlib.Path(sys.argv[1])
-files=['src/fseal.cpp','src/fseal.h','wasm/bridge.cpp','CMakeLists.txt','wasm/CMakeLists.txt','scripts/build_wasm.sh','scripts/build_wasm_inner.sh','docs/wasm/flightseal.mjs','docs/wasm/flightseal.wasm']
+files=['src/fseal.cpp','src/fseal.h','src/import.cpp','src/import.h','wasm/bridge.cpp','CMakeLists.txt','wasm/CMakeLists.txt','scripts/build_wasm.sh','scripts/build_wasm_inner.sh','docs/wasm/flightseal.mjs','docs/wasm/flightseal.wasm']
 provenance={'emscripten_image':sys.argv[2], 'openssl_version':'3.5.8', 'openssl_archive_sha256':'a8f84a39918ec6415ce765d9b429d313ba97b8143169c172e734b9514464f5b2', 'sha256':{p:hashlib.sha256((root/p).read_bytes()).hexdigest() for p in files}}
+provenance['telemetry_schema']={
+  'basis':'PX4 ULog/uORB field-name, scalar type, and unit conventions',
+  'vehicle_global_position':{'lat':'double degrees','lon':'double degrees','alt':'float metres','vel_n':'float metres/second','vel_e':'float metres/second'},
+  'vehicle_gps_position':{'lat':'int32 degrees * 1e7','lon':'int32 degrees * 1e7','alt':'int32 millimetres','vel_m_s':'float metres/second'},
+  'battery_status':{'voltage_v':'float volts'},
+  'policy':'Only exact scalar field types are decoded; type/count mismatches are omitted while raw source bytes remain sealed.',
+  'trust_limit':'Schema names and types are decoded metadata, not sensor-truth, capture-origin, or source-authenticity evidence.'
+}
 (root/'docs/wasm/provenance.json').write_text(json.dumps(provenance,indent=2)+'\n')
 PY

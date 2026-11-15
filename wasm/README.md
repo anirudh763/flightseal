@@ -1,15 +1,18 @@
 # C++ browser bridge
 
-`docs/wasm/flightseal.mjs` and `flightseal.wasm` are generated from `src/fseal.cpp`
+`docs/wasm/flightseal.mjs` and `flightseal.wasm` are generated from `src/fseal.cpp`, `src/import.cpp`
 and `wasm/bridge.cpp`, linked with OpenSSL. `BUILD_WASM` defaults OFF.
 
 UI entry point (ES module):
 
 ```js
-import { verifyFile, sealFile } from './wasm/client.mjs';
+import { verifyFile, sealFile, importFile } from './wasm/client.mjs';
 const result = await verifyFile(logFile, receiptsText, trustedKeyHex, { signal });
 const sealed = await sealFile(tsvFile, { every: 1000, signal });
 // sealed = { log: Blob, receipts: string, publicKey: string, records: number }
+const imported = await importFile(ulogFile, { every: 1000, signal });
+// imported.log is backed by temporary local storage when available.
+// Retain imported while using its log; await imported.dispose() when finished.
 ```
 
 Files are mounted read-only via WORKERFS, not copied into a JavaScript array or
@@ -22,10 +25,22 @@ The result includes `engine: 'C++ / OpenSSL / WebAssembly'`, `verdict` (`intact`
 Receipt `count` values are decimal strings, preserving all 64 bits. File-derived
 `records`, `goodBytes`, `covered`, `uncovered`, and `timeReversals` are numbers
 bounded by the upload limit and remain exact in JavaScript. The native
-heap has a 256 MiB hard ceiling; file verification is limited to 500 MiB, receipt
+heap has a 256 MiB hard ceiling; file verification is limited to 1,025 MiB, receipt
 text to 4 MiB / 10,000 receipts, and sandbox sealing to 16 MiB of input / 64 MiB of output. The result
 includes `nativeHeapBytes` for observing the actual Wasm memory allocation.
 Invalid inputs and crypto failures reject; they never become an intact verdict.
+
+Raw PX4 ULog import accepts at most 1 GiB. Native parsing validates framing/types/subscriptions and preserves
+all original source bytes in bounded `FSRAW001` envelope records, followed by a SHA-256 source digest record.
+Receipt cadence counts envelope records, not decoded sensor samples. Position and battery previews use a bounded
+subset of supported scalar PX4 fields and PX4 unit conventions, with at most 20,000 retained decoded points.
+Wrong types are omitted; same-typed custom units and sensor truth cannot be authenticated.
+
+Large import output streams directly to OPFS in the worker. It does not accumulate the output in MEMFS or a
+whole-file JavaScript array. The caller owns the returned output until `dispose()`. Web Locks prevent startup
+recovery from deleting active outputs in another tab; abandoned owned entries are removed on the next visit.
+Quota/permission errors are explicit. Without OPFS and Web Locks, raw import is limited to a 16 MiB memory fallback.
+Every operation has a five-minute deadline; cancellation terminates its worker and releases owned output.
 
 Sealing accepts UTF-8 `timestamp_us<TAB>payload` lines, using native Writer,
 Ed25519 key generation and sign_receipt. It returns an actual FLTSEAL1 log,

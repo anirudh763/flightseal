@@ -11,6 +11,7 @@ const EVIDENCE = process.env.REACT_CONSOLE_EVIDENCE || join(ROOT, '.test-artifac
 mkdirSync(EVIDENCE, { recursive: true });
 const require = createRequire(join(ROOT, 'package.json'));
 const { chromium } = require('playwright');
+const { PDFDocument } = require('pdf-lib');
 const AXE = readFileSync(require.resolve('axe-core/axe.min.js'), 'utf8');
 const { server, url: rootUrl } = await serve(0, '/flightseal');
 const url = `${rootUrl}console/`;
@@ -36,9 +37,30 @@ async function loadFreshDemo(page) {
 async function route(page, screen) {
   await page.evaluate((s) => { location.hash = `/${s}`; }, screen);
   await page.waitForFunction((s) => location.hash === `#/${s}`, screen);
-  const heading = screen === 'video' ? 'Video sync' : screen[0].toUpperCase() + screen.slice(1);
-  await page.waitForFunction((expected) => document.querySelector('.page-heading h1')?.textContent === expected, heading);
+  const heading = ({ sandbox: 'Workbench', verify: 'Verify file', records: 'Records', receipts: 'Receipts', video: 'Video sync', help: 'Trust limits' })[screen];
+  await page.waitForFunction((expected) => document.querySelector('.commandbar h1')?.textContent === expected, heading);
 }
+function littleEndian(value, width) {
+  const bytes = Buffer.alloc(width);
+  if (width === 8) bytes.writeBigUInt64LE(BigInt(value));
+  else if (width === 4) bytes.writeUInt32LE(value >>> 0);
+  else if (width === 2) bytes.writeUInt16LE(value);
+  else bytes[0] = value;
+  return bytes;
+}
+function testUlog() {
+  const header = Buffer.concat([Buffer.from('ULog\x01\x12\x35', 'binary'), Buffer.from([1]), littleEndian(100, 8)]);
+  const message = (type, payload) => Buffer.concat([littleEndian(payload.length, 2), Buffer.from(type), payload]);
+  const flags = Buffer.alloc(40);
+  const format = Buffer.from('vehicle_global_position:uint64_t timestamp;double lat;double lon;float alt;float vel;');
+  const add = Buffer.concat([Buffer.from([0]), littleEndian(0, 2), Buffer.from('vehicle_global_position')]);
+  const data = Buffer.alloc(34);
+  data.writeUInt16LE(0, 0); data.writeBigUInt64LE(123456n, 2);
+  data.writeDoubleLE(52.5, 10); data.writeDoubleLE(-4.125, 18);
+  data.writeFloatLE(20, 26); data.writeFloatLE(2, 30);
+  return Buffer.concat([header, message('B', flags), message('F', format), message('A', add), message('D', data)]);
+}
+
 async function auditAxe(page, label) {
   await page.evaluate(AXE);
   const results = await page.evaluate(() => window.axe.run(document, { runOnly: { type: 'tag', values: ['wcag2a', 'wcag2aa', 'wcag21a', 'wcag21aa', 'wcag22aa', 'best-practice'] } }));
@@ -61,7 +83,7 @@ try {
 
   await check('included 800-record demo verifies through native WASM with receipts', async () => {
     assert.ok(metrics.firstVisit800DemoMs < 3000, `first included demo took ${metrics.firstVisit800DemoMs}ms`);
-    assert.match(await page.locator('.result-top .eyebrow').textContent(), /C\+\+ \/ OpenSSL \/ WebAssembly/);
+    assert.match(await page.locator('.result-top .eyebrow').textContent(), /VERIFICATION RESULT/);
     assert.match(await page.locator('#result-heading').textContent(), /Intact/);
     const verdictSummary = await page.locator('.result-top').innerText();
     assert.equal((verdictSummary.match(/\bIntact\b/g) || []).length, 1, verdictSummary);
@@ -69,6 +91,21 @@ try {
     await route(page, 'receipts');
     assert.equal(await page.locator('tbody tr').count(), 8);
     assert.equal(runtimeErrors.length, 0, runtimeErrors.join('\n'));
+  });
+
+  await check('allowlisted sample query opens the requested evidence and selected record', async () => {
+    await page.goto(`${url}#/records?sample=intact&record=24`);
+    await page.reload();
+    await page.waitForFunction(() => document.querySelector('#record-detail-title')?.textContent === 'Record 24', null, { timeout: 15000 });
+    assert.match(await page.locator('.record-list').textContent(), /24/);
+    const selectedUrl = new URL(page.url());
+    assert.equal(selectedUrl.search, '', 'sample identity is not sent as an HTTP query string');
+    assert.match(selectedUrl.hash, /sample=intact/);
+    await page.getByRole('navigation', { name: 'Workbench sections' }).getByRole('link', { name: 'Workbench' }).click();
+    await waitResult(page, 'Intact');
+    await page.goto(`${url}#/sandbox?sample=tampered`);
+    await page.reload();
+    await waitResult(page, 'Tampered');
   });
 
   await check('payload byte flip on a copy preserves CRC and finds the first bad link', async () => {
@@ -117,9 +154,9 @@ try {
     await page.getByText('Text verification report', { exact: true }).click();
     const expected = await page.locator('.report-text').textContent();
     const [textDownload] = await Promise.all([page.waitForEvent('download'), page.getByRole('button', { name: 'Download text report' }).click()]);
-    assert.equal(textDownload.suggestedFilename(), 'flightseal-verification-report.txt');
+    assert.equal(textDownload.suggestedFilename(), 'hashwing-verification-report.txt');
     const textPath = await textDownload.path(); assert.equal(readFileSync(textPath, 'utf8'), expected);
-    const [jsonDownload] = await Promise.all([page.waitForEvent('download'), page.getByRole('button', { name: 'Download JSON summary' }).click()]);
+    const [jsonDownload] = await Promise.all([page.waitForEvent('download'), page.getByRole('button', { name: 'Download JSON' }).click()]);
     const json = JSON.parse(readFileSync(await jsonDownload.path(), 'utf8'));
     assert.equal(json.nativeVerdict, 'intact'); assert.equal(json.overallVerdict, 'intact'); assert.equal(json.records, '800'); assert.equal(JSON.stringify(json).includes('payload'), false);
   });
@@ -134,15 +171,77 @@ try {
     assert.match(await page.locator('.result-stat').textContent(), /3/);
   });
 
-  await check('oversized file selection clears any previous intact result and explains the 64 MiB guard', async () => {
+  await check('native ULog import drives source-bound telemetry, record selection, video alignment and PDF output', async () => {
+    await page.getByRole('button', { name: 'Choose file' }).click();
+    await page.locator('#workbench-file').setInputFiles({ name: 'tiny-flight.ulg', mimeType: 'application/octet-stream', buffer: testUlog() });
+    await waitResult(page, 'Intact');
+    await page.waitForFunction(() => !!document.querySelector('.source-metadata'));
+    assert.match(await page.locator('.source-metadata').textContent(), /ULog.*SHA-256 [0-9a-f]{64}/);
+    assert.match(await page.locator('.gps-plot').getAttribute('aria-label'), /GPS points plotted offline/);
+    assert.match(await page.locator('.series-plots').textContent(), /Altitude/);
+    await page.getByRole('navigation', { name: 'Workbench sections' }).getByRole('link', { name: 'Records' }).click();
+    assert.match(await page.locator('.detail-panel').textContent(), /Source payload bytes · FSRAW001/);
+    await page.getByRole('button', { name: 'Clear imported session' }).click();
+    await page.waitForFunction(() => !document.querySelector('#result-heading'));
+
+    await page.getByRole('navigation', { name: 'Workbench sections' }).getByRole('link', { name: 'Workbench' }).click();
+    await page.getByRole('button', { name: 'Load telemetry sample' }).click();
+    await waitResult(page, 'Intact');
+    await page.waitForFunction(() => document.querySelector('.telemetry-panel')?.textContent.includes('256 decoded points'));
+    assert.match(await page.locator('.sample-note').textContent(), /synthetic.*not flight evidence/i);
+    assert.match(await page.locator('.gps-plot').getAttribute('aria-label'), /128 visually sampled GPS points/);
+    assert.match(await page.locator('.series-plots').textContent(), /Battery/);
+    const selectedMapPoint = page.locator('.gps-plot circle[role="button"]').nth(127);
+    const selectedMapPointIndex = await selectedMapPoint.getAttribute('data-telemetry-index');
+    const selectedPointLabel = await page.locator(`#telemetry-point option[value="${selectedMapPointIndex}"]`).textContent();
+    await selectedMapPoint.focus();
+    await selectedMapPoint.press('Enter');
+    await page.waitForFunction(() => location.hash === '#/records');
+    await page.waitForFunction(() => document.querySelector('#record-detail-title')?.textContent === 'Record 0');
+    await page.getByRole('button', { name: 'Jump to Video sync' }).click();
+    await page.waitForFunction(() => location.hash === '#/video');
+    assert.equal(await page.locator('#video-record-range').inputValue(), '0');
+    assert.equal(await page.locator('#video-record-range').inputValue(), selectedPointLabel.match(/Record (\d+)/)[1], 'the selected telemetry point stays anchored to its source record');
+    const videoControls = await page.locator('.video-sync-controls').textContent();
+    const selectedTimestamp = selectedPointLabel.match(/[\d,]+ µs/)?.[0].replaceAll(',', '').replace(' µs', '');
+    const videoTimestamp = videoControls.match(/telemetry from record [\d,]+ at ([\d,]+) µs/)?.[1].replaceAll(',', '');
+    assert.ok(selectedTimestamp && selectedTimestamp === videoTimestamp, `selected point ${selectedPointLabel}; video selection ${videoControls}`);
+    assert.match(await page.locator('.video-sync-controls').textContent(), /source byte/);
+    const [pdfDownload] = await Promise.all([page.waitForEvent('download'), page.getByRole('button', { name: 'Export PDF' }).first().click()]);
+    const report = await PDFDocument.load(readFileSync(await pdfDownload.path()), { updateMetadata: false });
+    assert.equal(report.getTitle(), 'HashWing integrity report');
+    assert.equal(report.getCreationDate(), undefined);
+    await page.getByRole('navigation', { name: 'Workbench sections' }).getByRole('link', { name: 'Workbench' }).click();
+    await page.getByRole('button', { name: 'Flip one payload byte' }).click();
+    await page.waitForFunction(() => document.querySelector('.first-failure')?.textContent.includes('bad-link'), null, { timeout: 30000 });
+    assert.equal(await page.getByRole('button', { name: 'Clear imported session' }).count(), 1, 'temporary native import stays available while derived output is open');
+    await page.getByRole('button', { name: 'Inspect records' }).click();
+    if (await page.getByRole('button', { name: 'Last', exact: true }).isEnabled()) await page.getByRole('button', { name: 'Last', exact: true }).click();
+    const lastRecord = page.locator('.record-list button').last();
+    await lastRecord.click();
+    await page.waitForFunction(() => document.querySelector('.detail-grid') || document.querySelector('.detail-panel [role=alert]'));
+    if (await page.getByRole('button', { name: 'First', exact: true }).isEnabled()) await page.getByRole('button', { name: 'First', exact: true }).click();
+    await page.locator('.record-list button').first().click();
+    await page.waitForFunction(() => document.querySelector('#record-detail-title')?.textContent === 'Record 0');
+    await page.getByRole('navigation', { name: 'Workbench sections' }).getByRole('link', { name: 'Workbench' }).click();
+    const [afterMutation] = await Promise.all([page.waitForEvent('download'), page.getByRole('button', { name: 'Download text report' }).click()]);
+    assert.match(readFileSync(await afterMutation.path(), 'utf8'), /bad-link/);
+    await page.getByRole('button', { name: 'Clear imported session' }).click();
+    await page.waitForFunction(() => !document.querySelector('#result-heading'));
+  });
+
+  await check('oversized file selection clears any previous intact result and explains the verifier limit', async () => {
     await route(page, 'verify');
     await page.evaluate(() => {
       const input = document.querySelector('#log-input');
-      const transfer = new DataTransfer();
-      transfer.items.add(new File([new Uint8Array(64 * 1024 * 1024 + 1)], 'too-large.fseal'));
-      input.files = transfer.files; input.dispatchEvent(new Event('change', { bubbles: true }));
+      const file = new File(['x'], 'too-large.fseal');
+      const transfer = new DataTransfer(); transfer.items.add(file);
+      input.files = transfer.files;
+      Object.defineProperty(input.files[0], 'size', { value: 1025 * 1024 * 1024 + 1 });
+      if (input.files[0].size <= 1025 * 1024 * 1024) throw new Error('browser did not retain the test file size override');
+      input.dispatchEvent(new Event('change', { bubbles: true }));
     });
-    await page.waitForFunction(() => document.querySelector('[role=alert]')?.textContent.includes('64 MiB'));
+    await page.waitForFunction(() => /1,025(?:\.00)? MiB/.test(document.querySelector('[role=alert]')?.textContent || ''), null, { timeout: 5000 }).catch(async () => assert.fail(`oversize alert missing; selected size ${await page.locator('#log-input').evaluate((input) => input.files[0]?.size)}; alert ${await page.locator('[role=alert]').textContent().catch(() => '(none)')}`));
     assert.equal(await page.locator('#result-heading').count(), 0, 'previous verdict must not describe the oversized new selection');
   });
 
@@ -152,20 +251,20 @@ try {
     await page.locator('#receipt-input').setInputFiles(resolve(ROOT, '../docs/samples/flight.receipts'));
     await page.locator('#trusted-key').fill(readFileSync(resolve(ROOT, '../docs/samples/pubkey.txt'), 'utf8').trim());
     await page.evaluate(() => {
-      const original = File.prototype.text; let reject = true;
-      File.prototype.text = function (...args) { if (reject) { reject = false; return Promise.reject(new Error('injected file read failure')); } return original.apply(this, args); };
+      const original = File.prototype.arrayBuffer; let reject = true;
+      File.prototype.arrayBuffer = function (...args) { if (reject) { reject = false; return Promise.reject(new Error('injected file read failure')); } return original.apply(this, args); };
     });
     await page.locator('#receipt-input').setInputFiles({ name: 'retry.receipts', mimeType: 'text/plain', buffer: Buffer.from('bad') });
     await page.waitForFunction(() => document.querySelector('[role=alert]')?.textContent.includes('Could not read the receipts file'), null, { timeout: 5000 });
     await page.locator('#receipt-input').setInputFiles(resolve(ROOT, '../docs/samples/flight.receipts'));
-    await page.getByRole('button', { name: 'Run C++ check' }).click(); await waitResult(page, 'Intact');
+    await page.getByRole('button', { name: 'Run check' }).click(); await waitResult(page, 'Intact');
     assert.equal(runtimeErrors.length, 0, runtimeErrors.join('\n'));
   });
 
   await check('slow receipt read is ignored after a newer file selection completes', async () => {
     await page.evaluate(() => {
-      const original = File.prototype.text;
-      File.prototype.text = function (...args) {
+      const original = File.prototype.arrayBuffer;
+      File.prototype.arrayBuffer = function (...args) {
         if (this.name === 'slow.receipts') return new Promise((_, reject) => { window.__rejectSlowReceipt = reject; });
         return original.apply(this, args);
       };
@@ -174,16 +273,45 @@ try {
     await page.waitForFunction(() => typeof window.__rejectSlowReceipt === 'function' && document.querySelector('.field-hint'));
     await page.locator('#receipt-input').setInputFiles(resolve(ROOT, '../docs/samples/flight.receipts'));
     await page.waitForFunction(() => !document.querySelector('.field-hint'));
-    await page.getByRole('button', { name: 'Run C++ check' }).click(); await waitResult(page, 'Intact');
+    await page.getByRole('button', { name: 'Run check' }).click(); await waitResult(page, 'Intact');
     await page.evaluate(() => { window.__rejectSlowReceipt(new Error('stale receipt read')); window.__rejectSlowReceipt = null; });
     await page.waitForTimeout(40);
     assert.equal(await page.locator('#result-heading').textContent(), 'Intact');
     assert.equal(runtimeErrors.length, 0, runtimeErrors.join('\n'));
   });
 
-  await check('blank trusted key is explicitly unverified and adding the key recovers', async () => {
+  await check('receipt loading preserves a UTF-8 BOM for native-compatible rejection', async () => {
+    await route(page, 'verify');
+    await page.locator('#log-input').setInputFiles(resolve(ROOT, '../docs/samples/intact.fseal'));
+    const receipts = readFileSync(resolve(ROOT, '../docs/samples/flight.receipts'), 'utf8');
+    await page.locator('#receipt-input').setInputFiles({ name: 'bom.receipts', mimeType: 'text/plain', buffer: Buffer.from(`\uFEFF${receipts}`) });
+    await page.locator('#trusted-key').fill(readFileSync(resolve(ROOT, '../docs/samples/pubkey.txt'), 'utf8').trim());
+    await page.getByRole('button', { name: 'Run check' }).click();
+    await page.waitForFunction(() => /Receipts line 1 is not valid/.test(document.querySelector('[role=alert]')?.textContent || ''));
+    assert.equal(await page.locator('#result-heading').count(), 0, 'BOM-prefixed receipt input must not be accepted');
+    await page.locator('#receipt-input').setInputFiles(resolve(ROOT, '../docs/samples/flight.receipts'));
+  });
+
+  await check('an explicitly empty receipt file requires removal before chain-only verification', async () => {
+    await route(page, 'verify');
+    await page.locator('#log-input').setInputFiles(resolve(ROOT, '../docs/samples/intact.fseal'));
     await page.locator('#trusted-key').fill('');
-    await page.getByRole('button', { name: 'Run C++ check' }).click(); await waitResult(page, 'Unverified');
+    await page.locator('#receipt-input').setInputFiles({ name: 'empty.receipts', mimeType: 'text/plain', buffer: Buffer.alloc(0) });
+    await page.waitForFunction(() => document.querySelector('#receipt-input-error')?.textContent.includes('file is empty'));
+    assert.equal(await page.getByRole('button', { name: 'Run check' }).isDisabled(), true);
+    await page.getByRole('button', { name: 'Remove receipts' }).click();
+    assert.equal(await page.getByRole('button', { name: 'Remove receipts' }).count(), 0);
+    await page.getByRole('button', { name: 'Run check' }).click();
+    await waitResult(page, 'Intact');
+    await page.getByText('Text verification report', { exact: true }).click();
+    assert.match(await page.locator('.report-text').textContent(), /Receipts: none supplied/);
+  });
+
+  await check('blank trusted key is explicitly unverified and adding the key recovers', async () => {
+    await page.locator('#receipt-input').setInputFiles(resolve(ROOT, '../docs/samples/flight.receipts'));
+    await page.locator('#trusted-key').fill(readFileSync(resolve(ROOT, '../docs/samples/pubkey.txt'), 'utf8').trim());
+    await page.locator('#trusted-key').fill('');
+    await page.getByRole('button', { name: 'Run check' }).click(); await waitResult(page, 'Unverified');
     assert.match(await page.locator('.operation-status').textContent(), /trusted public key/);
     const evidenceDifference = await page.locator('.result-top').innerText();
     assert.match(evidenceDifference, /Native chain: Intact/);
@@ -191,7 +319,7 @@ try {
     await page.getByText('Text verification report', { exact: true }).click();
     assert.match(await page.locator('.report-text').textContent(), /Native chain result: INTACT/);
     assert.match(await page.locator('.report-text').textContent(), /Overall evidence status: UNVERIFIED/);
-    const [unverifiedDownload] = await Promise.all([page.waitForEvent('download'), page.getByRole('button', { name: 'Download JSON summary' }).click()]);
+    const [unverifiedDownload] = await Promise.all([page.waitForEvent('download'), page.getByRole('button', { name: 'Download JSON' }).click()]);
     const unverifiedReport = JSON.parse(readFileSync(await unverifiedDownload.path(), 'utf8'));
     assert.equal(unverifiedReport.nativeVerdict, 'intact');
     assert.equal(unverifiedReport.overallVerdict, 'unverified');
@@ -202,12 +330,12 @@ try {
     assert.match(await page.locator('tbody').textContent(), /No trusted key entered/);
     await route(page, 'verify');
     await page.locator('#trusted-key').fill('0'.repeat(64));
-    await page.getByRole('button', { name: 'Run C++ check' }).click(); await waitResult(page, 'Unverified');
+    await page.getByRole('button', { name: 'Run check' }).click(); await waitResult(page, 'Unverified');
     await route(page, 'receipts');
     assert.match(await page.locator('tbody').textContent(), /different key/);
     await route(page, 'verify');
     await page.locator('#trusted-key').fill(readFileSync(resolve(ROOT, '../docs/samples/pubkey.txt'), 'utf8').trim());
-    await page.getByRole('button', { name: 'Run C++ check' }).click(); await waitResult(page, 'Intact');
+    await page.getByRole('button', { name: 'Run check' }).click(); await waitResult(page, 'Intact');
   });
 
   await check('cancel during sample body read cannot start a stale verification', async () => {
@@ -232,23 +360,24 @@ try {
   await check('record detail file read failure has retry and stale rejection cannot replace a newer record', async () => {
     await route(page, 'sandbox'); await loadFreshDemo(page);
     await route(page, 'records');
+    await page.waitForFunction(() => document.querySelectorAll('.record-list button').length >= 50 && document.querySelector('.detail-grid'));
     await page.evaluate(() => {
-      const original = Blob.prototype.slice; window.__originalBlobSlice = original; let rejectNext = true;
-      Blob.prototype.slice = function (...args) { const part = original.apply(this, args); if (rejectNext) { rejectNext = false; return { arrayBuffer: () => new Promise((_, reject) => { window.__rejectRecordRead = reject; }) }; } return part; };
+      const original = Blob.prototype.arrayBuffer; window.__originalBlobArrayBuffer = original; let rejectNext = true;
+      Blob.prototype.arrayBuffer = function (...args) { if (rejectNext) { rejectNext = false; return new Promise((_, reject) => { window.__rejectRecordRead = reject; }); } return original.apply(this, args); };
     });
     await page.locator('.record-list button').nth(1).click();
     await page.waitForFunction(() => typeof window.__rejectRecordRead === 'function');
     await page.locator('.record-list button').nth(2).click();
-    await page.waitForFunction(() => document.querySelector('#record-detail-heading')?.textContent === 'Record 752' && document.querySelector('.detail-grid'));
+    await page.waitForFunction(() => document.querySelector('#record-detail-title')?.textContent === 'Record 752' && document.querySelector('.detail-grid'));
     await page.evaluate(() => { window.__rejectRecordRead(new Error('injected stale read failure')); window.__rejectRecordRead = null; });
-    assert.equal(await page.locator('#record-detail-heading').textContent(), 'Record 752');
+    assert.equal(await page.locator('#record-detail-title').textContent(), 'Record 752');
     await page.evaluate(() => {
-      const original = window.__originalBlobSlice; let rejectOnce = true;
-      Blob.prototype.slice = function (...args) { const part = original.apply(this, args); if (rejectOnce) { rejectOnce = false; return { arrayBuffer: () => Promise.reject(new Error('injected current read failure')) }; } return part; };
+      const original = window.__originalBlobArrayBuffer; let rejectOnce = true;
+      Blob.prototype.arrayBuffer = function (...args) { if (rejectOnce) { rejectOnce = false; return Promise.reject(new Error('injected current read failure')); } return original.apply(this, args); };
     });
     await page.locator('.record-list button').nth(3).click();
-    await page.getByRole('button', { name: 'Retry' }).waitFor();
-    await page.evaluate(() => { Blob.prototype.slice = window.__originalBlobSlice; });
+    await page.getByRole('button', { name: 'Retry' }).waitFor({ timeout: 5000 }).catch(async () => assert.fail(`current record read did not expose retry: ${(await page.locator('.detail-panel').innerText()).slice(0, 500)}`));
+    await page.evaluate(() => { Blob.prototype.arrayBuffer = window.__originalBlobArrayBuffer; });
     await page.getByRole('button', { name: 'Retry' }).click();
     await page.waitForFunction(() => document.querySelector('.detail-grid')?.textContent.includes('Payload length'));
     assert.equal(runtimeErrors.length, 0, runtimeErrors.join('\n'));
@@ -268,7 +397,7 @@ try {
     assert.match(await page.locator('.video-meta').textContent(), /Codec identification is unknown/);
     await route(page, 'records');
     await page.locator('.record-list button').nth(1).click();
-    await page.waitForFunction(() => document.querySelector('#record-detail-heading')?.textContent === 'Record 1');
+    await page.waitForFunction(() => document.querySelector('#record-detail-title')?.textContent === 'Record 1');
     await route(page, 'video');
     await page.waitForFunction(() => document.querySelector('video')?.duration === 10 && !!document.querySelector('video').currentSrc, null, { timeout: 3000 });
     await page.getByRole('button', { name: 'Sync to selected record' }).click();
@@ -296,12 +425,9 @@ try {
     assert.equal(await page.locator(':focus').getAttribute('class'), 'skip-link');
     await page.keyboard.press('Enter');
     assert.equal(await page.locator(':focus').getAttribute('id'), 'page-sandbox');
-    await page.getByRole('button', { name: 'Menu' }).click();
-    assert.equal(await page.getByRole('navigation', { name: 'Console sections' }).getByRole('link', { name: /Records/ }).isVisible(), true);
-    await page.keyboard.press('Escape');
-    assert.equal(await page.locator(':focus').getAttribute('class'), 'menu-toggle');
+    assert.equal(await page.getByRole('navigation', { name: 'Workbench sections' }).getByRole('link', { name: /Records/ }).isVisible(), true);
     await page.evaluate(() => { location.hash = '#/verify'; });
-    await page.waitForFunction(() => document.activeElement?.id === 'page-verify' && document.title === 'Verify · FlightSeal Console');
+    await page.waitForFunction(() => document.activeElement?.id === 'page-verify' && document.title === 'Verify file · HashWing');
     await page.evaluate(() => history.back());
     await page.waitForFunction(() => location.hash === '#/sandbox' && document.activeElement?.id === 'page-sandbox');
     await page.evaluate(() => history.forward());
@@ -332,40 +458,28 @@ try {
     } finally { await context.setOffline(false); }
   });
 
-  await check('documented modifier shortcuts navigate without altering the checked evidence', async () => {
+  await check('rail navigation updates focused route and preserves the checked evidence', async () => {
     await page.goto(url); await waitResult(page, 'Intact');
-    for (const [number, screen] of [[2, 'verify'], [3, 'records'], [4, 'receipts'], [5, 'video'], [6, 'help'], [1, 'sandbox']]) {
-      await page.keyboard.press(`Alt+Shift+${number}`);
-      await page.waitForFunction((screen) => document.activeElement?.id === `page-${screen}` && location.hash === `#/${screen}`, screen, { timeout: 1500 });
+    for (const [screen, title] of [['verify', 'Verify file'], ['records', 'Records'], ['receipts', 'Receipts'], ['video', 'Video sync'], ['help', 'Trust limits'], ['sandbox', 'Workbench']]) {
+      await page.getByRole('navigation', { name: 'Workbench sections' }).getByRole('link', { name: title }).click();
+      await page.waitForFunction((target) => document.activeElement?.id === `page-${target}`, screen, { timeout: 1500 });
     }
     assert.match(await page.locator('.result-stat').textContent(), /800/);
-    await page.keyboard.press('Alt+Shift+2');
+    await page.getByRole('navigation', { name: 'Workbench sections' }).getByRole('link', { name: 'Verify file' }).click();
     await page.locator('#trusted-key').fill('editing');
-    await page.keyboard.press('Alt+Shift+3');
-    assert.equal(await page.evaluate(() => location.hash), '#/verify');
+    await page.getByRole('navigation', { name: 'Workbench sections' }).getByRole('link', { name: 'Records' }).click();
+    assert.equal(await page.evaluate(() => location.hash), '#/records');
+    await page.getByRole('navigation', { name: 'Workbench sections' }).getByRole('link', { name: 'Verify file' }).click();
     assert.equal(await page.locator('#trusted-key').inputValue(), 'editing');
   });
 
-  await check('team pricing dialog is keyboard accessible and does not pretend to collect email or sell a plan', async () => {
+  await check('PDF export is a valid downloadable integrity report', async () => {
     await page.goto(url); await waitResult(page, 'Intact');
-    await page.getByRole('button', { name: 'Team options' }).click({ timeout: 1500 });
-    const dialog = page.getByRole('dialog', { name: 'Commercial fleet and cloud notary' });
-    assert.match(await dialog.textContent(), /Starter · proposed \$49\/month/);
-    assert.match(await dialog.textContent(), /Fleet · proposed \$299\/month/);
-    assert.match(await dialog.textContent(), /both unavailable/);
-    assert.match(await dialog.textContent(), /AWS archive\/notary not connected/);
-    assert.match(await dialog.locator('.receipt-preview').textContent(), /Native check/);
-    assert.ok(await dialog.locator('.receipt-preview dd code').count() >= 2, 'preview must show the actual receipt head and key');
-    assert.equal(await dialog.locator('input, form').count(), 0);
-    assert.match(await dialog.getByRole('link', { name: 'Share team requirements' }).getAttribute('href'), /^https:\/\/github\.com\/anirudh763\/flightseal\/issues\/new\?/);
-    await page.keyboard.press('Escape');
-    assert.equal(await dialog.isVisible(), false);
-    assert.equal(await page.locator(':focus').textContent(), 'Team options');
-    await auditAxe(page, '320px team pricing closed');
-    await page.getByRole('button', { name: 'Team options' }).click();
-    await auditAxe(page, '320px team pricing dialog');
-    assert.ok(await dialog.evaluate((element) => element.getBoundingClientRect().width <= innerWidth));
-    await page.keyboard.press('Escape');
+    const [pdfDownload] = await Promise.all([page.waitForEvent('download'), page.getByRole('button', { name: 'Export PDF' }).first().click()]);
+    assert.equal(pdfDownload.suggestedFilename(), 'hashwing-integrity-report.pdf');
+    const pdf = await PDFDocument.load(readFileSync(await pdfDownload.path()), { updateMetadata: false });
+    assert.equal(pdf.getTitle(), 'HashWing integrity report');
+    assert.ok(pdf.getPageCount() >= 1);
   });
 
   await context.close();

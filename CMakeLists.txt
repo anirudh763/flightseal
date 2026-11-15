@@ -51,7 +51,7 @@ endif()
 
 find_package(OpenSSL 1.1.1 REQUIRED)
 
-add_library(fseal src/fseal.cpp)
+add_library(fseal src/fseal.cpp src/import.cpp)
 target_include_directories(fseal PUBLIC src)
 target_link_libraries(fseal PUBLIC OpenSSL::Crypto)
 
@@ -69,6 +69,10 @@ enable_testing()
 add_executable(fseal-tests tests/test_fseal.cpp)
 target_link_libraries(fseal-tests fseal)
 add_test(NAME unit COMMAND fseal-tests)
+
+add_executable(fseal-import-tests tests/test_import.cpp)
+target_link_libraries(fseal-import-tests fseal)
+add_test(NAME import COMMAND fseal-import-tests)
 
 # Test-only LD_PRELOAD shim that makes one chosen OpenSSL call fail (tests/test_crypto_failures.py). Not installed.
 if(CMAKE_SYSTEM_NAME STREQUAL "Linux")

@@ -9,29 +9,40 @@ have been created. AWS below is an optional proposal, not the deployed architect
 ```mermaid
 flowchart LR
   U[Operator / investigator] -->|downloaded .ulg or FLTSEAL1 + optional receipts| B[Static GitHub Pages verifier]
-  B -->|legacy JavaScript verifier| L[Browser WebCrypto]
-  B --> C[React console]
+  B -->|root and legacy-link redirect| C[HashWing React console]
   C --> N[C++ OpenSSL Wasm worker]
   C --> I[Independent JS record index]
+  C -->|raw ULog import, source hash and chunk seal| N
+  N --> O[Temporary local OPFS output]
   PX4[Downloaded PX4 .ulg] -->|local conversion to selected records| CLI[fseal C++ CLI]
   CLI -->|FLTSEAL1 + Ed25519 receipts| F[Local files]
   F --> B
   W[Independent witness] -. separately retains receipts and trusted public key .-> B
 ```
 
-The legacy verifier runs in the user's browser, reads selected files locally, and has no upload or backend API.
+The single console runs in the user's browser, reads selected files locally, and has no upload or backend API.
 It verifies the FLTSEAL1 hash chain and can authenticate receipts with a supplied trusted public key. The C++ core
-and the browser's current JavaScript implementation are separate readers. The new C++/OpenSSL WebAssembly bridge
-is compiled (about 1.93 MB module), has native/Node parity coverage, and is used by the console.
+and the independent JavaScript reader are separate implementations used for finite parity tests and indexing.
+The C++/OpenSSL WebAssembly bridge is compiled (about 1.97 MB module) and is used by every console verification,
+sealing and mutation operation. PDF generation loads separately when requested.
 Missing-key receipts remain unchecked: the application reports overall UNVERIFIED separately from the unchanged
 native chain-only result. It never fabricates a native receipt-verification result.
-Its browser path uses a dedicated worker and streaming native file I/O. A 500 MiB / 500-record probe (roughly 1 MiB payload per record) measured 32 MiB of native
-Wasm heap in Chrome with WORKERFS and took 6.06 seconds on the test Mac. Native Linux verification used 7,976 KiB
-maximum RSS and 2.88 seconds; Node/Wasm took 4.85 seconds with a 32 MiB native heap. These are single-machine
-measurements, not whole-browser memory, a record-rate benchmark, device coverage, or a production capacity claim.
+Its browser path uses a dedicated worker and buffered native file I/O. In a fresh task-owned Chrome profile on
+the test Mac, a 1 GiB sealed-file verification took about 12.5 seconds; a separate 1 GiB raw-ULog import, source
+hash, seal, verification and cleanup took about 38.6 seconds, producing 1,026 records and two receipts. Both
+reported a 32 MiB native Wasm heap. Main-thread heartbeat delays stayed below the test's 250 ms threshold.
+These finite local probes are not whole-browser memory measurements, hardware coverage or a service capacity
+guarantee. Private windows or devices with less storage can reject the same workload.
 
-PX4 `.ulg` conversion is currently a local post-download step. The converter selects and decodes records; FlightSeal
-does not authenticate the source `.ulg` bytes, attest that telemetry was true, or cover events before sealing.
+PX4 `.ulg` processing is a local post-download step. The Python converter selects and decodes records. The native
+raw importer instead preserves every source byte in `FSRAW001` chunk envelopes plus a final SHA-256 digest record;
+receipt coverage binds those envelopes, not the truth or origin of the source bytes. Supported PX4 scalar fields
+provide a bounded telemetry preview using PX4 unit conventions; custom units and sensor truth are not validated.
+An imported chunk can contain many telemetry samples, so its integrity boundary is not an individual sensor sample.
+Large output is written directly to OPFS through a worker-only synchronous file adapter, with quota checks and an
+explicit clear action. Web Locks protect active outputs in other tabs; abandoned owned outputs are recovered on
+the next visit. Raw import is capped at 1 GiB, verification at 1,025 MiB, and operations have a five-minute deadline.
+No path attests telemetry truth or covers events before sealing.
 The append format can accept a stream, but on-drone or live ground-station sealing has not been validated. The hash
 structure is a sequential SHA-256 chain, not a Merkle tree. A receipt binds a record count and chain head; an
 independently held receipt and independently trusted public key are required for protection against a complete

@@ -1,4 +1,6 @@
-# FlightSeal
+# HashWing
+
+Local flight-log integrity, verified in your browser. The repository and `fseal` CLI retain their existing names; FLTSEAL1 and receipt v1 stay compatible.
 
 **A post-download seal and reference file format for drone flight logs: edit, delete or reorder one record and
 verification fails when checked against receipts held elsewhere.**
@@ -14,11 +16,12 @@ someone has to decide whether the log in front of them is the log the drone wrot
 shows that it changed since the hash was taken, not where, and whoever holds both the file and the hash can replace
 both.
 
-FlightSeal chains every record to the one before it, and every few thousand records a signed receipt goes to someone
+HashWing chains every record to the one before it, and every few thousand records a signed receipt goes to someone
 else (an investigator, the operator's company, an insurer). Later, anyone with the log, the receipts and the drone's
 public key can check that nothing was changed, removed or reordered since sealing, and find the exact record where
-tampering starts. In this repository a log is sealed after it is downloaded from the drone (a PX4 `.ulg` file is
-converted to records); nothing before that moment is covered. The format is append-only and `fseal append` reads any
+tampering starts. In this repository a log is sealed after it is downloaded from the drone; nothing before that
+moment is covered. Raw PX4 `.ulg` import preserves source bytes in bounded chunks; the older Python converter
+instead selects decoded records. The format is append-only and `fseal append` reads any
 `timestamp<TAB>payload` stream, so sealing on the drone or ground station while the log is written is possible, but it
 has not been tried.
 
@@ -65,7 +68,7 @@ cannot change is the receipts someone else already holds.
 log immediately. Change a copy with a payload byte flip, middle-record deletion, or tail truncation; inspect the
 first failure and its record, then download a text or JSON summary. No account or upload is needed.
 
-![FlightSeal console showing the checked sample, receipt coverage and local sandbox actions](docs/screenshots/console-1440.png)
+![HashWing workbench showing the checked sample, receipt coverage and local sandbox actions](docs/screenshots/console-1440.png)
 
 The React/Tailwind console calls the same C++/OpenSSL core compiled to WebAssembly. It also checks its record index
 against the existing independent JavaScript reader. Verify, Records, Receipts, Video sync and Trust help have separate
@@ -73,10 +76,13 @@ addresses. The optional full PX4 example contains **64,542 converted records and
 28.9 MiB only when requested; [provenance](docs/samples/px4-full-provenance.json) records its source and transforms.
 The bundled key verifies this demo artifact, not the original flight identity or events before sealing.
 
-Browser sealing takes `timestamp_us<TAB>payload` text and returns a new log, receipts and public key. Its private
-key is ephemeral and is discarded with the worker. Downloading receipts after sealing is not an independent
-witness or a durable signing deployment. The console accepts logs up to 64 MiB; the underlying worker supports
-up to 500 MiB, with [measured limits and trust boundaries](wasm/README.md).
+Browser sealing accepts raw PX4 `.ulg` or `timestamp_us<TAB>payload` text and returns a new log, receipts and public
+key. Raw import preserves every source byte and a SHA-256 source digest in signed, bounded chunk records. Supported
+PX4 position/battery fields feed a limited telemetry view; the synthetic telemetry sample is labelled separately.
+Its private key is ephemeral and is discarded with the worker. Downloading receipts after sealing is not an
+independent witness or a durable signing deployment. Raw import is bounded to 1 GiB and uses temporary local OPFS
+storage where supported; verification allows 1,025 MiB for envelope overhead. Quota, browser and timeout limits
+still apply. See [measured limits and trust boundaries](wasm/README.md).
 
 With Docker installed, build and run the native, Python, JavaScript/Wasm, frontend-build and static-package checks:
 
@@ -93,7 +99,8 @@ npm --prefix newweb run preview
 ```
 
 Open `http://127.0.0.1:4173/flightseal/console/`. Browser regression tests are `npm --prefix newweb run test:browser`
-after installing Playwright Chromium. The original verifier below and its links remain available.
+after installing Playwright Chromium. The root URL and compatible old sample/record links redirect into this
+single console; the independent JavaScript reader remains a test oracle.
 
 Local [FFmpeg video tools](tools/video/README.md) inspect actual codecs and convert a bounded local video to a new
 H.264/AAC MP4. The browser Video sync screen checks playback metadata, aligns a selected record with a manual offset, and warns when it cannot identify or play a codec;
@@ -107,37 +114,20 @@ collection, or email waitlist is active.
 
 ## Check a log in your browser
 
-**[Open the verifier](https://anirudh763.github.io/flightseal/)**: drop a sealed log, and optionally its receipts and
-the public key you trust. It runs in the page with the browser's WebCrypto (SHA-256, Ed25519); files are read
-locally and never uploaded. After one visit it also opens offline (a service worker keeps the page and the samples;
-files you check are never cached), and it can be installed as an app from the browser menu.
+**[Open HashWing](https://anirudh763.github.io/flightseal/)**: choose a sealed log and optionally its receipts and
+an independently trusted public key. The canonical light console runs the C++/OpenSSL verifier locally in a worker;
+files are never uploaded. Workbench, Verify, Records, Receipts, Video sync and Trust limits each have an address.
+After a successful online visit, the console and small examples can reload offline. The full PX4 download is opt-in.
 
-![Findings for the tampered example: the first chain break at record 150, receipt coverage and the limits of the trust conclusion](docs/screenshots/findings-1440.png)
+The 800-record example is synthetic. The 2,422-record and 64,542-record examples are selected/converted public PX4
+records, with documented provenance. The separate telemetry demo is synthetic ULog, not a physical flight. Records
+and receipt details use bounded indexed reads; text, JSON and PDF reports contain actual verification results.
+The PDF is an integrity summary, not a legal certificate or trusted timestamp.
 
-- Screens, each with its own address so a view can be shared: **Verify a file** (the log, optional receipts, the
-  key you trust), **Findings** (verdict, coverage and one next action), **Records** (every record as a link in the
-  hash chain, `#/records/150`), **Receipts** (`#/receipts/2`), and **Trust help** and **Examples**. Old
-  `?sample=...&record=N` links open the same view. Findings, Records and Receipts show an empty state with the
-  Verify action until a file has been checked.
-- The evidence chain: records are drawn as a vertical chain (record number, byte range, status in words). The first
-  break, the end of the covered prefix and every receipt (attached after the record it pins) are marked on it.
-- Examples: a synthetic 8-second flight (800 records: intact, one altitude changed by 10 m, a full rewrite that
-  only the receipts catch, the last 150 records deleted) sealed by the real CLI with
-  [`tools/make_web_samples.py`](tools/make_web_samples.py), and a real PX4 flight: 2,422 records from five topics
-  with no position or GPS data (motor outputs, flight mode, vehicle status, CPU load, telemetry link) selected from
-  the public pyulog sample log, intact and with one motor output changed, made by
-  [`tools/make_px4_samples.py`](tools/make_px4_samples.py).
-- Light by default, including when the system prefers dark; a "Dark theme" button switches and remembers it.
-- It reports three things separately: whether the hash chain is consistent (no key needed), which records are
-  covered by receipts signed by the key you trust, and which records come after the last such receipt and are not
-  protected. A hash chain pinpoints the first record where the chain breaks, not every altered record; a receipt
-  mismatch narrows an edit to the records between two receipts but cannot say which one. Truncation of the tail is
-  only caught with receipts, and the page says so when none are loaded.
-- If the browser's WebCrypto has no Ed25519, receipts are reported as not authenticated (neither proof of tampering
-  nor of integrity) and the chain is still verified.
-- [`docs/verifier.js`](docs/verifier.js) is plain JavaScript with no dependencies and no build step. On the
-  64,542-record PX4 flight (30 MB) the page verified the chain in 0.90 to 1.27 s in headless Chromium on the
-  benchmark VM (5 runs). The scan runs in a Web Worker, so the page stays responsive and Cancel stops it at once.
+Chain consistency, trusted receipt coverage and an uncovered suffix are separate conclusions. A hash chain locates
+the first broken link, not every altered record. A receipt mismatch narrows an edit to an interval but does not
+identify every changed byte. Without trusted independent receipts, a complete rewrite or removal of whole tail
+records can remain undetectable. Missing or untrusted keys never become a successful receipt-authentication claim.
 
 ## What it proves, and what it does not
 
@@ -159,10 +149,10 @@ sequence numbers and `verify` reports timestamps that go backwards. The full lis
 
 Limits of this project:
 
-- The PX4 converter seals selected decoded ULog records, sorted by timestamp, after the log was downloaded; it does not preserve or authenticate every byte of the original .ulg file, or anything that happened before sealing. The ULog format is described in the [PX4 ULog specification](https://docs.px4.io/main/en/dev_log/ulog_file_format).
+- The PX4 converter seals selected decoded ULog records, sorted by timestamp, after the log was downloaded; it does not preserve or authenticate every byte of the original .ulg file, or anything that happened before sealing. This describes the Python converter; the separate native raw ULog importer preserves source bytes and a source digest in chunk envelopes, so integrity localization is at sealed-chunk granularity. Neither path authenticates events before sealing. The ULog format is described in the [PX4 ULog specification](https://docs.px4.io/main/en/dev_log/ulog_file_format).
 - Keeping receipts with a separate witness is an operational assumption: the CLI writes receipts to a local file, and the protection holds only if someone other than the log's holder keeps a copy.
 - The tests use one real PX4 flight log (a public pyulog fixture); the browser examples are a synthetic 800-record flight and 2,422 records selected from that PX4 log, with no position or GPS topics.
-- FlightSeal is a narrow, documented workflow to support experiments. It is not proof of safe flight or of an accident's cause, and it is not a reproduction of RVFuzzer or PGFuzz. No user or field validation has been done.
+- HashWing is a narrow, documented workflow to support experiments. It is not proof of safe flight or of an accident's cause, and it is not a reproduction of RVFuzzer or PGFuzz. No user or field validation has been done.
 
 ## How it works
 
@@ -328,7 +318,7 @@ Content-Security-Policy with no inline script and no network access beyond its o
 
 They are services: an immutable database (immudb) and transparency logs (Trillian, Rekor) that run on servers and
 answer queries. A drone or its ground station is often offline, and what an investigator receives is a file.
-FlightSeal is a small library and a single-file format that works offline, and its receipts are one line of text that
+The underlying FlightSeal core is a small library and a single-file format that works offline, and its receipts are one line of text that
 can be emailed. Publishing those receipts to a transparency log like Rekor would remove the need to trust a single
 receipt holder; that is a next step.
 

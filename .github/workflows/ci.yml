@@ -32,7 +32,7 @@ jobs:
       - name: Python tests (CLI, independent reader, real PX4 flight)
         run: python -m pytest -q
       - name: JS verifier agrees with the CLI and the Python reader (every attack, hostile files, PX4 flight)
-        run: node --test tests/web/verifier.test.mjs tests/web/copy.test.mjs
+        run: node --test tests/web/verifier.test.mjs tests/web/copy.test.mjs tests/web/workbench.test.mjs tests/web/redirect.test.mjs
       - name: Demo on a real PX4 flight
         run: tools/demo.sh
 
@@ -54,6 +54,11 @@ jobs:
         run: |
           npm ci
           npx playwright install --with-deps chromium
+      - name: Build the canonical HashWing workbench
+        working-directory: newweb
+        run: |
+          npm ci
+          npm run build
       - name: Verifier page (samples match the CLI, hostile files, axe-core light and dark)
         run: node tests/web/e2e.mjs
       - name: Verifier screens (routes, focus, Menu sheet, Back/Forward, deep and old links, light default, axe-core)
@@ -90,7 +95,7 @@ jobs:
           python3 tools/verify_wasm_provenance.py
           scripts/build_wasm.sh
       - name: Test the compiled native bridge
-        run: node --test tests/wasm/bridge.test.mjs tests/wasm/enterprise-edge.test.mjs
+        run: node --test tests/wasm/bridge.test.mjs tests/wasm/enterprise-edge.test.mjs tests/wasm/import.test.mjs tests/wasm/output-storage.test.mjs
       - name: Install browser dependencies
         working-directory: tests/web
         run: |
@@ -102,6 +107,7 @@ jobs:
         working-directory: newweb
         run: |
           npm ci
+          node --test tests/report-pdf.test.mjs
           npm run build
       - name: Console flows, mobile layouts and accessibility
         working-directory: newweb
