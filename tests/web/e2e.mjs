@@ -225,7 +225,9 @@ try {
       });
       const page = await verifyInBrowser(context, sample('intact.fseal', 'flight.receipts', 'pubkey.txt'));
       assert.equal(await browserVerdict(page), 'intact');
-      assert.match(await page.locator('.operation-status').textContent(), /cannot check Ed25519 signatures/i);
+      const limitation = await page.locator('.operation-status').textContent();
+      assert.match(limitation, /C\+\+ verified the receipts/i, 'native receipt verification remains available');
+      assert.match(limitation, /independent JavaScript signature check is unavailable/i, 'browser signature limitation stays explicit');
     } finally { await context.close(); }
   });
 } catch (error) {
