@@ -68,10 +68,10 @@ cannot change is the receipts someone else already holds.
 log immediately. Change a copy with a payload byte flip, middle-record deletion, or tail truncation; inspect the
 first failure and its record, then download a text or JSON summary. No account or upload is needed.
 
-![HashWing workbench showing the checked sample, receipt coverage and local sandbox actions](docs/screenshots/console-1440.png)
+![HashWing showing a detected hash-chain break and local mutation and sealing controls](docs/screenshots/console-1440.png)
 
 The React/Tailwind console calls the same C++/OpenSSL core compiled to WebAssembly. It also checks its record index
-against the existing independent JavaScript reader. Verify, Records, Receipts, Video sync and Trust help have separate
+against the existing independent JavaScript reader. Verify, Records, Receipts, Video and Trust have separate
 addresses. The optional full PX4 example contains **64,542 converted records and 13 receipts** and downloads
 28.9 MiB only when requested; [provenance](docs/samples/px4-full-provenance.json) records its source and transforms.
 The bundled key verifies this demo artifact, not the original flight identity or events before sealing.
@@ -103,7 +103,7 @@ after installing Playwright Chromium. The root URL and compatible old sample/rec
 single console; the independent JavaScript reader remains a test oracle.
 
 Local [FFmpeg video tools](tools/video/README.md) inspect actual codecs and convert a bounded local video to a new
-H.264/AAC MP4. The browser Video sync screen checks playback metadata, aligns a selected record with a manual offset, and warns when it cannot identify or play a codec;
+H.264/AAC MP4. The browser Video screen checks playback metadata, aligns a selected record with a manual offset, and warns when it cannot identify or play a codec;
 it does not upload or convert media. The [AVFoundation helper](native/README-video.md) was compiled and its local-URL
 guards exercised on macOS; there is no Xcode/iOS app target in this repository.
 
@@ -116,7 +116,7 @@ collection, or email waitlist is active.
 
 **[Open HashWing](https://anirudh763.github.io/flightseal/)**: choose a sealed log and optionally its receipts and
 an independently trusted public key. The canonical light console runs the C++/OpenSSL verifier locally in a worker;
-files are never uploaded. Workbench, Verify, Records, Receipts, Video sync and Trust limits each have an address.
+files are never uploaded. Samples, Verify, Records, Receipts, Video and Trust each have an address.
 After a successful online visit, the console and small examples can reload offline. The full PX4 download is opt-in.
 
 The 800-record example is synthetic. The 2,422-record and 64,542-record examples are selected/converted public PX4
