@@ -70,7 +70,7 @@ function numberPattern(value) {
 async function verifyInBrowser(context, testCase, { run = true } = {}) {
   const page = await context.newPage();
   await page.goto(`${url}#/verify`);
-  await page.waitForFunction(() => document.querySelector('.commandbar h1')?.textContent === 'Verify file');
+  await page.waitForFunction(() => document.querySelector('.commandbar h1')?.textContent === 'Verify');
   await page.locator('#log-input').setInputFiles(testCase.log);
   if (testCase.receipts !== null) await page.locator('#receipt-input').setInputFiles(testCase.receipts);
   await page.locator('#trusted-key').fill(testCase.key || '');
@@ -225,7 +225,9 @@ try {
       });
       const page = await verifyInBrowser(context, sample('intact.fseal', 'flight.receipts', 'pubkey.txt'));
       assert.equal(await browserVerdict(page), 'intact');
-      assert.match(await page.locator('.operation-status').textContent(), /cannot check Ed25519 signatures/i);
+      const limitation = await page.locator('.operation-status').textContent();
+      assert.match(limitation, /C\+\+ verified the receipts/i, 'native receipt verification remains available');
+      assert.match(limitation, /independent JavaScript signature check is unavailable/i, 'browser signature limitation stays explicit');
     } finally { await context.close(); }
   });
 } catch (error) {

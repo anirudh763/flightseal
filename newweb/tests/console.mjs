@@ -37,7 +37,7 @@ async function loadFreshDemo(page) {
 async function route(page, screen) {
   await page.evaluate((s) => { location.hash = `/${s}`; }, screen);
   await page.waitForFunction((s) => location.hash === `#/${s}`, screen);
-  const heading = ({ sandbox: 'Workbench', verify: 'Verify file', records: 'Records', receipts: 'Receipts', video: 'Video sync', help: 'Trust limits' })[screen];
+  const heading = ({ sandbox: 'Samples', verify: 'Verify', records: 'Records', receipts: 'Receipts', video: 'Video', help: 'Trust' })[screen];
   await page.waitForFunction((expected) => document.querySelector('.commandbar h1')?.textContent === expected, heading);
 }
 function littleEndian(value, width) {
@@ -83,7 +83,7 @@ try {
 
   await check('included 800-record demo verifies through native WASM with receipts', async () => {
     assert.ok(metrics.firstVisit800DemoMs < 3000, `first included demo took ${metrics.firstVisit800DemoMs}ms`);
-    assert.match(await page.locator('.result-top .eyebrow').textContent(), /VERIFICATION RESULT/);
+    assert.equal(await page.locator('.result-top .eyebrow').count(), 0, 'result has no redundant status caption');
     assert.match(await page.locator('#result-heading').textContent(), /Intact/);
     const verdictSummary = await page.locator('.result-top').innerText();
     assert.equal((verdictSummary.match(/\bIntact\b/g) || []).length, 1, verdictSummary);
@@ -101,7 +101,7 @@ try {
     const selectedUrl = new URL(page.url());
     assert.equal(selectedUrl.search, '', 'sample identity is not sent as an HTTP query string');
     assert.match(selectedUrl.hash, /sample=intact/);
-    await page.getByRole('navigation', { name: 'Workbench sections' }).getByRole('link', { name: 'Workbench' }).click();
+    await page.getByRole('navigation', { name: 'Primary navigation' }).getByRole('link', { name: 'Samples' }).click();
     await waitResult(page, 'Intact');
     await page.goto(`${url}#/sandbox?sample=tampered`);
     await page.reload();
@@ -130,14 +130,14 @@ try {
   });
 
   await check('optional PX4 fixture verifies 2,422 records with its included receipts', async () => {
-    await page.getByRole('button', { name: 'Open 2,422-record PX4 example' }).click();
+    await page.getByRole('button', { name: 'Load 2,422-record PX4 sample' }).click();
     await waitResult(page, 'Intact');
     assert.match(await page.locator('.result-stat').textContent(), /2,422/);
   });
 
   await check('full PX4 fixture verifies 64,542 records and all 13 signed receipts on demand', async () => {
     const start = performance.now();
-    await page.getByRole('button', { name: /Open full PX4 example/ }).click();
+    await page.getByRole('button', { name: /Load full PX4 sample/ }).click();
     await page.waitForFunction(() => document.querySelector('.result-stat')?.textContent.includes('64,542'), null, { timeout: 60000 });
     metrics.fullPX4NativeAndIndexMs = Math.round(performance.now() - start);
     assert.match(await page.locator('#result-heading').textContent(), /Intact/);
@@ -179,12 +179,12 @@ try {
     assert.match(await page.locator('.source-metadata').textContent(), /ULog.*SHA-256 [0-9a-f]{64}/);
     assert.match(await page.locator('.gps-plot').getAttribute('aria-label'), /GPS points plotted offline/);
     assert.match(await page.locator('.series-plots').textContent(), /Altitude/);
-    await page.getByRole('navigation', { name: 'Workbench sections' }).getByRole('link', { name: 'Records' }).click();
+    await page.getByRole('navigation', { name: 'Primary navigation' }).getByRole('link', { name: 'Records' }).click();
     assert.match(await page.locator('.detail-panel').textContent(), /Source payload bytes · FSRAW001/);
     await page.getByRole('button', { name: 'Clear imported session' }).click();
     await page.waitForFunction(() => !document.querySelector('#result-heading'));
 
-    await page.getByRole('navigation', { name: 'Workbench sections' }).getByRole('link', { name: 'Workbench' }).click();
+    await page.getByRole('navigation', { name: 'Primary navigation' }).getByRole('link', { name: 'Samples' }).click();
     await page.getByRole('button', { name: 'Load telemetry sample' }).click();
     await waitResult(page, 'Intact');
     await page.waitForFunction(() => document.querySelector('.telemetry-panel')?.textContent.includes('256 decoded points'));
@@ -198,7 +198,7 @@ try {
     await selectedMapPoint.press('Enter');
     await page.waitForFunction(() => location.hash === '#/records');
     await page.waitForFunction(() => document.querySelector('#record-detail-title')?.textContent === 'Record 0');
-    await page.getByRole('button', { name: 'Jump to Video sync' }).click();
+    await page.getByRole('button', { name: 'Video' }).click();
     await page.waitForFunction(() => location.hash === '#/video');
     assert.equal(await page.locator('#video-record-range').inputValue(), '0');
     assert.equal(await page.locator('#video-record-range').inputValue(), selectedPointLabel.match(/Record (\d+)/)[1], 'the selected telemetry point stays anchored to its source record');
@@ -211,11 +211,11 @@ try {
     const report = await PDFDocument.load(readFileSync(await pdfDownload.path()), { updateMetadata: false });
     assert.equal(report.getTitle(), 'HashWing integrity report');
     assert.equal(report.getCreationDate(), undefined);
-    await page.getByRole('navigation', { name: 'Workbench sections' }).getByRole('link', { name: 'Workbench' }).click();
+    await page.getByRole('navigation', { name: 'Primary navigation' }).getByRole('link', { name: 'Samples' }).click();
     await page.getByRole('button', { name: 'Flip one payload byte' }).click();
     await page.waitForFunction(() => document.querySelector('.first-failure')?.textContent.includes('bad-link'), null, { timeout: 30000 });
     assert.equal(await page.getByRole('button', { name: 'Clear imported session' }).count(), 1, 'temporary native import stays available while derived output is open');
-    await page.getByRole('button', { name: 'Inspect records' }).click();
+    await page.getByRole('button', { name: 'Records', exact: true }).click();
     if (await page.getByRole('button', { name: 'Last', exact: true }).isEnabled()) await page.getByRole('button', { name: 'Last', exact: true }).click();
     const lastRecord = page.locator('.record-list button').last();
     await lastRecord.click();
@@ -223,7 +223,7 @@ try {
     if (await page.getByRole('button', { name: 'First', exact: true }).isEnabled()) await page.getByRole('button', { name: 'First', exact: true }).click();
     await page.locator('.record-list button').first().click();
     await page.waitForFunction(() => document.querySelector('#record-detail-title')?.textContent === 'Record 0');
-    await page.getByRole('navigation', { name: 'Workbench sections' }).getByRole('link', { name: 'Workbench' }).click();
+    await page.getByRole('navigation', { name: 'Primary navigation' }).getByRole('link', { name: 'Samples' }).click();
     const [afterMutation] = await Promise.all([page.waitForEvent('download'), page.getByRole('button', { name: 'Download text report' }).click()]);
     assert.match(readFileSync(await afterMutation.path(), 'utf8'), /bad-link/);
     await page.getByRole('button', { name: 'Clear imported session' }).click();
@@ -348,7 +348,7 @@ try {
         return original(input, options);
       };
     });
-    await page.getByRole('button', { name: /Open full PX4 example/ }).click();
+    await page.getByRole('button', { name: /Load full PX4 sample/ }).click();
     await page.waitForFunction(() => typeof window.__releaseSampleBody === 'function');
     await page.getByRole('button', { name: 'Cancel' }).click();
     await page.evaluate(() => { window.__releaseSampleBody(new Blob(['cancelled sample response'])); window.__releaseSampleBody = null; window.__restoreFetch(); });
@@ -392,7 +392,7 @@ try {
     await page.locator('#video-input').setInputFiles(join(HERE, 'fixtures/synthetic-sync.mp4'));
     await page.waitForFunction(() => document.querySelector('video')?.duration === 10 && document.querySelector('video').videoWidth === 160);
     await page.locator('#video-offset').fill('3.5');
-    await page.getByRole('button', { name: 'Sync to selected record' }).click();
+    await page.getByRole('button', { name: 'Sync to record' }).click();
     await page.waitForFunction(() => !document.querySelector('video').seeking && Math.abs(document.querySelector('video').currentTime - 3.5) < 0.01);
     assert.match(await page.locator('.video-meta').textContent(), /Codec identification is unknown/);
     await route(page, 'records');
@@ -400,11 +400,11 @@ try {
     await page.waitForFunction(() => document.querySelector('#record-detail-title')?.textContent === 'Record 1');
     await route(page, 'video');
     await page.waitForFunction(() => document.querySelector('video')?.duration === 10 && !!document.querySelector('video').currentSrc, null, { timeout: 3000 });
-    await page.getByRole('button', { name: 'Sync to selected record' }).click();
+    await page.getByRole('button', { name: 'Sync to record' }).click();
     await page.waitForFunction(() => !document.querySelector('video').seeking && Math.abs(document.querySelector('video').currentTime - 3.51) < 0.01);
     assert.match(await page.locator('.video-meta').textContent(), /positioned at 3.510 seconds for record 1/);
     await page.locator('#video-offset').fill('200');
-    await page.getByRole('button', { name: 'Sync to selected record' }).click();
+    await page.getByRole('button', { name: 'Sync to record' }).click();
     assert.match(await page.locator('.video-meta').textContent(), /outside this video/);
   });
 
@@ -425,9 +425,9 @@ try {
     assert.equal(await page.locator(':focus').getAttribute('class'), 'skip-link');
     await page.keyboard.press('Enter');
     assert.equal(await page.locator(':focus').getAttribute('id'), 'page-sandbox');
-    assert.equal(await page.getByRole('navigation', { name: 'Workbench sections' }).getByRole('link', { name: /Records/ }).isVisible(), true);
+    assert.equal(await page.getByRole('navigation', { name: 'Primary navigation' }).getByRole('link', { name: /Records/ }).isVisible(), true);
     await page.evaluate(() => { location.hash = '#/verify'; });
-    await page.waitForFunction(() => document.activeElement?.id === 'page-verify' && document.title === 'Verify file · HashWing');
+    await page.waitForFunction(() => document.activeElement?.id === 'page-verify' && document.title === 'Verify · HashWing');
     await page.evaluate(() => history.back());
     await page.waitForFunction(() => location.hash === '#/sandbox' && document.activeElement?.id === 'page-sandbox');
     await page.evaluate(() => history.forward());
@@ -460,16 +460,16 @@ try {
 
   await check('rail navigation updates focused route and preserves the checked evidence', async () => {
     await page.goto(url); await waitResult(page, 'Intact');
-    for (const [screen, title] of [['verify', 'Verify file'], ['records', 'Records'], ['receipts', 'Receipts'], ['video', 'Video sync'], ['help', 'Trust limits'], ['sandbox', 'Workbench']]) {
-      await page.getByRole('navigation', { name: 'Workbench sections' }).getByRole('link', { name: title }).click();
+    for (const [screen, title] of [['verify', 'Verify'], ['records', 'Records'], ['receipts', 'Receipts'], ['video', 'Video'], ['help', 'Trust'], ['sandbox', 'Samples']]) {
+      await page.getByRole('navigation', { name: 'Primary navigation' }).getByRole('link', { name: title }).click();
       await page.waitForFunction((target) => document.activeElement?.id === `page-${target}`, screen, { timeout: 1500 });
     }
     assert.match(await page.locator('.result-stat').textContent(), /800/);
-    await page.getByRole('navigation', { name: 'Workbench sections' }).getByRole('link', { name: 'Verify file' }).click();
+    await page.getByRole('navigation', { name: 'Primary navigation' }).getByRole('link', { name: 'Verify' }).click();
     await page.locator('#trusted-key').fill('editing');
-    await page.getByRole('navigation', { name: 'Workbench sections' }).getByRole('link', { name: 'Records' }).click();
+    await page.getByRole('navigation', { name: 'Primary navigation' }).getByRole('link', { name: 'Records' }).click();
     assert.equal(await page.evaluate(() => location.hash), '#/records');
-    await page.getByRole('navigation', { name: 'Workbench sections' }).getByRole('link', { name: 'Verify file' }).click();
+    await page.getByRole('navigation', { name: 'Primary navigation' }).getByRole('link', { name: 'Verify' }).click();
     assert.equal(await page.locator('#trusted-key').inputValue(), 'editing');
   });
 

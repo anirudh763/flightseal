@@ -52,7 +52,7 @@ function acquireBrowserLock() {
 async function route(page, screen) {
   await page.evaluate(value => { location.hash = `/${value}`; }, screen);
   await page.waitForFunction(value => location.hash === `#/${value}`, screen);
-  const heading = ({ sandbox: 'Workbench', verify: 'Verify file', records: 'Records', receipts: 'Receipts', video: 'Video sync', help: 'Trust limits' })[screen];
+  const heading = ({ sandbox: 'Samples', verify: 'Verify', records: 'Records', receipts: 'Receipts', video: 'Video', help: 'Trust' })[screen];
   await page.waitForFunction(value => document.querySelector('.commandbar h1')?.textContent === value, heading);
 }
 
@@ -106,7 +106,7 @@ try {
   metrics.default800ElapsedMs = Math.round(performance.now() - initialStarted);
 
   await check('a: 800-record demo shows a real native verification with trusted receipt coverage', async () => {
-    assert.match(await page.locator('.result-top .eyebrow').textContent(), /VERIFICATION RESULT/);
+    assert.equal(await page.locator('.result-top .eyebrow').count(), 0, 'result has no redundant status caption');
     assert.match(await page.locator('#result-heading').textContent(), /Intact/);
     assert.match(await page.locator('.stats-grid').textContent(), /800 covered · 0 uncovered/);
     await route(page, 'records');
