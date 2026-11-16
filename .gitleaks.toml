@@ -10,3 +10,26 @@ condition = "AND"
 paths = ['''^(docs/samples|dist/static/flightseal/samples)/(px4-flight|px4-full|flight)\.receipts$''']
 regexTarget = "line"
 regexes = ['''^\n?fseal-receipt v1 count=[0-9]+ head=[a-f0-9]{64} key=[a-f0-9]{64} sig=[a-f0-9]{128}$''']
+
+# Gitleaks' 64-character minimum joins the short serializer to its validator; allow only that exact code span.
+[[allowlists]]
+description = "Exact dynamic PEM serializer span; never literal key material"
+targetRules = ["private-key"]
+condition = "AND"
+paths = ['''^newweb/src/signing-keys\.mjs$''']
+regexTarget = "match"
+regexes = ['''^[-]{5}BEGIN PRIVATE KEY[-]{5}\\n\$\{toBase64\(pkcs8\)\}\\n[-]{5}END PRIVATE KEY[-]{5}\\n`;
+  return \{ privateKeyPem, publicKeyHex: toHex\(publicRaw\), backupFilename: 'hashwing-ed25519-private-key\.pem' \};
+\}
+
+export async function validateEd25519PrivateKey\(privateKeyPem, cryptoObject = globalThis\.crypto\) \{
+  if \(typeof privateKeyPem !== 'string' \|\| privateKeyPem\.length > 16384 \|\| privateKeyPem\.includes\('\\0'\)\) throw new Error\('Private key PEM must be valid text no longer than 16 KiB\.'\);
+  const match = privateKeyPem\.trim\(\)\.match\(/\^[-]{5}BEGIN PRIVATE KEY[-]{5}$''']
+
+[[allowlists]]
+description = "Exact dynamic PEM serializer span; never literal key material"
+targetRules = ["private-key"]
+condition = "AND"
+paths = ['''^docs/console/assets/index-[A-Za-z0-9_-]+\.js$''']
+regexTarget = "match"
+regexes = ['''^[-]{5}BEGIN PRIVATE KEY[-]{5}\\n\$\{er\(n\)\}\\n[-]{5}END PRIVATE KEY[-]{5}\\n`,publicKeyHex:\$n\(r\),backupFilename:`hashwing-ed25519-private-key\.pem`\}\}async function nr\(e,t=globalThis\.crypto\)\{if\(typeof e!=`string`\|\|e\.length>16384\|\|e\.includes\(`\\0`\)\)throw Error\(`Private key PEM must be valid text no longer than 16 KiB\.`\);let n=e\.trim\(\)\.match\(/\^[-]{5}BEGIN PRIVATE KEY[-]{5}$''']

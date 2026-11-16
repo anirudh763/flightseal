@@ -1,6 +1,6 @@
 # Architecture and readiness
 
-**Status (2026-11-14):** the current verifier is a static browser application. The native C++ CLI and the new
+**Status (2026-11-15):** verification and sealing remain browser-local. The local product adds an HTTP serving process for direct routes and live operational health; GitHub Pages remains a static deployment. The native C++ CLI and the new
 WebAssembly bridge and React console are implemented under `wasm/`, `newweb/` and `docs/console/`. No AWS account or credentials are configured, and no cloud resources
 have been created. AWS below is an optional proposal, not the deployed architecture.
 
@@ -20,7 +20,7 @@ flowchart LR
   W[Independent witness] -. separately retains receipts and trusted public key .-> B
 ```
 
-The single console runs in the user's browser, reads selected files locally, and has no upload or backend API.
+The single console runs in the user's browser and reads selected files locally. The local HTTP adapter serves assets plus read-only `/healthz`, `/readyz`, `/metrics` and `/api/system`; it receives no flight-log uploads or signing keys.
 It verifies the FLTSEAL1 hash chain and can authenticate receipts with a supplied trusted public key. The C++ core
 and the independent JavaScript reader are separate implementations used for finite parity tests and indexing.
 The C++/OpenSSL WebAssembly bridge is compiled (about 1.97 MB module) and is used by every console verification,
@@ -133,3 +133,44 @@ timestamps, malformed uploads, and native custom sealing. A valid reversed times
 chronology and receipt completeness are separate evidence. UI responsiveness observations are workload-specific,
 not an uptime/latency guarantee. Pricing/notary panels show an actual local receipt and explicitly unavailable cloud
 services. No private pilot email endpoint or AWS signer is configured.
+
+## Local direct routes and operational view (2026-11-15)
+
+The same Vite bundle is built into `docs/console/`; `/flightseal/` remains the asset prefix for Pages
+compatibility. The shared local serving process maps only `/`, `/verify`, `/benchmarks` and `/system`
+to the SPA entry. Unknown API routes and missing assets are not HTML fallback candidates. Legacy
+hash routes remain parsed by `newweb/src/routes.mjs`; product navigation uses History API paths and
+listens to popstate/hashchange. Sample and record URL values are allowlisted/numeric; source content,
+paths and keys never enter URLs. Runtime file/result state is held independently in each tab.
+
+```mermaid
+flowchart TB
+  TabA[Tab A: local file and selected view] --> App[React route and domain UI]
+  TabB[Tab B: independent file and selected view] --> App
+  App -->|read selected files locally| Engine[Existing Wasm worker / independent JS index]
+  App -->|bounded same-origin GET| HTTP[Shared HTTP process]
+  HTTP --> Assets[docs/console bundle + samples]
+  HTTP --> Health[healthz / readyz / api/system / Prometheus metrics]
+```
+
+The system page fetches all four health/operational endpoints with an eight-second deadline and
+explicit refresh; dependency failures stay visible. It rejects unexpected HTML endpoint responses.
+Counters, uptime and latency buckets describe the HTTP process, not the browser engine or signature
+validity. No historical latency chart or synthetic health status is supplied. Prometheus error rate is
+`sum(rate(app_http_requests_total{status_class=~"4xx|5xx"}[5m])) / sum(rate(app_http_requests_total[5m]))`.
+Monitor transfer failures separately with `sum(rate(app_http_transfer_errors_total[5m]))`:
+a download aborted after its headers retains its sent HTTP status, including200, and increments
+this counter. Do not add the two rates as a unique-failure count; some failures appear in both.
+Latency p50/p99 use `histogram_quantile(0.50|0.99, sum by (le) (rate(app_http_request_duration_seconds_bucket[5m])))`;
+low-traffic windows do not establish a useful tail estimate.
+
+The benchmark page runs the actual C++/Wasm verifier against a bounded included sample (one warm-up,
+three measured sequential runs, no receipts, 60-second deadline). Timings include worker/file costs,
+exclude fetch and are retained only in that tab. They do not measure crash safety, durable ingestion,
+or native throughput. A separate native crash/recovery benchmark was exercised on task-owned
+storage; its workload and platform-specific measurements belong to the verification report, not
+this browser timing panel.
+
+No AWS runtime integration is added by the frontend. The proposed archive/signing services above
+remain proposals and need their own compatibility and operational validation. Local Space Grotesk
+and JetBrains Mono font assets include their SIL OFL notices under `newweb/public/fonts/`.

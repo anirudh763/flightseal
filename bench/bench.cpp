@@ -11,7 +11,11 @@
 #include <fcntl.h>
 #include <sqlite3.h>
 #include <sys/utsname.h>
+#if defined(__APPLE__)
+#include <sys/mount.h>
+#else
 #include <sys/vfs.h>
+#endif
 #include <unistd.h>
 
 #include <algorithm>
@@ -160,7 +164,7 @@ int main(int argc, char** argv) {
   uname(&u);
   struct statfs fs {};
   statfs(dir.c_str(), &fs);
-  std::cout << "Environment: " << cpu_model() << ", " << sysconf(_SC_NPROCESSORS_ONLN) << " CPUs, Linux " << u.release
+  std::cout << "Environment: " << cpu_model() << ", " << sysconf(_SC_NPROCESSORS_ONLN) << " CPUs, " << u.sysname << " " << u.release
             << ", filesystem magic 0x" << std::hex << fs.f_type << std::dec << ", SQLite " << sqlite3_libversion()
             << "\nInput: " << recs.size() << " records, " << payload_bytes << " payload bytes (mean "
             << payload_bytes / recs.size() << " B). Median of " << runs << " runs.\n\n";

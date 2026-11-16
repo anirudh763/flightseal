@@ -88,7 +88,7 @@ try {
   mkdirSync(screenshots, { recursive: true });
   const channel = process.env.PLAYWRIGHT_CHANNEL || (process.platform === 'darwin' ? 'chrome' : undefined);
   browser = await chromium.launch({ headless: true, ...(channel ? { channel } : {}) });
-  const context = await browser.newContext({ acceptDownloads: true, viewport: { width: 1440, height: 960 } });
+  const context = await browser.newContext({ acceptDownloads: true, viewport: { width: 1440, height: 900 } });
   const page = await context.newPage();
   await page.addInitScript(() => {
     const BrowserWorker = window.Worker;
@@ -124,7 +124,7 @@ try {
 
   await check('b: 2,422-record PX4 fixture verifies with its bundled receipts and key', async () => {
     await route(page, 'sandbox');
-    await page.getByRole('button', { name: /2,422-record PX4/ }).click();
+    await page.getByRole('button', { name: 'Load PX4 sample' }).click();
     await waitForResult(page, 'Intact');
     assert.match(await page.locator('.result-stat').textContent(), /2,422/);
     assert.match(await page.locator('.stats-grid').textContent(), /2,422 covered · 0 uncovered/);
@@ -143,7 +143,7 @@ try {
         window.__heartbeat.ticks++;
       }, 10);
     });
-    await page.getByRole('button', { name: /full PX4.*64,542 records/i }).click();
+    await page.getByRole('button', { name: 'Load full PX4 sample' }).click();
     await page.waitForFunction(() => document.querySelector('.result-stat')?.textContent.includes('64,542'), null, { timeout: 60000 });
     const heartbeat = await page.evaluate(() => { clearInterval(window.__heartbeatTimer); return window.__heartbeat; });
     metrics.fullPx4ElapsedMs = Math.round(performance.now() - start);
@@ -208,15 +208,20 @@ try {
 
   await check('g: TSV timestamps that reverse order remain an intact chain with reversal count visible', async () => {
     await route(page, 'sandbox');
-    await page.locator('#tsv-file').setInputFiles({ name: 'timestamp-reversal.tsv', mimeType: 'text/plain', buffer: Buffer.from('300\tfirst\n100\tbackward\n200\tforward-again\n') });
+    await page.locator('#workbench-file').setInputFiles({ name: 'timestamp-reversal.tsv', mimeType: 'text/plain', buffer: Buffer.from('300\tfirst\n100\tbackward\n200\tforward-again\n') });
     await page.locator('#receipt-interval').fill('2');
     await page.getByRole('button', { name: 'Seal and verify' }).click();
     await waitForResult(page, 'Intact');
     assert.match(await page.locator('.stats-grid').textContent(), /Time reversals\s*1/);
     assert.equal(await page.locator('.seal-outputs button').count(), 3);
+    const logFile = await downloadText(page, 'Download sealed log');
     const receiptFile = await downloadText(page, 'Download receipts');
+    const publicKey = await downloadText(page, 'Download public key');
+    assert.ok(logFile.contents.startsWith('FLTSEAL1'));
     assert.equal(receiptFile.filename, 'sealed.receipts');
     assert.equal(receiptFile.contents.trim().split('\n').length, 2);
+    assert.equal(publicKey.filename, 'sealed-public-key.txt');
+    await page.getByRole('checkbox', { name: 'I saved these files or no longer need them' }).check();
     return { nativeVerdict: 'intact', timeReversals: 1, nativeReceiptCount: 2 };
   });
 
@@ -241,7 +246,8 @@ try {
 
   await check('i: custom TSV sealing at interval N rejects invalid boundary values and downloads re-verifiable native outputs', async () => {
     await route(page, 'sandbox');
-    await page.locator('#tsv-file').setInputFiles({ name: 'custom-flight.tsv', mimeType: 'text/plain', buffer: Buffer.from('100\talpha\n200\tbravo\n300\tcharlie\n400\tdelta\n500\techo\n') });
+    await page.locator('#workbench-file').setInputFiles({ name: 'custom-flight.tsv', mimeType: 'text/plain', buffer: Buffer.from('100\talpha\n200\tbravo\n300\tcharlie\n400\tdelta\n500\techo\n') });
+    await page.waitForFunction(() => [...document.querySelectorAll('button')].some(button => button.textContent.includes('Seal and verify') && !button.disabled));
     await page.locator('#receipt-interval').fill('2');
     await page.getByRole('button', { name: 'Seal and verify' }).click();
     await waitForResult(page, 'Intact');
@@ -257,25 +263,27 @@ try {
     const receiptCounts = receipts.contents.trim().split('\n').map(line => Number(line.match(/\bcount=(\d+)/)?.[1]));
     assert.deepEqual(receiptCounts, [2, 4, 5]);
     assert.match(key.contents.trim(), /^[a-f0-9]{64}$/);
+    await page.getByRole('checkbox', { name: 'I saved these files or no longer need them' }).check();
     await page.locator('#receipt-interval').fill('0');
     await page.getByRole('button', { name: 'Seal and verify' }).click();
     await page.waitForFunction(() => /interval|receipt|between 1 and 1,000,000/i.test(document.querySelector('[role=alert]')?.textContent || ''));
     const error = await page.locator('[role=alert], .operation-status').allTextContents();
     assert.match(error.join(' '), /interval|receipt|between 1 and 1,000,000/i);
     await page.locator('#receipt-interval').fill('2');
-    await page.locator('#tsv-file').setInputFiles({ name: 'bad-flight.tsv', mimeType: 'text/plain', buffer: Buffer.from('no timestamp separator\n') });
+    await page.locator('#workbench-file').setInputFiles({ name: 'bad-flight.tsv', mimeType: 'text/plain', buffer: Buffer.from('no timestamp separator\n') });
+    await page.waitForFunction(() => [...document.querySelectorAll('button')].some(button => button.textContent.includes('Seal and verify') && !button.disabled));
     await page.getByRole('button', { name: 'Seal and verify' }).click();
     await page.waitForFunction(() => document.querySelector('[role=alert]')?.textContent.includes('expected timestamp_us'));
     return { recordCount: 5, interval: 2, receiptCounts, downloaded: [logs.filename, receipts.filename, key.filename], sealedLogMagic: 'FLTSEAL1', invalidIntervalRejected: true, invalidTsvRowRejected: true };
   });
 
-  for (const width of [320, 768, 1440]) {
-    await page.setViewportSize({ width, height: 960 });
-    await page.locator('#tsv-file').setInputFiles([]);
+  for (const [width, height] of [[320, 900], [375, 812], [768, 900], [1440, 900]]) {
+    await page.setViewportSize({ width, height });
+    await page.locator('#workbench-file').setInputFiles([]);
     await loadDemo(page);
     const dimensions = await page.evaluate(() => ({ width: document.documentElement.clientWidth, scrollWidth: document.documentElement.scrollWidth }));
     assert.ok(dimensions.scrollWidth <= dimensions.width + 1, `${width}px layout overflows by ${dimensions.scrollWidth - dimensions.width}px`);
-    await page.screenshot({ path: join(screenshots, `sandbox-${width}.png`), fullPage: true });
+    await page.screenshot({ path: join(screenshots, `sandbox-${width}x${height}.png`), fullPage: true });
   }
   metrics.runtimeErrors = runtimeErrors;
   assert.deepEqual(runtimeErrors, [], `unexpected uncaught browser errors: ${runtimeErrors.join('\n')}`);

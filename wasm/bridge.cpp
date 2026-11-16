@@ -8,6 +8,7 @@
 #include <limits>
 #include <sstream>
 #include <vector>
+#include <openssl/evp.h>
 
 namespace {
 std::string response;
@@ -19,6 +20,25 @@ std::string json_quote(std::string_view value) {
     else out += static_cast<char>(c);
   }
   return out + '"';
+}
+std::string sha256_file(const char* path) {
+  std::ifstream input(path, std::ios::binary);
+  if (!input) throw std::runtime_error("cannot read source for whole-file SHA-256");
+  EVP_MD_CTX* raw = EVP_MD_CTX_new();
+  if (!raw) throw std::runtime_error("could not allocate whole-file SHA-256 state");
+  struct FreeDigest { EVP_MD_CTX* ctx; ~FreeDigest() { EVP_MD_CTX_free(ctx); } } free_digest{raw};
+  if (EVP_DigestInit_ex(raw, EVP_sha256(), nullptr) != 1) throw std::runtime_error("whole-file SHA-256 initialization failed");
+  std::array<unsigned char, 65536> buffer{};
+  while (input) {
+    input.read(reinterpret_cast<char*>(buffer.data()), static_cast<std::streamsize>(buffer.size()));
+    const auto count = input.gcount();
+    if (count > 0 && EVP_DigestUpdate(raw, buffer.data(), static_cast<size_t>(count)) != 1) throw std::runtime_error("whole-file SHA-256 update failed");
+  }
+  if (!input.eof()) throw std::runtime_error("whole-file SHA-256 source read failed");
+  fseal::Hash digest{};
+  unsigned int length = 0;
+  if (EVP_DigestFinal_ex(raw, digest.data(), &length) != 1 || length != digest.size()) throw std::runtime_error("whole-file SHA-256 finalization failed");
+  return fseal::hex(digest.data(), digest.size());
 }
 const char* fail(const std::exception& e) { response = "{\"error\":" + json_quote(e.what()) + "}"; return response.c_str(); }
 const char* token(fseal::Status status) {
@@ -69,6 +89,7 @@ EMSCRIPTEN_KEEPALIVE const char* fseal_verify(const char* path, const char* rece
     }
     if (!key.empty() && receipts.empty()) throw std::invalid_argument("receipt file contains no receipts");
     const fseal::ScanResult scan = fseal::scan(path, &links);
+    const std::string file_digest = sha256_file(path);
     if (scan.status == fseal::Status::IoError) throw std::runtime_error("cannot read the log");
     uint64_t covered = 0, untrusted = 0, failed = 0;
     bool authenticated = false;
@@ -93,6 +114,7 @@ EMSCRIPTEN_KEEPALIVE const char* fseal_verify(const char* path, const char* rece
         << ",\"status\":" << json_quote(token(scan.status)) << ",\"description\":" << json_quote(fseal::describe(scan.status))
         << ",\"records\":" << scan.records << ",\"goodBytes\":" << scan.good_bytes
         << ",\"head\":" << json_quote(fseal::hex(scan.head.data(), scan.head.size()))
+        << ",\"fileSha256\":" << json_quote(file_digest)
         << ",\"timeReversals\":" << scan.time_reversals << ",\"covered\":" << covered
         << ",\"uncovered\":" << scan.records - covered << ",\"receipts\":[" << checks.str() << "]}";
     response = out.str();
@@ -100,16 +122,27 @@ EMSCRIPTEN_KEEPALIVE const char* fseal_verify(const char* path, const char* rece
   } catch (const std::exception& e) { return fail(e); }
 }
 
-EMSCRIPTEN_KEEPALIVE const char* fseal_seal(const char* path, unsigned int every) {
-  struct RemoveKey { ~RemoveKey() { std::remove("/ephemeral.pem"); } } remove_key;
+const char* fseal_seal_with_key_impl(const char* path, unsigned int every, const char* private_key_pem) {
+  struct RemoveKey { ~RemoveKey() { std::remove("/ephemeral.pem"); std::remove("/provided.pem"); } } remove_key;
   try {
     if (every == 0 || every > 1000000) throw std::invalid_argument("receipt interval must be between 1 and 1,000,000 records");
+    std::string private_key = private_key_pem ? private_key_pem : "";
+    struct Wipe { std::string& value; ~Wipe() { volatile char* p = value.empty() ? nullptr : value.data(); for (size_t i = 0; i < value.size(); ++i) p[i] = 0; } } wipe{private_key};
+    if (private_key.size() > 16384) throw std::invalid_argument("private Ed25519 PEM exceeds the 16 KiB browser limit");
     std::ifstream input(path, std::ios::binary);
     if (!input) throw std::runtime_error("cannot read source records");
     std::remove("/sealed.fseal");
     std::remove("/ephemeral.pem");
-    const auto key = fseal::generate_key("/ephemeral.pem");
-    const auto probe = fseal::sign_receipt("/ephemeral.pem", 0, fseal::Hash{});
+    std::string key_path = "/ephemeral.pem";
+    if (!private_key.empty()) {
+      std::ofstream key_file("/provided.pem", std::ios::binary | std::ios::trunc);
+      if (!key_file || !(key_file << private_key) || !key_file.flush()) throw std::runtime_error("could not load the selected private key in temporary memory");
+      key_file.close();
+      key_path = "/provided.pem";
+    } else {
+      (void)fseal::generate_key(key_path);
+    }
+    const auto probe = fseal::sign_receipt(key_path, 0, fseal::Hash{});
     if (!fseal::signature_ok(probe)) throw fseal::CryptoError("Ed25519 sign/verify self-test failed");
     fseal::Writer writer("/sealed.fseal");
     std::string receipts, line;
@@ -119,7 +152,7 @@ EMSCRIPTEN_KEEPALIVE const char* fseal_seal(const char* path, unsigned int every
     auto issue = [&] {
       if (++issued > 10000) throw std::invalid_argument("generated receipts exceed 10,000; use a larger receipt interval");
       writer.sync();
-      receipts += fseal::to_line(fseal::sign_receipt("/ephemeral.pem", writer.count(), writer.head())) + '\n';
+      receipts += fseal::to_line(fseal::sign_receipt(key_path, writer.count(), writer.head())) + '\n';
       if (receipts.size() > (4u << 20)) throw std::invalid_argument("generated receipts exceed the 4 MiB browser limit; use a larger receipt interval");
       receipted = writer.count();
     };
@@ -145,9 +178,16 @@ EMSCRIPTEN_KEEPALIVE const char* fseal_seal(const char* path, unsigned int every
     if (input.bad()) throw std::runtime_error("source read failed");
     if (writer.count() == 0) throw std::invalid_argument("source contains no records");
     if (writer.count() != receipted) issue();
-    response = "{\"records\":" + std::to_string(writer.count()) + ",\"publicKey\":" + json_quote(fseal::hex(key.data(), key.size())) + ",\"receipts\":" + json_quote(receipts) + "}";
+    response = "{\"records\":" + std::to_string(writer.count()) + ",\"publicKey\":" + json_quote(fseal::hex(probe.key.data(), probe.key.size())) + ",\"receipts\":" + json_quote(receipts) + "}";
     return response.c_str();
   } catch (const std::exception& e) { std::remove("/sealed.fseal"); return fail(e); }
+}
+
+EMSCRIPTEN_KEEPALIVE const char* fseal_seal(const char* path, unsigned int every) {
+  return fseal_seal_with_key_impl(path, every, "");
+}
+EMSCRIPTEN_KEEPALIVE const char* fseal_seal_with_key(const char* path, unsigned int every, const char* private_key_pem) {
+  return fseal_seal_with_key_impl(path, every, private_key_pem);
 }
 
 EMSCRIPTEN_KEEPALIVE const char* fseal_import(const char* path, const char* output_path, unsigned int every) {

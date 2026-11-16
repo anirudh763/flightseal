@@ -12,7 +12,9 @@ self.onmessage = async ({ data }) => {
       if (data.operation === 'verify') {
         result = JSON.parse(module.ccall('fseal_verify', 'string', ['string', 'string', 'string'], ['/input/source', data.receipts, data.publicKey]));
       } else if (data.operation === 'seal') {
-        result = JSON.parse(module.ccall('fseal_seal', 'string', ['string', 'number'], ['/input/source', data.every]));
+        result = data.privateKeyPem
+          ? JSON.parse(module.ccall('fseal_seal_with_key', 'string', ['string', 'number', 'string'], ['/input/source', data.every, data.privateKeyPem]))
+          : JSON.parse(module.ccall('fseal_seal', 'string', ['string', 'number'], ['/input/source', data.every]));
         if (!result.error) {
           result.log = new Blob([module.FS.readFile('/sealed.fseal')], { type: 'application/octet-stream' });
           result.engine = 'C++ / OpenSSL / WebAssembly';
@@ -34,6 +36,7 @@ self.onmessage = async ({ data }) => {
           result.engine = 'C++ / OpenSSL / WebAssembly';
         }
       } else throw new Error('Unknown bridge operation');
+      if (data.operation === 'seal') data.privateKeyPem = '';
     } finally {
       module.FS.unmount('/input');
       for (const path of ['/sealed.fseal', '/sealed-import.fseal', '/ephemeral.pem', '/ephemeral-import.pem']) {

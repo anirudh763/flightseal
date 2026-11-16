@@ -50,5 +50,13 @@
       "sha256": "285b38fad943bc7cc6b06205c1fec1d8b58569d5031d02a21b15a32991cc0925"
     }
   },
-  "authenticity_limit": "Sealing proves that these converted records match the bundled receipts under the bundled public key. It makes no claim that the source log is authentic, unaltered before sealing, or attributable to a particular operator."
+  "authenticity_limit": "Sealing proves that these converted records match the bundled receipts under the bundled public key. It makes no claim that the source log is authentic, unaltered before sealing, or attributable to a particular operator.",
+  "fixture_classification": "Public PX4/pyulog test-capture fixture from the pinned upstream test tree. It is a derived FlightSeal sample, not an untouched signed original, and no operator or physical-aircraft origin is established.",
+  "redactions_and_privacy_review": {
+    "source_file_redactions": "None claimed; the distributed FlightSeal artifact contains converted telemetry records rather than the original ULog byte stream.",
+    "upstream_file_redactions": "None claimed; the source is a public test fixture and may contain operational/sensor traces.",
+    "review_method": "Parsed the pinned upstream sample with pyulog 1.3.0. It has 15 topic datasets, 68,993,330 microseconds of logged samples, no latitude/longitude topic fields, and vehicle_local_position ref_lat/ref_lon are zero for all 678 rows. This is a bounded field check, not a complete privacy certification.",
+    "identity_and_location": "No personal/operator identity or physical location claim is made. No verified real-world flight provenance was found in the reviewed project fixture documentation.",
+    "distributed_source_bytes": "The original .ulg is not included in px4-full.fseal; the file is converted from timestamped JSON records and then sealed. The source SHA-256 remains recorded above."
+  }
 }

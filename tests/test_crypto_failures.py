@@ -7,6 +7,7 @@ OpenSSL context leaked on the error path.
 """
 import os
 import subprocess
+import sys
 from pathlib import Path
 
 import pytest
@@ -15,6 +16,8 @@ from conftest import ROOT
 from fseal_py import scan
 
 LINES = "".join(f"{1000 * (i + 1)}\t{{\"z\":{i}}}\n" for i in range(6))
+
+pytestmark = pytest.mark.skipif(os.name != "posix" or not sys.platform.startswith("linux"), reason="the EVP fault-injection shim is built only for Linux (LD_PRELOAD)")
 
 
 @pytest.fixture(scope="session")
@@ -103,15 +106,30 @@ def test_append_fails_closed_before_touching_any_file(fseal_bin, fault_shim, sea
 
 
 @pytest.mark.parametrize("spec,sha256_only,expected_records", [
-    ("EVP_DigestFinal_ex@6", True, 4),  # SHA-256 self-test, four records, then the failed fifth record
+    ("EVP_DigestFinal_ex@6", True, 4),  # find the call that fails the fifth record; OpenSSL self-test counts vary
     ("EVP_DigestSign@2", False, 6),  # self-test signature, then the failed final receipt
 ])
 def test_append_stops_on_a_later_failure_and_signs_nothing_more(
         fseal_bin, fault_shim, sealed, tmp_path, spec, sha256_only, expected_records):
     key = sealed[0]
     log, rec = tmp_path / "new.fseal", tmp_path / "new.receipts"
-    r = run_faulty(fault_shim, spec, fseal_bin, "append", log, "--key", key, "--receipts", rec, "--every", "100",
-                   stdin=LINES, sha256_only=sha256_only)
+    if spec == "EVP_DigestFinal_ex@6":
+        # The number of SHA-256 calls made before appending is OpenSSL-version dependent.
+        # Find the injected failure that lands on record five, then assert the same fail-closed contract.
+        for call in range(1, 33):
+            candidate_log, candidate_rec = tmp_path / f"new-{call}.fseal", tmp_path / f"new-{call}.receipts"
+            candidate_spec = f"EVP_DigestFinal_ex@{call}"
+            candidate = run_faulty(fault_shim, candidate_spec, fseal_bin, "append", candidate_log, "--key", key,
+                                   "--receipts", candidate_rec, "--every", "100", stdin=LINES,
+                                   sha256_only=sha256_only)
+            if candidate.returncode == 2 and candidate_log.exists() and scan(candidate_log).records == expected_records:
+                r, log, rec, spec = candidate, candidate_log, candidate_rec, candidate_spec
+                break
+        else:
+            pytest.fail(f"could not inject a SHA-256 failure on record five with this OpenSSL build")
+    else:
+        r = run_faulty(fault_shim, spec, fseal_bin, "append", log, "--key", key, "--receipts", rec, "--every", "100",
+                       stdin=LINES, sha256_only=sha256_only)
     assert_failed_closed(r, spec)
     assert rec.read_text() == "", "no receipt after a crypto failure"
     # Whatever was sealed before the failure is still a valid chain (no zero hashes written).

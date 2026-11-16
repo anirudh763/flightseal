@@ -21,3 +21,6 @@ newweb/.test-artifacts/
 .env.*
 !.env.example
 !docs/samples/telemetry-demo.ulg
+# Local verification logs, browser profiles and generated test evidence.
+/artifacts/verification/post-restart/
+/newweb/artifacts/verification/post-restart/
