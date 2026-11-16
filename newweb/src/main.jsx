@@ -1399,8 +1399,9 @@ function LandingPage({ onDemo, onContinue, result, busy, error, installKind, onI
       <section className="landing-trust" aria-labelledby="trust-title"><div><span className="landing-kicker">Trust boundaries</span><h2 id="trust-title">Integrity has a clear limit.</h2></div><p>An intact chain does not prove sensor truth, acquisition time, legal certification or independent custody. A supplied public key is not automatically a trusted identity. HashWing runs locally and has no cloud receipt service.</p><a href="/flightseal/console/#/app/help">Read trust and format details <ArrowRight size={15} aria-hidden="true" /></a></section>
       <section className="team-access" aria-labelledby="team-access-title"><div><span className="landing-kicker">Optional · prospective service</span><h2 id="team-access-title">Team &amp; Cloud Early Access</h2><p>Local verification remains free. This form is for interest in possible future team workflows; no hosted service or waitlist is active unless a remote endpoint is configured.</p></div><TeamAccessForm /></section>
     </main>
-    <footer className="landing-footer"><a className="landing-brand" href="#/"><span className="brand-mark" aria-hidden="true">H</span><span>HashWing</span></a><span>Free local tools · No paid tiers</span><nav aria-label="Footer links"><a href="#/app/help">Trust and docs</a><a href="https://github.com/anirudh763/flightseal" target="_blank" rel="noreferrer">Source</a><a href="#/login">Log in</a></nav></footer>
-    <FooterLinks onFeedback={onFeedback} onInstall={onInstall} />
+    <FooterLinks onFeedback={onFeedback} onInstall={onInstall}>
+    <div className="landing-footer"><a className="landing-brand" href="#/"><span className="brand-mark" aria-hidden="true">H</span><span>HashWing</span></a><span>Free local tools · No paid tiers</span><nav aria-label="Footer links"><a href="#/app/help">Trust and docs</a><a href="https://github.com/anirudh763/flightseal" target="_blank" rel="noreferrer">Source</a><a href="#/login">Log in</a></nav></div>
+    </FooterLinks>
     <InstallGuide open={installOpen} onClose={onInstallClose} ios={installKind === 'ios'} />
     <FeedbackDialog open={feedbackOpen} onClose={onFeedbackClose} route={route} />
   </div>;
