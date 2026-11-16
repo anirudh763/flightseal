@@ -1,0 +1,17 @@
+{
+  "id": "/flightseal/console/",
+  "name": "HashWing — FlightSeal log verification",
+  "short_name": "HashWing",
+  "description": "Verify FlightSeal logs and receipts locally in your browser.",
+  "start_url": "/flightseal/console/#/",
+  "scope": "/flightseal/console/",
+  "display": "standalone",
+  "orientation": "any",
+  "background_color": "#0B1120",
+  "theme_color": "#0B1120",
+  "icons": [
+    { "src": "/flightseal/console/icons/hashwing-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any" },
+    { "src": "/flightseal/console/icons/hashwing-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any" },
+    { "src": "/flightseal/console/icons/hashwing-512-maskable.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable" }
+  ]
+}

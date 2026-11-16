@@ -1,15 +1,17 @@
 {
   "id": "/flightseal/console/",
-  "name": "HashWing",
+  "name": "HashWing — FlightSeal log verification",
   "short_name": "HashWing",
-  "description": "Local integrity verification for FlightSeal-format logs and receipts",
-  "start_url": "/flightseal/console/#/sandbox",
+  "description": "Verify FlightSeal logs and receipts locally in your browser.",
+  "start_url": "/flightseal/console/#/",
   "scope": "/flightseal/console/",
   "display": "standalone",
-  "background_color": "#f0f2f4",
-  "theme_color": "#304c68",
+  "orientation": "any",
+  "background_color": "#0B1120",
+  "theme_color": "#0B1120",
   "icons": [
-    {"src": "/flightseal/icon-192.png", "sizes": "192x192", "type": "image/png"},
-    {"src": "/flightseal/icon-512.png", "sizes": "512x512", "type": "image/png"}
+    { "src": "/flightseal/console/icons/hashwing-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any" },
+    { "src": "/flightseal/console/icons/hashwing-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any" },
+    { "src": "/flightseal/console/icons/hashwing-512-maskable.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable" }
   ]
 }

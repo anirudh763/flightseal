@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
+import { createHash, generateKeyPairSync } from 'node:crypto';
 
 const factoryPath = new URL('../../docs/wasm/flightseal.mjs', import.meta.url);
 const sample = name => new URL(`../../docs/samples/${name}`, import.meta.url);
@@ -35,6 +36,7 @@ test('no receipts means chain only and a wrong key means unverified', async () =
   const run = (receipts, key) => JSON.parse(module.ccall('fseal_verify', 'string', ['string', 'string', 'string'], ['/input', receipts, key]));
   assert.equal(run('', '').verdict, 'intact');
   assert.equal(run('', '').covered, 0);
+  assert.equal(run('', '').fileSha256, createHash('sha256').update(await readFile(sample('intact.fseal'))).digest('hex'));
   assert.equal(run(await readFile(sample('flight.receipts'), 'utf8'), '00'.repeat(32)).verdict, 'unverified');
 });
 
@@ -51,6 +53,23 @@ test('native Writer creates a downloadable log and Ed25519 receipts which native
   assert.equal(result.verdict, 'intact');
   assert.equal(result.covered, 3);
   assert.throws(() => module.FS.stat('/ephemeral.pem'));
+});
+
+test('C++ WebAssembly sealer uses an explicitly supplied PKCS#8 Ed25519 private key', async () => {
+  assert.equal(typeof factory, 'function');
+  const module = await factory({ wasmBinary: await readFile(new URL('../../docs/wasm/flightseal.wasm', import.meta.url)) });
+  const { privateKey, publicKey } = generateKeyPairSync('ed25519');
+  const privatePem = privateKey.export({ type: 'pkcs8', format: 'pem' }).toString();
+  const expectedPublic = publicKey.export({ type: 'spki', format: 'der' }).subarray(-32).toString('hex');
+  module.FS.writeFile('/source.tsv', '100\t{"x":1}\n200\t{"x":2}\n');
+  const sealed = JSON.parse(module.ccall('fseal_seal_with_key', 'string', ['string', 'number', 'string'], ['/source.tsv', 1, privatePem]));
+  assert.equal(sealed.error, undefined);
+  assert.equal(sealed.publicKey, expectedPublic);
+  const log = module.FS.readFile('/sealed.fseal');
+  module.FS.writeFile('/sealed-input', log);
+  const verified = JSON.parse(module.ccall('fseal_verify', 'string', ['string', 'string', 'string'], ['/sealed-input', sealed.receipts, expectedPublic]));
+  assert.equal(verified.verdict, 'intact');
+  assert.equal(verified.records, 2);
 });
 
 test('invalid receipt input and invalid source records produce errors, never an intact verdict', async () => {

@@ -29,7 +29,7 @@ async function check(name, fn) {
 }
 
 async function waitHeading(page, route, title) {
-  await page.waitForFunction((path) => location.hash.startsWith(`#/${path}`), route);
+  await page.waitForFunction((path) => [ `#/${path}`, `#/app/${path}` ].includes(location.hash.split('?')[0]), route);
   await page.waitForFunction((text) => document.querySelector('.commandbar h1')?.textContent === text, title, { timeout: 15000 });
 }
 
@@ -202,7 +202,7 @@ try {
       const skip = await page.locator('.skip-link').boundingBox();
       assert.ok(skip && skip.width >= 44 && skip.height >= 44, `skip target is undersized: ${JSON.stringify(skip)}`);
       await page.keyboard.press('Enter');
-      assert.equal(await page.evaluate(() => document.activeElement.tagName), 'H1');
+      assert.equal(await page.evaluate(() => document.activeElement.id), 'main');
       await page.locator('.skip-link').focus();
       await page.getByRole('navigation', { name: 'Primary navigation' }).getByRole('link', { name: 'Records' }).focus();
       await page.keyboard.press('Enter');

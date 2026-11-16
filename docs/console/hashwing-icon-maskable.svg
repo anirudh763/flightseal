@@ -1,0 +1,8 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512">
+  <title>HashWing</title>
+  <rect width="512" height="512" fill="#0B1120"/>
+  <g fill="none" stroke-width="28">
+    <rect x="104" y="190" width="164" height="132" rx="66" stroke="#10B981"/>
+    <rect x="244" y="190" width="164" height="132" rx="66" stroke="#D7E2F0"/>
+  </g>
+</svg>

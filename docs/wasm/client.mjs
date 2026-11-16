@@ -55,9 +55,10 @@ export function verifyFile(file, receipts = '', publicKey = '', options = {}) {
   return run('verify', file, { receipts, publicKey: publicKey.trim() }, options);
 }
 
-export function sealFile(file, { every = 1000, signal } = {}) {
+export function sealFile(file, { every = 1000, signal, privateKeyPem = '' } = {}) {
   if (!Number.isInteger(every) || every < 1 || every > 1000000) return Promise.reject(new RangeError('Receipt interval must be between 1 and 1,000,000.'));
-  return run('seal', file, { every }, { signal });
+  if (typeof privateKeyPem !== 'string' || privateKeyPem.includes('\0') || privateKeyPem.length > 16384) return Promise.reject(new TypeError('Private Ed25519 PEM must be text no longer than 16 KiB.'));
+  return run('seal', file, { every, privateKeyPem }, { signal });
 }
 
 export function importFile(file, { every = 1000, signal } = {}) {

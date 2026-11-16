@@ -254,8 +254,9 @@ TEST(impossible_length_is_corruption_not_a_torn_tail) {
 }
 
 TEST(unreadable_path_is_an_io_error_not_an_exception) {
-  std::string dir = temp_path("dir");
-  CHECK(::mkdir(dir.c_str(), 0700) == 0);
+  // Opening a directory as an ifstream can report immediate EOF on macOS but
+  // fail on Linux. A missing path gives a deterministic I/O error on both.
+  std::string dir = temp_path("missing");
   bool threw = false;
   Status s = Status::Ok, rs = Status::Ok;
   uint64_t trimmed = 0;
@@ -268,7 +269,6 @@ TEST(unreadable_path_is_an_io_error_not_an_exception) {
   CHECK(!threw);
   CHECK(s == Status::IoError);
   CHECK(rs == Status::IoError);
-  ::rmdir(dir.c_str());
 }
 
 TEST(a_corrupt_length_before_complete_records_is_corruption_not_a_torn_tail) {

@@ -1,5 +1,52 @@
 # HashWing
 
+Flight-log reviews need a way to spot changes after a log is collected. HashWing checks sealed records and independently retained signed receipts, with file processing kept on the reviewer’s device. It helps reviewers identify the first detected inconsistency; it does not establish sensor truth, operator identity or events before sealing.
+
+## Local product routes (2026-11-15)
+
+The React console supports `/` (uploader/sealer), `/verify` (tamper and Ed25519 receipt auditor),
+`/benchmarks` (real browser verification measurements) and `/system` (current serving-process health).
+Legacy `/flightseal/console/#/app/...` links remain supported. The existing Pages build is still static;
+HTTP health data is available only when using the local serving process. The four direct routes need
+that process’s exact-path fallback; unknown API requests must remain JSON 404s.
+
+Files, receipt checks and private signing keys stay in the existing browser/Wasm workflow. Selecting
+a file is local processing rather than upload to the HTTP server. Tabs keep independent route/sample/
+record selection; named local profile preferences remain explicitly shared on the device.
+
+```mermaid
+flowchart LR
+  Browser[HashWing React console] -->|local selected file| Wasm[C++ / OpenSSL Wasm worker]
+  Browser -->|health / readiness / metrics only| HTTP[Local HTTP serving process]
+  HTTP --> Assets[Built docs/console and sample files]
+  Wasm --> Reports[Local receipts / verification reports]
+```
+
+`/benchmarks` measures one warm-up and three sequential checks of the included 800-record file,
+excluding its network fetch and receipt checks. It reports each sample, median elapsed time and log
+MiB/s for this browser/device. It cannot establish p99, native disk durability, crash recovery or server
+capacity. Historical native VM measurements below remain a separate workload.
+
+The local frontend quickstart requires Node.js compatible with the installed Vite version, npm,
+and Python with `requirements-web.txt` installed. Prepare that Python environment using the
+[portable runtime verification instructions](docs/verification/runtime.md). From this repository:
+
+```sh
+npm --prefix newweb ci
+npm --prefix newweb run build
+python3 tools/http_server.py --root docs --app hashwing --port 3001
+```
+
+Do not start a second instance if port 3001 is already serving this stack. Stop a foreground instance
+with Ctrl-C. The root project owns container and simultaneous five-app launch instructions. Build
+assets retain `/flightseal/console/` URLs; the server maps `/flightseal/` to `docs/` and exact product
+routes to `docs/console/index.html`.
+
+See the [runtime verification summary](docs/verification/runtime.md) for the focused server
+checks and portable setup; local run artifacts are not published. Reproduce direct-route
+checks with `HASHWING_BASE_URL=http://127.0.0.1:3001 node newweb/tests/product-routes.mjs`.
+These checks do not establish complete WCAG conformance or human screen-reader coverage.
+
 Local flight-log integrity, verified in your browser. The repository and `fseal` CLI retain their existing names; FLTSEAL1 and receipt v1 stay compatible.
 
 **A post-download seal and reference file format for drone flight logs: edit, delete or reorder one record and
@@ -344,3 +391,5 @@ MIT. The verifier page uses the Atkinson Hyperlegible font (Braille Institute), 
 examples (`docs/samples/px4-*`) are 2,422 records selected from it and sealed; pyulog's licence is in
 [docs/samples/LICENSE-pyulog.txt](docs/samples/LICENSE-pyulog.txt). The sealed selection has no position or GPS
 topics or fields (checked by tests/test_web_samples.py).
+
+Local verification: [2026-11-15 checks and limits](docs/verification/release-2026-11-15.md).
