@@ -573,7 +573,7 @@ try {
       await page.waitForTimeout(80);
       const dimensions = await page.evaluate(() => ({ doc: document.documentElement.scrollWidth, client: document.documentElement.clientWidth }));
       assert.ok(dimensions.doc <= dimensions.client + 1, `${width}px overflow: ${JSON.stringify(dimensions)}`);
-      const targets = await page.locator('.sample-toolbar button').evaluateAll((elements) => elements.map((element) => ({ name: element.textContent, width: element.getBoundingClientRect().width, height: element.getBoundingClientRect().height })));
+      const targets = await page.locator('.sample-toolbar button, .quickstart-head .text-action').evaluateAll((elements) => elements.map((element) => ({ name: element.textContent, width: element.getBoundingClientRect().width, height: element.getBoundingClientRect().height })));
       assert.ok(targets.every((target) => target.width >= 44 && target.height >= 44), `${width}px sample targets: ${JSON.stringify(targets)}`);
       await auditAxe(page, `${width}px sandbox`);
       await page.screenshot({ path: join(EVIDENCE, `react-console-${width}.png`), fullPage: true });

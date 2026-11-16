@@ -916,6 +916,7 @@ button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible
 .record-list li.selected button, .record-list li button:hover { background: #e7eefb; }
 .record-index { color: #194393; }
 .offline-control-actions .button, .workspace-tools-menu summary, .workspace-persistent-actions a, .auth-persistent-actions a, .quickstart-action, .trust-footer nav a, .trust-footer nav button, .dialog-close { min-height: 44px; }
+.text-action { min-height: 44px; min-width: 44px; }
 .quickstart-head h2, .quickstart li strong, .signing-key-controls h3 { color: var(--ink); }
 .quickstart li small { color: var(--muted); }
 

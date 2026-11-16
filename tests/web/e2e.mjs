@@ -203,7 +203,7 @@ try {
     const context = await browser.newContext({ viewport: { width: 1440, height: 960 } });
     try {
       const page = await context.newPage();
-      await page.goto(url);
+      await page.goto(`${url}#/verify?sample=intact`);
       await page.waitForFunction(() => document.querySelector('#result-heading')?.textContent.includes('Intact'), null, { timeout: 30000 });
       await page.goto(`${url}#/verify`);
       await page.locator('#log-input').setInputFiles(put('stale-clear-nonlog.fseal', Buffer.from('bad')));
