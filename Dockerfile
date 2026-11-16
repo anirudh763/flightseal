@@ -1,6 +1,6 @@
 FROM node:24-bookworm-slim AS build
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    ca-certificates cmake build-essential libssl-dev libsqlite3-dev python3 python3-venv ffmpeg \
+    ca-certificates curl openssl cmake build-essential libssl-dev libsqlite3-dev python3 python3-venv ffmpeg \
     && rm -rf /var/lib/apt/lists/*
 WORKDIR /workspace
 COPY . .
