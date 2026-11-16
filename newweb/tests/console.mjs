@@ -78,7 +78,9 @@ function testUlog() {
 async function auditAxe(page, label) {
   // Route focus and smooth scrolling can leave a control partly behind the sticky header.
   await page.evaluate(() => window.scrollTo({ top: 0, left: 0, behavior: 'instant' }));
-  await page.waitForFunction(() => window.scrollY === 0);
+  await page.waitForFunction(() => Math.abs(window.scrollY) < 1, null, { timeout: 3000 }).catch(async () => {
+    assert.fail(`${label}: viewport did not settle: ${JSON.stringify(await page.evaluate(() => ({ scrollY, active: document.activeElement?.id, hash: location.hash })))}`);
+  });
   await page.evaluate(AXE);
   const results = await page.evaluate(() => window.axe.run(document, { runOnly: { type: 'tag', values: ['wcag2a', 'wcag2aa', 'wcag21a', 'wcag21aa', 'wcag22aa', 'best-practice'] } }));
   axeReviews.push({ label, incomplete: results.incomplete.map((item) => ({ id: item.id, nodes: item.nodes.map((node) => node.target) })) });
