@@ -11,7 +11,7 @@
     "CMakeLists.txt": "62056dae9d8ddbf0acdf4221bac3d2b795a82bb68e1ce9280f308a55a36e2df6",
     "wasm/CMakeLists.txt": "4120f0268a8c378eedf3c210741de5fa1b12574f878ef273890ebe01dd77eb99",
     "scripts/build_wasm.sh": "1b6e416f5202395cad0d6ac76e6d19cc7f846b355baeaff330086fef5a9d008f",
-    "scripts/build_wasm_inner.sh": "5e37cf1f41cfea4ab82b012eb7e484d684ef383ef1448cc2a72ea6dcd45a55ac",
+    "scripts/build_wasm_inner.sh": "197117968d658e05f815a87c39cf12a2aa8d1f3fffedea53b073b3ddd468c37f",
     "docs/wasm/flightseal.mjs": "943f0a0642710b5421e6a3c0a3da4c3489e0acbe97e8f9cfd5054c51a9bc5396",
     "docs/wasm/flightseal.wasm": "3a36f360a098120f4f843311b115df79683924ce0ebf73027115977fc7c99f44"
   },
