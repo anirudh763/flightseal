@@ -3,7 +3,7 @@ set -euo pipefail
 cd /build
 archive=openssl-3.5.8.tar.gz
 if [[ ! -f "$archive" ]]; then
-  curl --fail --location --retry 3 --output "$archive" "https://www.openssl.org/source/$archive"
+  curl --fail --location --connect-timeout 20 --max-time 120 --retry 3 --retry-delay 1 --retry-max-time 120 --retry-all-errors --output "$archive" "https://www.openssl.org/source/$archive"
 fi
 printf '%s  %s\n' a8f84a39918ec6415ce765d9b429d313ba97b8143169c172e734b9514464f5b2 "$archive" | sha256sum --check
 if [[ ! -f /build/openssl/lib/libcrypto.a ]]; then

@@ -1,0 +1,7 @@
+# Recover bounded OpenSSL download failures
+
+Main CI run43841385832 verified all11provenance hashes but curl exited35 on a TLS reset downloading the pinned OpenSSL archive. Existing --retry3 did not retry that failure class. Add --retry-all-errors,20s connect and120s transfer bounds, a120s retry-start window and1s delay. At most4attempts; the retry window is not a120s total wall-clock guarantee. URL, version and mandatory SHA256 check are unchanged.
+
+One focused real-curl regression failed before the change (curl35), then passed: a local TLS server resets its first handshake and serves the fixture on retry; a permanently resetting server fails after exactly4connections. macOS pytest1passed in4.74s; the identical assert-based test also passed inside the pinned emsdk4.0.23 image with Linux curl7.81. No external network in this regression; only its local self-signed fixture uses insecure verification. Production TLS verification is unchanged.
+
+Root rebuilt through scripts/build_wasm.sh using the pinned image and checksum-verified cached OpenSSL source; Wasm and JS glue remain byte-identical. All11updated provenance hashes verify; only the build-script fingerprint changes. Root and an independent critic reviewed the fix. Current-head CI, including a cold download/rebuild, must pass before merge. Raw failure, RED/GREEN, pinned-Linux and equivalence evidence stays in the coordinating workspace under artifacts/verification/post-restart/hashwing-download-recovery/.
