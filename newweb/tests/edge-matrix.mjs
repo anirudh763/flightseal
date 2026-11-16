@@ -100,7 +100,7 @@ try {
   page.on('pageerror', error => runtimeErrors.push(String(error)));
   page.on('console', message => { if (message.type() === 'error') runtimeErrors.push(`${message.text()} (${message.location().url})`); });
   const initialStarted = performance.now();
-  await page.goto(url);
+  await page.goto(`${url}#/sandbox?sample=intact`);
   await waitForResult(page, 'Intact');
   await page.waitForFunction(() => document.querySelector('.result-stat')?.textContent.includes('800'));
   metrics.default800ElapsedMs = Math.round(performance.now() - initialStarted);
@@ -110,6 +110,7 @@ try {
     assert.match(await page.locator('#result-heading').textContent(), /Intact/);
     assert.match(await page.locator('.stats-grid').textContent(), /800 covered · 0 uncovered/);
     await route(page, 'records');
+    await page.locator('.record-list li').first().waitFor();
     assert.ok(await page.locator('.record-list li').count() > 0);
     await route(page, 'receipts');
     assert.equal(await page.locator('tbody tr').count(), 8);
