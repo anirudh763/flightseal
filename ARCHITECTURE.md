@@ -1,6 +1,6 @@
 # Architecture and readiness
 
-**Status (2026-11-15):** verification and sealing remain browser-local. The local product adds an HTTP serving process for direct routes and live operational health; GitHub Pages remains a static deployment. The native C++ CLI and the new
+**Status (2026-11-17):** verification and sealing remain browser-local. The optional HTTP runtime now adds session-owned SQLite workspaces, explicit source/result uploads, durable sessions and logical snapshots alongside direct routes and process health. GitHub Pages remains a static deployment. The native C++ CLI and the new
 WebAssembly bridge and React console are implemented under `wasm/`, `newweb/` and `docs/console/`. No AWS account or credentials are configured, and no cloud resources
 have been created. AWS below is an optional proposal, not the deployed architecture.
 
@@ -20,7 +20,7 @@ flowchart LR
   W[Independent witness] -. separately retains receipts and trusted public key .-> B
 ```
 
-The single console runs in the user's browser and reads selected files locally. The local HTTP adapter serves assets plus read-only `/healthz`, `/readyz`, `/metrics` and `/api/system`; it receives no flight-log uploads or signing keys.
+The single console runs in the user's browser and reads selected files locally. The HTTP adapter serves assets/probes and, when configured with private storage, accepts explicitly saved checked logs, receipts and result metadata. Private signing keys and video are excluded. The server authorizes storage; saved results remain browser-computed, not server-verified.
 It verifies the FLTSEAL1 hash chain and can authenticate receipts with a supplied trusted public key. The C++ core
 and the independent JavaScript reader are separate implementations used for finite parity tests and indexing.
 The C++/OpenSSL WebAssembly bridge is compiled (about 1.97 MB module) and is used by every console verification,
@@ -174,3 +174,8 @@ this browser timing panel.
 No AWS runtime integration is added by the frontend. The proposed archive/signing services above
 remain proposals and need their own compatibility and operational validation. Local Space Grotesk
 and JetBrains Mono font assets include their SIL OFL notices under `newweb/public/fonts/`.
+
+
+## Implemented private server mode
+
+Four product routes (`/overview`, `/workbench`, `/reports`, `/settings`) expose actual workflows and stored evidence. Optional server persistence uses SQLite WAL on a private UID10001 volume, opaque durable Beaker sessions and Argon2 accounts. Origin/CSRF/owner checks, quotas and idempotent saves are enforced by the server. No reconnect upload, private signing-key storage or private API caching occurs. Snapshots stay on the same local volume; they are not an independent device backup. See [server workspaces](SERVER_WORKSPACES.md) for contracts, launch, limits and recovery. AWS diagrams elsewhere remain proposals.

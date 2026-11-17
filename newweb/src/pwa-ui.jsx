@@ -85,13 +85,13 @@ export function FeedbackDialog({ open, onClose, route, onDraftOpened }) {
 }
 
 export function FooterLinks({ onFeedback, onInstall, children }) {
-  return <footer>{children}<div className="trust-footer"><nav aria-label="Product information"><a href="#/privacy">Privacy</a><a href="#/terms">Terms of Use</a><a href="#/security">Security &amp; Offline Data</a><button type="button" onClick={onInstall}>Install help</button><button type="button" onClick={onFeedback}><MessageSquareWarning size={15} aria-hidden="true" />Report a bug</button></nav><small>FlightSeal files are checked locally. Product features remain free.</small></div></footer>;
+  return <footer>{children}<div className="trust-footer"><nav aria-label="Product information"><a href="#/privacy">Privacy</a><a href="#/terms">Terms of Use</a><a href="#/security">Security &amp; Offline Data</a><button type="button" onClick={onInstall}>Install help</button><button type="button" onClick={onFeedback}><MessageSquareWarning size={15} aria-hidden="true" />Report a bug</button></nav><small>HashWing verifies files locally.</small></div></footer>;
 }
 
 export function LegalPage({ page, onBack, onClearCache, cacheStatus, onFeedback, onInstall, onRestartQuickStart }) {
   const content = {
     privacy: { title: 'Privacy', blocks: [
-      ['Local work', 'Selected logs, receipts, public keys, video and generated results are processed in this browser. HashWing does not upload them. They are not automatically saved to a profile.'],
+      ['Local work', 'Logs, receipts, keys, video and results are processed in this browser. Save current run uploads the checked log, receipts, report and any selected original source to this host’s private workspace when server storage is available. Private signing keys and video are not included. Browser profiles save view settings only.'],
       ['Local profiles', 'A profile stores its email address and a salted PBKDF2 password verifier in this browser. When you explicitly save a view, only the workspace screen, an included-sample identifier and a record number are stored. Password hashing does not encrypt browser storage.'],
       ['Cache and external actions', 'The service worker caches the public app shell, verifier Wasm/worker files and small public sample files. Shared report URLs contain only supported sample/view/record parameters, never report text. Sharing or opening a feedback draft sends only the content shown in its review step to the destination you choose.'],
       ['Browser storage', 'Browser storage may be cleared or evicted. A local profile has no remote recovery. Removing a profile does not delete exported files or clear another app’s data.'],
@@ -127,10 +127,12 @@ export function QuickStart({ completed = [], dismissed, onDismiss, onRestart, on
   return <section className="quickstart" aria-labelledby="quickstart-title"><div className="quickstart-head"><div><span className="brand-eyebrow">Optional</span><h2 id="quickstart-title">Quick start</h2></div><button type="button" className="text-action" onClick={onDismiss}>Dismiss</button></div><ol>{steps.map(([label, description, action], index) => <li key={label} className={completed[index] ? 'is-complete' : ''}><span className="quickstart-check" aria-hidden="true">{completed[index] ? <Check size={14} /> : index + 1}</span><div><strong>{label}</strong><small>{description}</small></div><button type="button" className="quickstart-action" onClick={action} disabled={index === 2 && !exportReady}>{index === 0 ? 'Open sample' : index === 1 ? 'Inspect' : 'Export bundle'}</button></li>)}</ol></section>;
 }
 
-export function ShareDialog({ open, onClose, summary, shareUrl, onShare }) {
+export function ShareDialog({ open, onClose, summary, shareUrl, onShare, isOwnerCurrent }) {
   const dialogRef = useRef(null);
   const textRef = useRef(null);
   const [status, setStatus] = useState('');
+  const revision = useRef(0);
+  useEffect(() => { revision.current++; return () => { revision.current++; }; }, [open, summary, shareUrl]);
   useEffect(() => {
     const dialog = dialogRef.current;
     if (!dialog) return undefined;
@@ -143,16 +145,18 @@ export function ShareDialog({ open, onClose, summary, shareUrl, onShare }) {
     return undefined;
   }, [open]);
   const copy = async () => {
-    try { await navigator.clipboard.writeText(`${summary}\n\n${shareUrl}`); setStatus('Summary and workspace link copied.'); }
-    catch { textRef.current?.select(); setStatus('Clipboard is unavailable. The text is selected for manual copying.'); }
+    const operation = revision.current;
+    try { await navigator.clipboard.writeText(`${summary}\n\n${shareUrl}`); if (operation === revision.current && isOwnerCurrent()) setStatus('Summary and workspace link copied.'); }
+    catch { if (operation !== revision.current || !isOwnerCurrent()) return; textRef.current?.select(); setStatus('Clipboard is unavailable. The text is selected for manual copying.'); }
   };
   const downloadText = () => {
     const blob = new Blob([`${summary}\n\n${shareUrl}\n`], { type: 'text/plain;charset=utf-8' });
     const url = URL.createObjectURL(blob); const anchor = document.createElement('a'); anchor.href = url; anchor.download = 'hashwing-share-summary.txt'; anchor.click(); URL.revokeObjectURL(url); setStatus('Summary downloaded to this device.');
   };
   const share = async () => {
-    try { await onShare({ title: 'HashWing verification summary', text: summary, url: shareUrl }); setStatus('The share sheet closed. HashWing cannot confirm what the recipient received.'); }
-    catch (cause) { if (cause?.name === 'AbortError') { setStatus('Sharing was canceled.'); return; } await copy(); }
+    const operation = revision.current;
+    try { await onShare({ title: 'HashWing verification summary', text: summary, url: shareUrl }); if (operation === revision.current && isOwnerCurrent()) setStatus('The share sheet closed. HashWing cannot confirm what the recipient received.'); }
+    catch (cause) { if (operation !== revision.current || !isOwnerCurrent()) return; if (cause?.name === 'AbortError') { setStatus('Sharing was canceled.'); return; } await copy(); }
   };
   return <dialog ref={dialogRef} className="pwa-dialog share-dialog" aria-labelledby="share-title" onCancel={(event) => { event.preventDefault(); onClose(); }} onClose={onClose}>
     <div className="dialog-head"><div><span className="brand-eyebrow">Review before sharing</span><h2 id="share-title">Share verification summary</h2></div><button type="button" className="dialog-close" onClick={onClose}>Close</button></div>

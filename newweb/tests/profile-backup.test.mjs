@@ -59,3 +59,37 @@ test('restore collision and quota failure preserve prior profile/workspace data'
   assert.deepEqual(JSON.parse(destination.getItem(localAuthStorageKeys.profile)).profiles, []);
   assert.equal(readWorkspaceContext(profile.id, { storage: destination }), null);
 });
+
+test('canceled backup operations retain no new backup or profile writes', async () => {
+  const source = new MemoryStorage();
+  await createLocalProfile('canceled@example.test', 'local profile password 123', { storage: source, cryptoObject: webcrypto });
+  const payload = { app: 'flightseal', schema: 1, profile: JSON.parse(source.getItem(localAuthStorageKeys.profile)).profiles[0], workspace: null };
+  const destination = new MemoryStorage();
+  await assert.rejects(commitBackupRestore(payload, destination, { isCurrent: () => false }), /canceled/);
+  await assert.rejects(createEncryptedProfileBackup(payload.profile.id, { storage: source, passphrase: 'separate backup password', cryptoObject: webcrypto, isCurrent: () => false }), /canceled/);
+  assert.equal(destination.values.size, 0);
+});
+
+test('logout while a restore waits for its Web Lock cancels before any write', async () => {
+  const source = new MemoryStorage();
+  await createLocalProfile('queued@example.test', 'local profile password 123', { storage: source, cryptoObject: webcrypto });
+  const payload = { app: 'flightseal', schema: 1, profile: JSON.parse(source.getItem(localAuthStorageKeys.profile)).profiles[0], workspace: null };
+  const destination = new MemoryStorage();
+  const oldNavigator = Object.getOwnPropertyDescriptor(globalThis, 'navigator');
+  const oldWindow = Object.getOwnPropertyDescriptor(globalThis, 'window');
+  let release, current = true;
+  Object.defineProperty(globalThis, 'window', { value: {}, configurable: true });
+  Object.defineProperty(globalThis, 'navigator', { value: { locks: { request(name, options, callback) {
+    return new Promise((resolve, reject) => { release = () => Promise.resolve().then(callback).then(resolve, reject); });
+  } } }, configurable: true });
+  try {
+    const restoring = commitBackupRestore(payload, destination, { isCurrent: () => current });
+    current = false;
+    release();
+    await assert.rejects(restoring, /canceled/);
+    assert.equal(destination.values.size, 0);
+  } finally {
+    if (oldNavigator) Object.defineProperty(globalThis, 'navigator', oldNavigator); else delete globalThis.navigator;
+    if (oldWindow) Object.defineProperty(globalThis, 'window', oldWindow); else delete globalThis.window;
+  }
+});

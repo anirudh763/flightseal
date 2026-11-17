@@ -1,6 +1,6 @@
-const screens = new Set(['sandbox', 'verify', 'records', 'receipts', 'video', 'help', 'benchmarks', 'system']);
+const screens = new Set(['sandbox', 'verify', 'records', 'receipts', 'video', 'help', 'benchmarks', 'system', 'overview', 'workbench', 'reports', 'settings']);
 const aliases = new Map([['findings', 'sandbox'], ['examples', 'sandbox'], ['telemetry', 'sandbox']]);
-const samples = new Set(['intact', 'tampered', 'rewritten', 'truncated', 'px4', 'px4-tampered', 'px4-full']);
+const samples = new Set(['intact', 'byte-flip', 'tampered', 'rewritten', 'truncated', 'px4', 'px4-tampered', 'px4-full']);
 
 export function parseRouteHash(hash) {
   const raw = String(hash || '');
@@ -40,6 +40,7 @@ export function routeHash(target, params = {}) {
   const query = new URLSearchParams();
   if (params.sample && samples.has(params.sample)) query.set('sample', params.sample);
   if (Number.isSafeInteger(Number(params.record)) && Number(params.record) >= 0 && params.record !== '') query.set('record', String(Number(params.record)));
+  if (Number.isSafeInteger(Number(params.receipt)) && Number(params.receipt)>0) query.set('receipt',String(Number(params.receipt)));
   return `#${path}${query.size ? `?${query.toString()}` : ''}`;
 }
 
@@ -51,22 +52,26 @@ export function safeReturnRoute(value) {
   const sample = samples.has(parsed.params.get('sample')) ? parsed.params.get('sample') : undefined;
   const rawRecord = parsed.params.get('record');
   const record = rawRecord && /^\d+$/.test(rawRecord) && Number.isSafeInteger(Number(rawRecord)) ? Number(rawRecord) : undefined;
-  return routeHash(parsed.screen, { sample, record });
+  return routeHash(parsed.screen, { sample, record, receipt:parsed.params.get('receipt') });
 }
 
 export const workspaceScreens = Object.freeze([...screens]);
 
 // Keep Pages/hash links; local product paths share the same workspace state.
-const productPaths = Object.freeze({ sandbox: '/', verify: '/verify', benchmarks: '/benchmarks', system: '/system' });
+const productPaths = Object.freeze({ overview:'/overview',workbench:'/workbench',sandbox:'/workbench',verify:'/workbench',reports:'/reports',benchmarks:'/reports',settings:'/settings',system:'/settings' });
 export function parseLocation({ pathname = '/', search = '', hash = '' }) {
   if (hash) return parseRouteHash(hash);
   if (pathname === '/flightseal/console/' || pathname === '/console/') return parseRouteHash('');
-  const screen = Object.keys(productPaths).find((key) => productPaths[key] === pathname);
+  const legacy = { '/verify':'verify','/benchmarks':'benchmarks','/system':'system' };
+  const canonical = pathname==='/'?'overview':pathname.slice(1);
+  let screen = legacy[pathname] || ({overview:'overview',workbench:'sandbox',reports:'reports',settings:'settings'})[canonical];
+  if(pathname==='/workbench'&&new URLSearchParams(search).get('tool')==='verify')screen='verify';
   if (!screen) return parseRouteHash('#/not-found');
-  return { ...parseRouteHash(routeHash(screen) + search), direct: true, route: pathname };
+  return { ...parseRouteHash(routeHash(screen) + search), direct: true, route: pathname, canonical:legacy[pathname]?({verify:'workbench',benchmarks:'reports',system:'settings'})[screen]:canonical };
 }
 export function productHref(screen, params = {}) {
   if (!(screen in productPaths)) return routeHash(screen, params);
-  const query = routeHash(screen, params).split('?')[1];
-  return productPaths[screen] + (query ? `?${query}` : '');
+  const query = new URLSearchParams(routeHash(screen, params).split('?')[1]);
+  if(screen==='verify')query.set('tool','verify');
+  return productPaths[screen] + (query.size ? `?${query}` : '');
 }

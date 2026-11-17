@@ -96,7 +96,7 @@ p { line-height: 1.58; }
 .stats-grid>div { display: grid; gap: 7px; min-height: 78px; padding: 15px 18px; border-bottom: 1px solid var(--line); border-right: 1px solid var(--line); }
 .stats-grid>div:nth-child(3n) { border-right: 0; }
 .stats-grid>div span { color: var(--muted); font-size: .78rem; }
-.stats-grid strong, .stats-grid code { font-size: .85rem; font-variant-numeric: tabular-nums; }
+.stats-grid strong, .stats-grid code { min-width: 0; overflow-wrap: anywhere; font-size: .85rem; font-variant-numeric: tabular-nums; }
 .wrap { overflow-wrap: anywhere; }
 .first-failure { display: grid; gap: 5px; margin: 16px 18px 0; padding: 14px 16px; border-left: 3px solid var(--warn); background: var(--warn-bg); color: #583500; }
 .first-failure.bad { border-color: var(--bad); background: var(--bad-bg); color: #6d1719; }
@@ -924,3 +924,32 @@ button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible
 .metrics-text:focus-visible { outline: 3px solid var(--forest); outline-offset: 3px; }
 
 @media (max-width: 768px) { input:not([type=checkbox]):not([type=radio]), textarea, select { font-size: max(16px, 1em) !important; } }
+
+.verify-demo { grid-column: 1 / -1; }
+.verify-demo .panel-body { display: grid; gap: 12px; }
+.verify-demo p { margin: 0; max-width: 76ch; }
+.demo-guidance { display: flex; align-items: center; flex-wrap: wrap; gap: 8px 16px; color: var(--muted); }
+
+/* Keep file/report operations and device utilities out of the command header. */
+.source-actions { margin: 0 0 16px; border-bottom: 1px solid var(--line); }
+.source-actions > summary, .install-tools > summary { min-height: 44px; padding: 12px 0; color: var(--muted); cursor: pointer; }
+.source-action-items { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; padding: 0 0 12px; }
+.source-action-items .command-file-wrap { flex: 1 1 240px; max-width: 560px; min-width: 0; }
+.source-action-items .button { min-height: 44px; }
+.install-tools { margin-top: 24px; border-top: 1px solid var(--line); }
+.workbench-rail .workspace-tools-menu { margin: 8px 12px; }
+.workbench-rail .workspace-tools-menu > div { position: static; min-width: 0; box-shadow: none; }
+.workbench-rail .workspace-tools-menu summary { font-size: 13px; }
+.workspace-persistent-actions a { border: 0; background: transparent; }
+@media (max-width: 768px) { .workbench-rail .workspace-tools-menu { grid-column: 1 / -1; margin: 0; } .workbench-rail .workspace-tools-menu:not([open]) { justify-self: start; } }
+@media (max-width: 480px) { .source-action-items { align-items: stretch; } .source-action-items .button { flex: 1 1 120px; } .source-actions { margin-inline: 0; } }
+
+.profile-menu-panel { max-height: min(70dvh, 640px); overflow-y: auto; overscroll-behavior: contain; }
+.profile-menu-panel button, .workspace-tools-menu a { min-height: 44px; }
+
+/* Canonical workspaces retain the existing aerospace tokens and native engine. */
+.canonical-page [hidden]{display:none!important}.canonical-page .commandbar h1{font-size:20px}
+.overview-facts{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:16px;margin:20px 0}.overview-facts>div{border:1px solid var(--line);background:var(--surface);padding:16px;min-width:0}.overview-facts dt{font-size:12px;color:var(--muted)}.overview-facts dd{margin:8px 0 0;overflow-wrap:anywhere;font-variant-numeric:tabular-nums}
+.workbench-tabs{display:flex;gap:8px;flex-wrap:wrap;margin:12px 0}.workbench-tabs a{display:inline-flex;align-items:center;min-height:44px;padding:8px 12px;border:1px solid var(--line);color:var(--ink)}.workbench-tabs a[aria-current=page]{color:var(--accent);background:var(--surface);font-weight:700}
+.canonical-workbench .result-actions,.canonical-workbench .command-export{display:none}.canonical-reports .result-panel{margin-top:16px}.canonical-settings .profile-menu-panel{position:static;max-height:none}.canonical-settings .profile-menu{max-width:700px}
+@media(max-width:768px){.overview-facts{grid-template-columns:1fr}.canonical-page .command-actions .button{min-height:44px}.canonical-page .workbench-rail .nav.open{grid-template-columns:1fr 1fr}}

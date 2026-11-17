@@ -5,7 +5,7 @@ import { createRequire } from 'node:module';
 import { resolve } from 'node:path';
 
 const BASE = process.env.HASHWING_BASE_URL || 'http://127.0.0.1:3001';
-const OUT = resolve('artifacts/verification/post-restart/product-browser');
+const OUT = resolve(process.env.EVIDENCE_DIR || 'artifacts/verification/post-restart/product-browser');
 mkdirSync(OUT, { recursive: true });
 const require = createRequire(import.meta.url);
 const axe = readFileSync(require.resolve('axe-core/axe.min.js'), 'utf8');
@@ -21,10 +21,10 @@ const page = await context.newPage();
 context.on('page', (tab) => tab.on('pageerror', (error) => errors.push(String(error))));
 page.on('pageerror', (error) => errors.push(String(error)));
 page.on('response', (response) => { if (response.status() >= 400) failures.push(`${response.status()} ${response.url()}`); });
-const routeNames = [['/', 'Flight Log Uploader and Sealer'], ['/verify', 'Tamper and Ed25519 Receipt Auditor'], ['/benchmarks', 'Crash-Safety and Throughput Explorer'], ['/system', 'Health and Metrics']];
+const routeNames = [['/overview','Overview'], ['/workbench','Workbench'], ['/reports','Reports'], ['/settings','Settings']];
 try {
   for (const [route, heading] of routeNames) {
-    for (const width of [320, 768, 1440]) {
+    for (const width of [320, 375, 768, 1024, 1440]) {
       await page.setViewportSize({ width, height: 1000 });
       await page.goto(BASE + route);
       await page.getByRole('heading', { level: 1, name: heading }).waitFor();
@@ -43,9 +43,9 @@ try {
     }
   }
   await page.goto(BASE + '/');
-  await page.getByRole('navigation', { name: 'Primary navigation' }).getByRole('link', { name: 'Verify', exact: true }).click();
-  assert.equal(new URL(page.url()).pathname, '/verify');
-  await page.waitForFunction(() => document.activeElement.id === 'page-verify');
+  await page.getByRole('navigation', { name: 'Primary navigation' }).getByRole('link', { name: 'Workbench', exact: true }).click();
+  assert.equal(new URL(page.url()).pathname, '/workbench');
+  await page.waitForFunction(() => document.activeElement.id === 'page-sandbox');
   await page.goBack();
   await page.getByRole('heading', { name: routeNames[0][1] }).waitFor();
   await page.goForward();
@@ -61,7 +61,7 @@ try {
   const second = await context.newPage();
   await second.goto(BASE + '/verify?sample=tampered&record=7');
   await second.locator('#result-heading').filter({ hasText: 'Tampered' }).waitFor();
-  await page.goto(BASE + '/?sample=intact&record=4');
+  await page.goto(BASE + '/workbench?sample=intact&record=4');
   await page.locator('#result-heading').filter({ hasText: 'Intact' }).waitFor();
   const independentUrl = second.url();
   await page.getByRole('button', { name: 'Flip one payload byte', exact: true }).click();
@@ -71,7 +71,7 @@ try {
   await second.locator('#result-heading').filter({ hasText: 'Tampered' }).waitFor();
   pass('Two tabs preserve independent route/sample/record during mutation');
   await second.close();
-  await page.goto(BASE + '/');
+  await page.goto(BASE + '/workbench');
   await page.getByLabel('Choose source or sealed log').setInputFiles({ name: 'product.tsv', mimeType: 'text/plain', buffer: Buffer.from('1000\tfirst\n2000\tsecond\n3000\tthird\n') });
   await page.getByRole('button', { name: 'Seal and verify', exact: true }).click();
   await page.locator('#result-heading').filter({ hasText: 'Intact' }).waitFor();
@@ -84,12 +84,13 @@ try {
   await page.getByText('Record 0 · Invalid file header (bad-header)', { exact: true }).waitFor();
   await page.locator('#result-heading').filter({ hasText: 'Tampered' }).waitFor();
   pass('Malformed log failure is visible');
-  await page.goto(BASE + '/benchmarks');
+  await page.goto(BASE + '/reports');
+  await page.getByText('Benchmarks and recovery evidence', {exact:true}).click();
   await page.getByRole('button', { name: 'Run verification benchmark' }).click();
   await page.getByText('Median elapsed', { exact: true }).waitFor();
   writeFileSync(`${OUT}/browser-benchmark.txt`, await page.locator('main').innerText());
   pass('Three native Wasm benchmark measurements');
-  await page.goto(BASE + '/system');
+  await page.goto(BASE + '/settings');
   await page.getByRole('button', { name: 'Refresh health' }).waitFor();
   await page.getByText('HTTP requests', { exact: true }).waitFor();
   assert.equal(await page.getByText('Unavailable', { exact: true }).count(), 0);

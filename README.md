@@ -393,3 +393,8 @@ examples (`docs/samples/px4-*`) are 2,422 records selected from it and sealed; p
 topics or fields (checked by tests/test_web_samples.py).
 
 Local verification: [2026-11-15 checks and limits](docs/verification/release-2026-11-15.md).
+
+
+### Private server workspaces
+
+The optional HTTP image adds owned saved runs, source artifacts, durable guest/account sessions and real workspace snapshots. Explicit Save controls uploads; domain checks stay in the browser. See [server configuration, API bounds and recovery](SERVER_WORKSPACES.md). Static Pages remains usable without these APIs.

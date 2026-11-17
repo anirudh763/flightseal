@@ -1,10 +1,10 @@
 // One FlightSeal worker serves the namespaced site or the standalone HashWing host.
 // Bump VERSION whenever this policy changes. A waiting revision is activated only after every
 // open console tab confirms that it has no active task or unacknowledged output.
-const VERSION = '0.4.0-flightseal-console-7';
+const VERSION = '0.4.0-flightseal-console-15';
 const ROOT_HOSTING = new URL(self.registration.scope).pathname === '/';
 const ASSET_SCOPE = ROOT_HOSTING ? new URL('flightseal/', self.registration.scope).href : self.registration.scope;
-const PRODUCT_ROUTES = ['/', '/verify', '/benchmarks', '/system'];
+const PRODUCT_ROUTES = ['/', '/overview', '/workbench', '/reports', '/settings', '/verify', '/benchmarks', '/system'];
 const CACHE_PREFIX = 'flightseal-';
 const CACHE = `${CACHE_PREFIX}${VERSION}`;
 const STATUS_URL = new URL('__flightseal_offline_status__', self.registration.scope);

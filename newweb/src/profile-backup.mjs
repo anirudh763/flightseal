@@ -1,7 +1,7 @@
 import {
   APP_ID, PBKDF2_HASH, PBKDF2_ITERATIONS, PROFILE_SCHEMA, WORKSPACE_SCHEMA,
   MAX_PROFILE_REGISTRY_BYTES, MAX_SAVED_CONTEXT_BYTES, localAuthStorageKeys,
-  listLocalProfiles,
+  listLocalProfiles, ensureCurrent,
 } from './local-auth.mjs';
 
 export const BACKUP_FORMAT = 'flightseal-encrypted-profile-backup';
@@ -61,33 +61,38 @@ function validatePayload(payload) {
     const workspace = payload.workspace;
     if (workspace.app !== APP_ID || workspace.schema !== WORKSPACE_SCHEMA || workspace.userId !== profile.id ||
         !['sandbox', 'verify', 'records', 'receipts', 'video', 'help'].includes(workspace.screen) ||
-        !['intact', 'tampered', 'rewritten', 'truncated', 'px4', 'px4-tampered', 'px4-full'].includes(workspace.sample) ||
+        !['intact', 'byte-flip', 'tampered', 'rewritten', 'truncated', 'px4', 'px4-tampered', 'px4-full'].includes(workspace.sample) ||
         !Number.isSafeInteger(workspace.record) || workspace.record < 0) throw new Error('Decrypted backup has an invalid saved view.');
   }
   return payload;
 }
 
-export async function createEncryptedProfileBackup(profileId, { storage = globalThis.localStorage, passphrase, cryptoObject = globalThis.crypto } = {}) {
+export async function createEncryptedProfileBackup(profileId, { storage = globalThis.localStorage, passphrase, cryptoObject = globalThis.crypto, isCurrent } = {}) {
+  ensureCurrent(isCurrent);
   checkPassphrase(passphrase);
   if (!cryptoObject?.subtle || !cryptoObject?.getRandomValues) throw new Error('Web Crypto is unavailable; encrypted backup cannot be created.');
   const payload = readPayload(storage, profileId);
   const salt = cryptoObject.getRandomValues(new Uint8Array(16));
   const iv = cryptoObject.getRandomValues(new Uint8Array(12));
   const key = await derive(passphrase, salt, cryptoObject);
+  ensureCurrent(isCurrent);
   const aad = utf8.encode(`${BACKUP_FORMAT}:${BACKUP_VERSION}`);
   const ciphertext = new Uint8Array(await cryptoObject.subtle.encrypt({ name: 'AES-GCM', iv, additionalData: aad, tagLength: 128 }, key, utf8.encode(JSON.stringify(payload))));
+  ensureCurrent(isCurrent);
   const envelope = { format: BACKUP_FORMAT, version: BACKUP_VERSION, kdf: { name: 'PBKDF2', hash: PBKDF2_HASH, iterations: PBKDF2_ITERATIONS, salt: base64(salt) }, cipher: { name: 'AES-GCM', bits: 256, iv: base64(iv), tagBits: 128 }, ciphertext: base64(ciphertext) };
   const output = JSON.stringify(envelope);
   if (utf8.encode(output).length > BACKUP_MAX_BYTES) throw new Error('Encrypted backup exceeds its safe size limit.');
   return new Blob([output], { type: 'application/vnd.flightseal.profile-backup+json' });
 }
 
-export async function inspectEncryptedProfileBackup(file, passphrase, { cryptoObject = globalThis.crypto } = {}) {
+export async function inspectEncryptedProfileBackup(file, passphrase, { cryptoObject = globalThis.crypto, isCurrent } = {}) {
+  ensureCurrent(isCurrent);
   checkPassphrase(passphrase);
   if (!(file instanceof Blob) || file.size > BACKUP_MAX_BYTES) throw new Error(`Choose an encrypted FlightSeal backup up to ${BACKUP_MAX_BYTES.toLocaleString()} bytes.`);
   if (!cryptoObject?.subtle) throw new Error('Web Crypto is unavailable; encrypted backup cannot be opened.');
   let envelope;
   try { envelope = JSON.parse(await file.text()); } catch { throw new Error('Backup envelope is not valid JSON.'); }
+  ensureCurrent(isCurrent);
   if (envelope?.format !== BACKUP_FORMAT || envelope?.version !== BACKUP_VERSION || envelope?.kdf?.name !== 'PBKDF2' || envelope?.kdf?.hash !== PBKDF2_HASH || envelope?.kdf?.iterations !== PBKDF2_ITERATIONS || envelope?.cipher?.name !== 'AES-GCM' || envelope?.cipher?.bits !== 256 || envelope?.cipher?.tagBits !== 128) throw new Error('Backup app, version, KDF or cipher is unsupported.');
   const salt = fromBase64(envelope.kdf.salt, 16);
   const iv = fromBase64(envelope.cipher.iv, 12);
@@ -95,9 +100,11 @@ export async function inspectEncryptedProfileBackup(file, passphrase, { cryptoOb
   const ciphertext = Uint8Array.from(atob(envelope.ciphertext), (char) => char.charCodeAt(0));
   if (ciphertext.length < 16 || ciphertext.length > BACKUP_MAX_BYTES) throw new Error('Encrypted backup payload has an invalid size.');
   const key = await derive(passphrase, salt, cryptoObject);
+  ensureCurrent(isCurrent);
   let clear;
   try { clear = await cryptoObject.subtle.decrypt({ name: 'AES-GCM', iv, additionalData: utf8.encode(`${BACKUP_FORMAT}:${BACKUP_VERSION}`), tagLength: 128 }, key, ciphertext); }
   catch { throw new Error('Backup authentication failed. Check the passphrase or file integrity.'); }
+  ensureCurrent(isCurrent);
   if (clear.byteLength > MAX_PROFILE_REGISTRY_BYTES + MAX_SAVED_CONTEXT_BYTES) throw new Error('Decrypted backup exceeds its safe size limit.');
   let payload;
   try { payload = JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(clear)); } catch { throw new Error('Decrypted backup content is unreadable.'); }
@@ -121,10 +128,12 @@ export function previewBackupRestore(payload, storage = globalThis.localStorage)
   return { email: payload.profile.email, hasSavedView: !!payload.workspace, action: 'add-profile', mergeTarget: null };
 }
 
-export async function commitBackupRestore(payload, storage = globalThis.localStorage) {
+export async function commitBackupRestore(payload, storage = globalThis.localStorage, { isCurrent } = {}) {
+  ensureCurrent(isCurrent);
   const locks = globalThis.navigator?.locks;
   if (globalThis.window && !locks?.request) throw new Error('This browser cannot coordinate a profile restore safely. Use a current browser with Web Locks enabled.');
   const commit = () => {
+    ensureCurrent(isCurrent);
     const preview = previewBackupRestore(payload, storage);
     const rawRegistry = storage.getItem(localAuthStorageKeys.profile);
     const registry = rawRegistry == null ? { app: APP_ID, schema: PROFILE_SCHEMA, profiles: [] } : JSON.parse(rawRegistry);

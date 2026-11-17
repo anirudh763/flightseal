@@ -17,7 +17,7 @@ const LEGACY_SESSION_KEY = 'hashwing:active-session:v1';
 const LEGACY_LOGOUT_SIGNAL_KEY = 'hashwing:logout-signal:v1';
 const channelNames = ['flightseal_auth_v1', 'hashwing:local-auth:v1'];
 const allowedScreens = new Set(['sandbox', 'verify', 'records', 'receipts', 'video', 'help']);
-const allowedSamples = new Set(['intact', 'tampered', 'rewritten', 'truncated', 'px4', 'px4-tampered', 'px4-full']);
+const allowedSamples = new Set(['intact', 'byte-flip', 'tampered', 'rewritten', 'truncated', 'px4', 'px4-tampered', 'px4-full']);
 
 function storageOrThrow(storage) {
   if (!storage || typeof storage.getItem !== 'function' || typeof storage.setItem !== 'function') {
@@ -33,7 +33,7 @@ function withWriteLock(name, action) {
   return locks.request(`${APP_ID}:${name}`, { mode: 'exclusive' }, action);
 }
 
-function ensureCurrent(isCurrent) {
+export function ensureCurrent(isCurrent) {
   if (typeof isCurrent === 'function' && !isCurrent()) throw new Error('This operation was canceled because the local session changed. Nothing was saved.');
 }
 

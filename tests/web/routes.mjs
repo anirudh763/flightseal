@@ -142,34 +142,42 @@ try {
     const context = await browser.newContext({ viewport: { width: 1280, height: 900 } });
     try {
       const page = await context.newPage();
+      const assertRoute = (screen, params) => {
+        const actual = new URL(page.url());
+        const route = new URL(actual.hash.slice(1), actual.origin);
+        assert.equal(actual.pathname, new URL(`${rootUrl}console/`).pathname);
+        assert.equal(actual.search, '');
+        assert.equal(route.pathname, `/app/${screen}`);
+        assert.deepEqual([...route.searchParams].sort(), Object.entries(params).sort());
+      };
       await page.goto(`${rootUrl}?sample=rewritten`);
       await waitHeading(page, 'sandbox', 'Samples');
       await page.waitForFunction(() => document.querySelector('#result-heading')?.textContent.includes('Tampered'), null, { timeout: 30000 });
-      assert.match(page.url(), /\/console\/#\/sandbox\?sample=rewritten$/);
+      assertRoute('sandbox', { sample: 'rewritten', record: '0' });
 
       await page.goto(`${rootUrl}#/findings?sample=rewritten`);
       await waitHeading(page, 'sandbox', 'Samples');
       await page.waitForFunction(() => document.querySelector('#result-heading')?.textContent.includes('Tampered'), null, { timeout: 30000 });
-      assert.match(page.url(), /\/console\/#\/sandbox\?sample=rewritten$/);
+      assertRoute('sandbox', { sample: 'rewritten', record: '0' });
 
       await page.goto(`${rootUrl}?sample=intact&record=742`);
       await waitHeading(page, 'records', 'Records');
       await page.waitForFunction(() => document.querySelector('#record-detail-title')?.textContent === 'Record 742', null, { timeout: 30000 });
-      assert.match(page.url(), /\/console\/#\/records\?sample=intact&record=742$/);
+      assertRoute('records', { sample: 'intact', record: '742' });
 
       await page.goto(`${rootUrl}?sample=not-allowlisted&record=742`);
       await waitHeading(page, 'records', 'Records');
       await page.waitForFunction(() => document.querySelector('#record-detail-title')?.textContent === 'Record 742', null, { timeout: 30000 });
-      assert.match(page.url(), /\/console\/#\/records\?record=742$/);
-      assert.doesNotMatch(page.url(), /sample=/);
+      assertRoute('records', { sample: 'intact', record: '742' });
+      assert.doesNotMatch(page.url(), /not-allowlisted/);
 
       await page.goto(`${rootUrl}#/receipts/2?sample=rewritten`);
       await waitHeading(page, 'receipts', 'Receipts');
-      assert.match(page.url(), /\/console\/#\/receipts\?sample=rewritten&receipt=2$/);
+      assertRoute('receipts', { sample: 'rewritten', record: '0', receipt: '2' });
       await page.goto(`${rootUrl}#/records/742?sample=intact`);
       await waitHeading(page, 'records', 'Records');
       await page.waitForFunction(() => document.querySelector('#record-detail-title')?.textContent === 'Record 742', null, { timeout: 30000 });
-      assert.match(page.url(), /\/console\/#\/records\?sample=intact&record=742$/);
+      assertRoute('records', { sample: 'intact', record: '742' });
     } finally { await context.close(); }
   });
 

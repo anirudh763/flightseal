@@ -11,6 +11,8 @@ import {
   subscribeToLocalLogout,
 } from './local-auth.mjs';
 import './style.css';
+import './server-workspace.js';
+import './server-workspace.css';
 import { BenchmarkPage, SystemPage } from './product-pages.jsx';
 import { SUITE_LINKS } from './suite.mjs';
 import { FeedbackDialog, FooterLinks, InstallGuide, LegalPage, QuickStart, ShareDialog } from './pwa-ui.jsx';
@@ -27,11 +29,17 @@ const syncProvider = createSyncProvider({ supabaseUrl: import.meta.env.VITE_SUPA
 
 const MAX_UI_BYTES = VERIFY_MAX_BYTES;
 const PAGE_SIZE = 50;
+function closeDisclosure(event) {
+  if (event.key !== 'Escape') return;
+  event.preventDefault(); event.stopPropagation();
+  event.currentTarget.open = false; event.currentTarget.querySelector('summary')?.focus();
+}
 const NAV = [
   ['sandbox', 'Samples', FlaskConical], ['verify', 'Verify', ShieldCheck], ['records', 'Records', List],
   ['benchmarks', 'Benchmarks', Gauge], ['system', 'System', Activity],
   ['receipts', 'Receipts', Stamp], ['video', 'Video', Video], ['help', 'Trust', CircleHelp],
 ];
+const CANONICAL_NAV = [['overview','Overview',Gauge],['workbench','Workbench',FlaskConical],['reports','Reports',List],['settings','Settings',Activity]];
 const asBig = (value) => typeof value === 'bigint' ? value : BigInt(value ?? 0);
 const csvMappingSummary = (mapping) => Object.entries(mapping || {}).filter(([key, value]) => key.endsWith('Column') && value).map(([key, value]) => {
   const field = key.slice(0, -6);
@@ -101,6 +109,8 @@ function App() {
   const [route, setRoute] = useState(() => parseLocation(location));
   const screen = route.screen;
   const productMode = !location.pathname.startsWith('/flightseal/') && location.pathname !== '/console/';
+  const canonicalPage = productMode ? route.canonical : null;
+  const pageTitle = canonicalPage ? CANONICAL_NAV.find(([key])=>key===canonicalPage)?.[1] : route.direct ? ({sandbox:'Flight Log Uploader and Sealer',verify:'Tamper and Ed25519 Receipt Auditor',benchmarks:'Crash-Safety and Throughput Explorer',system:'Health and Metrics'}[screen]||titleFor(screen)) : titleFor(screen);
   const workspaceHref = (target, params = {}) => productMode ? productHref(target, params) : routeHash(target, params);
   const [activeSession, setActiveSession] = useState(activeLocalSession);
   const [localProfile, setLocalProfile] = useState(() => localProfileFor(activeLocalSession()));
@@ -143,8 +153,12 @@ function App() {
   const [installDialogOpen, setInstallDialogOpen] = useState(false);
   const [feedbackDialogOpen, setFeedbackDialogOpen] = useState(false);
   const [shareDialogOpen, setShareDialogOpen] = useState(false);
+  const [privateResetVersion, setPrivateResetVersion] = useState(0);
   const [serviceWorkerRegistration, setServiceWorkerRegistration] = useState(null);
   const [currentSample, setCurrentSample] = useState(null);
+  const [demoScenario, setDemoScenario] = useState(() => route.sample === 'byte-flip' ? 'byte-flip' : 'intact');
+  const demoGuardRef = useRef(null);
+  demoGuardRef.current = { sealOutput, sealOutputAcknowledged, logFile, receiptSelected, currentSample };
   const [profileMenuMessage, setProfileMenuMessage] = useState('');
   const [savedContext, setSavedContext] = useState(null);
   const [savedContextError, setSavedContextError] = useState('');
@@ -168,13 +182,14 @@ function App() {
   const initialLegacyLoadedRef = useRef(false);
   const legacyGuestInitializedRef = useRef(false);
   const authEpochRef = useRef(0);
+  const signingKeyReadRef = useRef(0);
   const workspaceScreenRef = useRef('sandbox');
   const authAttemptRef = useRef({ mode: null, email: null });
   const updateSafeRef = useRef(true);
   updateSafeRef.current = !busy && !(sealOutput && !sealOutputAcknowledged);
 
   const navigate = useCallback((next, options = {}) => {
-    const routeName = NAV.some(([key]) => key === next) ? next : 'not-found';
+    const routeName = [...NAV,...CANONICAL_NAV].some(([key]) => key === next) ? next : 'not-found';
     const params = {
       sample: options.sample === undefined ? currentSample : options.sample,
       record: options.record === undefined ? selectedRecord : options.record,
@@ -233,12 +248,18 @@ function App() {
   }, [route.kind]);
 
   useEffect(() => {
-    document.title = `${route.direct ? ({ sandbox: 'Flight Log Uploader and Sealer', verify: 'Tamper and Ed25519 Receipt Auditor', benchmarks: 'Crash-Safety and Throughput Explorer', system: 'Health and Metrics' }[screen] || titleFor(screen)) : titleFor(screen)} · HashWing`;
+    document.title = `${pageTitle} · HashWing`;
     if (focusedRouteRef.current !== null && focusedRouteRef.current !== route.route) {
       requestAnimationFrame(() => document.getElementById(`page-${screen}`)?.focus());
     }
     focusedRouteRef.current = route.route;
-  }, [screen, route.route]);
+  }, [screen, route.route, pageTitle]);
+
+  useEffect(()=>{
+    if(!menuOpen)return;
+    const close=event=>{if(event.key==='Escape'&&!event.defaultPrevented){setMenuOpen(false);document.querySelector('.rail-menu')?.focus();event.preventDefault();}};
+    addEventListener('keydown',close);document.querySelector('#primary-nav a')?.focus();return()=>removeEventListener('keydown',close);
+  },[menuOpen]);
 
   useLayoutEffect(() => {
     if (busy) return;
@@ -266,7 +287,7 @@ function App() {
     }
     setOfflineStatus('Checking offline readiness…');
     let active = true;
-    const requestOfflineStatus = () => navigator.serviceWorker.controller?.postMessage({ type: 'GET_OFFLINE_STATUS' });
+    const requestOfflineStatus = (worker=navigator.serviceWorker.controller) => worker?.postMessage({ type: 'GET_OFFLINE_STATUS' });
     const onControllerChange = () => { setWaitingUpdate(false); requestOfflineStatus(); };
     const onWorkerMessage = ({ data, ports }) => {
       if (data?.type === 'flightseal-cache-warning') setOfflineStatus('Offline copies could not be saved. Keep this page online or use the CLI.');
@@ -276,7 +297,7 @@ function App() {
       }
       if (data?.type === 'UPDATE_CAN_ACTIVATE') ports?.[0]?.postMessage({ type: 'UPDATE_SAFE', safe: updateSafeRef.current });
       if (data?.type === 'UPDATE_DEFERRED') setOfflineStatus('Update deferred while another tab has active work or has not responded.');
-      if (data?.type === 'CONTROLLER_ACTIVE') setOfflineStatus('FlightSeal app shell is active. Prepare offline to check the current cache.');
+      if (data?.type === 'CONTROLLER_ACTIVE') requestOfflineStatus();
     };
     navigator.serviceWorker.addEventListener('message', onWorkerMessage);
     navigator.serviceWorker.addEventListener('controllerchange', onControllerChange);
@@ -294,6 +315,7 @@ function App() {
         };
         registration.addEventListener('updatefound', inspect);
         requestOfflineStatus();
+        navigator.serviceWorker.ready.then(ready=>{if(active)requestOfflineStatus(ready.active);});
       })
       .catch(() => { if (active) setOfflineStatus('Offline caching could not be started here. Files loaded during this visit can still be checked.'); });
     return () => { active = false; navigator.serviceWorker.removeEventListener('message', onWorkerMessage); navigator.serviceWorker.removeEventListener('controllerchange', onControllerChange); };
@@ -417,11 +439,25 @@ function App() {
   }, []);
 
   const loadDemo = useCallback(async (sample = false) => {
+    const pending = demoGuardRef.current;
+    if (pending.sealOutput && !pending.sealOutputAcknowledged) {
+      setError('Download the current sealed files or confirm you no longer need them before replacing them.');
+      return;
+    }
+    if (!pending.currentSample && (pending.logFile || pending.receiptSelected) && !window.confirm('Switch to the included sample? This replaces the selected verification inputs in this tab. Your original files and signing key stay unchanged.')) return;
     setTelemetry([]); setSelectedTelemetryIndex(null);
     const selectedSample = sample === false ? 'intact' : sample === true ? 'px4' : sample === 'full' ? 'px4-full' : sample;
-    setCurrentSample(['intact', 'tampered', 'rewritten', 'truncated', 'px4', 'px4-tampered', 'px4-full'].includes(selectedSample) ? selectedSample : 'intact');
+    setCurrentSample(['intact', 'byte-flip', 'tampered', 'rewritten', 'truncated', 'px4', 'px4-tampered', 'px4-full'].includes(selectedSample) ? selectedSample : 'intact');
+    if (['intact', 'byte-flip'].includes(selectedSample)) setDemoScenario(selectedSample);
+    // Only public fixture IDs and record positions enter the URL.
+    const activeRoute = parseLocation(location);
+    if (activeRoute.kind === 'workspace') {
+      const params = { sample: selectedSample, record: activeRoute.params.get('record') || 0,receipt:activeRoute.params.get('receipt') || (activeRoute.screen==='receipts'?activeRoute.detail:undefined) };
+      history.replaceState(null, '', activeRoute.direct ? productHref(activeRoute.screen, params) : routeHash(activeRoute.screen, params));
+      setRoute(parseLocation(location));
+    }
     setReceiptText(''); setKeyText('');
-    const operation = ++runRef.current;
+    let operation = ++runRef.current;
     controllerRef.current?.abort();
     receiptReadRef.current++;
     setReceiptLoading(false); setReceiptSelected(false); setReceiptInputError('');
@@ -455,8 +491,20 @@ function App() {
       const [logBlob, receipts, key] = await Promise.all([logResponse.blob(), receiptResponse.text(), keyResponse.text()]);
       if (operation !== runRef.current || controller.signal.aborted) return;
       const file = new File([logBlob], logName, { type: 'application/octet-stream' });
-      const verified = await runVerify(file, receipts, key, size);
+      let verified = await runVerify(file, receipts, key, size);
+      if (!verified) return;
+      operation = runRef.current;
+      if (sampleKey === 'byte-flip') {
+        const verificationRun = runRef.current;
+        setBusy('Changing a copy of sample record 0…'); setResult(null);
+        const changed = await mutateFile(file, verified.indexed, 'flip', { signal: controllerRef.current.signal });
+        if (verificationRun !== runRef.current) return;
+        verified = await runVerify(changed.file, receipts, key, `${size} · ${changed.description}`);
+      }
       if (verified) {
+        setLogFile(verified.file); setReceiptText(receipts); setKeyText(key);
+        setReceiptSelected(true);
+
         const params = parseLocation(location).params;
         const requestedRecord = params.get('record');
         if (requestedRecord && /^\d+$/.test(requestedRecord)) {
@@ -532,6 +580,11 @@ function App() {
   };
 
   const chooseLog = async (file) => {
+    const selectedRoute = parseLocation(location);
+    if (selectedRoute.kind === 'workspace') {
+      history.replaceState(null, '', selectedRoute.direct ? productHref(selectedRoute.screen) : routeHash(selectedRoute.screen));
+      setRoute(parseLocation(location));
+    }
     setCurrentSample(null);
     const replacingImportedSession = hasImportedOutput;
     const clearAttachedEvidence = replacingImportedSession || !receiptSelected || receiptLoading;
@@ -743,19 +796,21 @@ function App() {
       const target = trigger.isConnected && !trigger.disabled ? trigger : document.getElementById(`page-${screen}`);
       if (restore && focused && !moved && document.activeElement === document.body) target?.focus({ preventScroll: true });
     };
-    const operation = runRef.current;
     const selectedResult = result;
-    setBusy('Preparing sandbox copy…');
+    const operation = ++runRef.current;
+    controllerRef.current?.abort();
+    const controller = new AbortController(); controllerRef.current = controller;
+    setBusy('Preparing sandbox copy…'); setResult(null);
     try {
       const { file, indexed, receipts, key, label } = selectedResult;
-      const changed = await mutateFile(file, indexed, kind, {});
+      const changed = await mutateFile(file, indexed, kind, { signal: controller.signal });
       if (operation !== runRef.current || selectedResult !== result) return;
       setTelemetry([]); setSelectedTelemetryIndex(null);
       await runVerify(changed.file, receipts, key, `${label} · ${changed.description}`);
       // The bounded mutation may be a Blob assembled from slices of the imported
       // OPFS-backed file. Keep that source alive until the whole session is cleared.
     } catch (cause) {
-      setError(cause?.message || 'Could not prepare a bounded sandbox copy. Choose the file again and retry.');
+      if (operation === runRef.current && cause?.name !== 'AbortError') setError(cause?.message || 'Could not prepare a bounded sandbox copy. Choose the file again and retry.');
     } finally {
       if (operation === runRef.current) setBusy('');
     }
@@ -805,22 +860,37 @@ function App() {
   }, [result, page]);
 
   const generateSigningKey = async () => {
+    const owner = authEpochRef.current, read = ++signingKeyReadRef.current;
+    const isCurrent = () => owner === authEpochRef.current && read === signingKeyReadRef.current;
     setError('');
     try {
       const generated = await generateEd25519SigningKey();
+      if (!isCurrent()) return;
       setSigningKey({ ...generated, origin: 'Generated in this tab' });
       setOperationStatus('Ed25519 key generated in memory. Keep an explicit private-key backup before relying on it; no identity is verified.');
-    } catch (cause) { setError(cause?.message || 'Could not generate an Ed25519 key in this browser.'); }
+    } catch (cause) { if (isCurrent()) setError(cause?.message || 'Could not generate an Ed25519 key in this browser.'); }
   };
   const importSigningKey = async (file) => {
     if (!file) return;
+    const owner = authEpochRef.current, read = ++signingKeyReadRef.current;
+    const isCurrent = () => owner === authEpochRef.current && read === signingKeyReadRef.current;
     if (file.size > 16 * 1024) { setError('Private key PEM files are limited to 16 KiB.'); return; }
     try {
-      const privateKeyPem = await validateEd25519PrivateKey(await file.text());
+      const text = await file.text();
+      if (!isCurrent()) return;
+      const privateKeyPem = await validateEd25519PrivateKey(text);
+      if (!isCurrent()) return;
       setSigningKey({ privateKeyPem, publicKeyHex: '', backupFilename: file.name, origin: 'Imported for this tab only' });
       setOperationStatus('Private key loaded in memory for this tab. Import its matching public key separately for verification.');
       setError('');
-    } catch (cause) { setError(cause?.message || 'Could not load this private key.'); }
+    } catch (cause) { if (isCurrent()) setError(cause?.message || 'Could not load this private key.'); }
+  };
+  const clearSigningKey = () => {
+    signingKeyReadRef.current++;
+    setSigningKey(null);
+    const input = document.getElementById('private-key-file');
+    if (input) input.value = '';
+    setOperationStatus('Private key cleared from app state.');
   };
   const downloadPrivateKeyBackup = () => {
     if (!signingKey?.privateKeyPem) return;
@@ -904,6 +974,8 @@ function App() {
   };
   const clearSensitiveWorkspace = () => {
     authEpochRef.current++;
+    signingKeyReadRef.current++;
+    setPrivateResetVersion((version) => version + 1);
     runRef.current++;
     controllerRef.current?.abort(); controllerRef.current = null;
     recordRef.current++; routeEpochRef.current++; receiptReadRef.current++;
@@ -912,11 +984,13 @@ function App() {
     setBusy(''); setResult(null); setLogFile(null); setReceiptText(''); setReceiptLoading(false); setReceiptSelected(false);
     setReceiptInputError(''); setKeyText(''); setSelectedRecord(0); setRecordDetail(null); setRecordError(''); setPageRows([]); setFirstRecord(null);
     setTelemetry([]); setSelectedTelemetryIndex(null); setHasImportedOutput(false); setPage(0); setSealFileInput(null); setSealSourceMetadata(null); setSealSourceOriginal(null); setSigningKey(null);
+    setCsvDraft(null); setShareDialogOpen(false); setFeedbackDialogOpen(false); setInstallDialogOpen(false);
     setSealOutput(null); setSealOutputAcknowledged(false); setCurrentSample(null); setDemoLabel(''); setError(''); setOperationStatus('');
     setVideoOffset('0'); clearVideo();
     receiptInvalidRef.current = false; receiptInvalidMessageRef.current = ''; sealPickerRef.current = false;
     if (receiptInputRef.current) receiptInputRef.current.value = '';
     if (workbenchFileRef.current) workbenchFileRef.current.value = '';
+    document.querySelectorAll('#root input[type="file"]').forEach((input) => { input.value = ''; });
   };
   const logout = () => {
     if (sealOutput && !sealOutputAcknowledged) { setProfileMenuMessage('Download the sealed files or acknowledge them in the workspace before logging out.'); return; }
@@ -1099,9 +1173,13 @@ function App() {
   const reportMarkdown = result ? `# HashWing integrity evidence report\n\n${reportText.split('\n').filter(Boolean).map((line) => line.startsWith('  ') ? `  - ${line.trim()}` : line.endsWith(':') ? `\n## ${line.slice(0, -1)}\n` : line).join('\n')}\n\n## Reverification\n\nUse the exported .fseal log, receipt file, and public key with FlightSeal's independent verifier. Verify the public key with its holder through a separate channel.\n\nThis report does not establish legal admissibility, sensor truth, capture-time integrity, verified personhood, trusted time, or independent custody.\n` : '';
   const downloadPdf = async () => {
     if (!result) return;
+    const owner = authEpochRef.current, operation = runRef.current;
+    const isCurrent = () => owner === authEpochRef.current && operation === runRef.current;
     try {
       const { createIntegrityPdf, fingerprintPublicKey } = await import('./report-pdf.mjs');
+      if (!isCurrent()) return;
       const fingerprint = await fingerprintPublicKey(result.key);
+      if (!isCurrent()) return;
       const issue = result.indexed.problem;
       const pdf = await createIntegrityPdf({
         title: 'HashWing integrity report',
@@ -1130,19 +1208,23 @@ function App() {
           'This integrity report is not a legal guarantee, court-admissible certificate, or claim that sensor data is true.',
         ],
       });
-      download('hashwing-integrity-report.pdf', pdf, 'application/pdf');
+      if (isCurrent()) download('hashwing-integrity-report.pdf', pdf, 'application/pdf');
     } catch (cause) {
-      setError(cause?.message || 'Could not create the PDF report. Download the text or JSON report instead.');
+      if (isCurrent()) setError(cause?.message || 'Could not create the PDF report. Download the text or JSON report instead.');
     }
   };
   const downloadEvidenceBundle = async () => {
     if (!result) return;
+    const owner = authEpochRef.current, operation = runRef.current;
+    const isCurrent = () => owner === authEpochRef.current && operation === runRef.current;
     try {
       const { fingerprintPublicKey } = await import('./report-pdf.mjs');
+      if (!isCurrent()) return;
       const fingerprint = await fingerprintPublicKey(result.key);
+      if (!isCurrent()) return;
       const files = [
         { name: 'verified-log.fseal', blob: result.file },
-        ...(sealOutput?.originalSource ? [{ name: `original-source/${sealOutput.originalSource.name.replace(/[^A-Za-z0-9._-]+/g, '_').slice(0, 100) || 'source.bin'}`, blob: sealOutput.originalSource }] : []),
+        ...(sealOutput?.originalSource ? [{ name: `original-source-${sealOutput.originalSource.name.replace(/[^A-Za-z0-9._-]+/g, '_').slice(0, 100) || 'source.bin'}`, blob: sealOutput.originalSource }] : []),
         { name: 'receipts.txt', bytes: new TextEncoder().encode(result.receipts || '') },
         { name: 'public-key.txt', bytes: new TextEncoder().encode(`${result.key || ''}\n`) },
         { name: 'verification-report.txt', bytes: new TextEncoder().encode(reportText) },
@@ -1150,25 +1232,33 @@ function App() {
         { name: 'bundle-notes.txt', bytes: new TextEncoder().encode(`HashWing / FlightSeal local verification export\nEngine: ${result.native.engine}\nRecords: ${result.native.records}\nWhole-file SHA-256: ${result.native.fileSha256 || 'unavailable'}\nChain head: ${result.native.head}\nPublic-key SHA-256 fingerprint: ${fingerprint}\nBundle export does not establish sensor truth, acquisition time, key identity, independent custody or legal admissibility.\n${result.source ? `Imported source: ${JSON.stringify(result.source)}\n` : ''}`) },
       ];
       const zip = await createStoreZip(files);
+      if (!isCurrent()) return;
       const url = URL.createObjectURL(zip); const anchor = document.createElement('a'); anchor.href = url; anchor.download = 'hashwing-evidence-bundle.zip'; anchor.click(); setTimeout(() => URL.revokeObjectURL(url), 0);
       setOperationStatus('Evidence bundle downloaded. Share the files and key separately; this bundle is not independent custody.');
-    } catch (cause) { setError(cause?.message || 'Could not create the evidence bundle. Use the individual report and log downloads.'); }
+    } catch (cause) { if (isCurrent()) setError(cause?.message || 'Could not create the evidence bundle. Use the individual report and log downloads.'); }
   };
   const totalRows = result ? Number(result.native.records) + Number(!!result.indexed.problem && result.indexed.problem.record === Number(result.native.records)) : 0;
   const pageCount = result ? Math.max(1, Math.ceil(totalRows / PAGE_SIZE)) : 1;
   const rowStart = page * PAGE_SIZE;
   const activeReceiptChecks = result?.receiptChecks || [];
+  useEffect(()=>{if(screen==='receipts'&&result&&/^[1-9][0-9]*$/.test(route.params.get('receipt')||''))document.getElementById('receipt-'+route.params.get('receipt'))?.focus();},[screen,result,route.params.get('receipt')]);
   const selectedFileName = workbenchFileRef.current?.files?.[0]?.name || '';
+  useEffect(()=>{
+    const readCurrent=()=>result ? {kind:result.source?'sealing':'verification',title:result.label,payload:{engine:result.native.engine,verdict:result.overallVerdict||result.native.verdict,status:result.native.status,records:String(result.native.records),good_bytes:String(result.native.goodBytes),sha256:result.native.fileSha256,chain_head:result.native.head,public_key:result.key,receipt_count:result.receiptChecks.length,covered:String(result.receiptCoverage?.covered??result.native.covered),uncovered:String(result.receiptCoverage?.uncovered??result.native.uncovered),first_failure:result.indexed.problem?{type:result.indexed.problem.token,record:String(result.indexed.problem.record),offset:String(result.indexed.problem.offset)}:null,source:result.source||null}} : null;
+    globalThis.WorkspaceStore.register({readCurrent,readArtifacts:()=>result?[{name:'source.fseal',blob:result.file},...(result.receipts?[{name:'witness.receipts',blob:new Blob([result.receipts],{type:'text/plain'})}]:[])]:[],onLogout:clearSensitiveWorkspace,restore:async(run,files,isCurrent)=>{if(!files[0])throw Error('No source artifact was saved with this run. Download its report instead.');const receipts=files[1]?await files[1].text():'';if(!isCurrent())return;navigate('sandbox');await runVerify(new File([files[0]],'saved-source.fseal'),receipts,run.payload.public_key||'',run.title,run.payload.source||null);}});
+    globalThis.WorkspaceStore.capture(readCurrent(),{autosave:false});
+  },[result]);
   const returnTo = route.params.get('returnTo') || '';
   const renderedAuthEpoch = authEpochRef.current;
   const quickStartScope = activeSession?.kind === 'account' ? `profile_${activeSession.userId}` : `guest_${activeSession?.userId || 'anonymous'}`;
   const quickStartStorageKey = `flightseal_quickstart_${quickStartScope}_v1`;
   const installKind = installPrompt ? 'prompt' : detectInstallKind();
 
-  if (route.kind === 'legal') return <><header className="auth-header"><a className="landing-brand" href="#/"><span className="brand-mark" aria-hidden="true">H</span><span>HashWing</span></a><nav className="auth-persistent-actions" aria-label="Account and workspace"><a href="#/login">Log in</a><a href="#/signup">Create account</a><a href="#/app/sandbox">Launch Workspace</a></nav></header><LegalPage page={route.page} onBack={() => setHashRoute('#/')} onClearCache={() => { navigator.serviceWorker?.controller?.postMessage({ type: 'CLEAR_FLIGHTSEAL_CACHES' }); setOfflineReady(false); setOfflineStatus('FlightSeal-owned caches were requested for removal. Other apps’ caches are left alone.'); }} cacheStatus={offlineStatus} onFeedback={() => setFeedbackDialogOpen(true)} onInstall={installApp} onRestartQuickStart={() => { setQuickStartDismissed(false); try { localStorage.removeItem(quickStartStorageKey); } catch {} setHashRoute(routeHash('sandbox')); }} /><InstallGuide open={installDialogOpen} onClose={() => setInstallDialogOpen(false)} ios={installKind === 'ios'} /><FeedbackDialog open={feedbackDialogOpen} onClose={() => setFeedbackDialogOpen(false)} route={route.route} /></>;
+  if (route.kind === 'legal') return <><header className="auth-header"><a className="landing-brand" href="#/"><span className="brand-mark" aria-hidden="true">H</span><span>HashWing</span></a><nav className="auth-persistent-actions" aria-label="Account and workspace"><a href="#/login">Log in</a><a href="#/signup">Create account</a><a href="#/app/sandbox">Launch Workspace</a></nav></header><LegalPage page={route.page} onBack={() => setHashRoute('#/')} onClearCache={() => { navigator.serviceWorker?.controller?.postMessage({ type: 'CLEAR_FLIGHTSEAL_CACHES' }); setOfflineReady(false); setOfflineStatus('FlightSeal-owned caches were requested for removal. Other apps’ caches are left alone.'); }} cacheStatus={offlineStatus} onFeedback={() => setFeedbackDialogOpen(true)} onInstall={installApp} onRestartQuickStart={() => { setQuickStartDismissed(false); try { localStorage.removeItem(quickStartStorageKey); } catch {} setHashRoute(routeHash('sandbox')); }} /><InstallGuide open={installDialogOpen} onClose={() => setInstallDialogOpen(false)} ios={installKind === 'ios'} /><FeedbackDialog key={`feedback-${privateResetVersion}`} open={feedbackDialogOpen} onClose={() => setFeedbackDialogOpen(false)} route={route.route} /></>;
 
-  if (route.kind === 'landing') return <LandingPage onDemo={() => loadDemo(false)} onContinue={() => setHashRoute(routeHash('sandbox', { sample: currentSample || 'intact', record: selectedRecord }))} result={result} busy={busy} error={error} installKind={installKind} onInstall={installApp} onFeedback={() => setFeedbackDialogOpen(true)} installOpen={installDialogOpen} onInstallClose={() => setInstallDialogOpen(false)} feedbackOpen={feedbackDialogOpen} onFeedbackClose={() => setFeedbackDialogOpen(false)} route={route.route} />;
+  if (route.kind === 'landing') return <LandingPage key={privateResetVersion} onDemo={() => loadDemo(false)} onContinue={() => setHashRoute(routeHash('sandbox', { sample: currentSample || 'intact', record: selectedRecord }))} result={result} busy={busy} error={error} installKind={installKind} onInstall={installApp} onFeedback={() => setFeedbackDialogOpen(true)} installOpen={installDialogOpen} onInstallClose={() => setInstallDialogOpen(false)} feedbackOpen={feedbackDialogOpen} onFeedbackClose={() => setFeedbackDialogOpen(false)} route={route.route} />;
   if (route.kind === 'signup' || route.kind === 'login') return <AuthPage
+    key={privateResetVersion}
     mode={route.kind}
     returnTo={returnTo}
     outputNeedsAck={!!sealOutput && !sealOutputAcknowledged}
@@ -1192,26 +1282,9 @@ function App() {
     route={route.route}
   />;
 
-  return <div className="app-shell">
-    <a className="skip-link" href="#main" onClick={(event) => { event.preventDefault(); document.getElementById('main')?.focus(); }}>Skip to content</a>
-    <aside className="workbench-rail" aria-label="HashWing">
-      <a className="brand" href="#/" onClick={(e) => { e.preventDefault(); setHashRoute('#/'); }}><span className="brand-mark" aria-hidden="true">H</span><span>HashWing</span></a>
-      <button type="button" className="rail-menu" aria-expanded={menuOpen} aria-controls="primary-nav" onClick={() => setMenuOpen((open) => !open)}><Menu size={16} aria-hidden="true" />Menu</button>
-      <nav id="primary-nav" className={`nav${menuOpen ? ' open' : ''}`} aria-label="Primary navigation">
-        {NAV.map(([key, label, Icon]) => <a key={key} href={workspaceHref(key, { sample: currentSample, record: selectedRecord })} aria-current={screen === key ? 'page' : undefined} onClick={(e) => { if (e.button !== 0 || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return; e.preventDefault(); navigate(key); }}><Icon size={16} strokeWidth={1.8} aria-hidden="true" />{productMode && key === 'sandbox' ? 'Upload and seal' : label}</a>)}
-      </nav>
-      <div className="rail-foot"><span className="local-dot" aria-hidden="true" />Local files</div>
-    </aside>
-    <div className="workspace">
-    <header className="topbar commandbar">
-      <h1 id={`page-${screen}`} tabIndex="-1">{route.direct ? ({ sandbox: 'Flight Log Uploader and Sealer', verify: 'Tamper and Ed25519 Receipt Auditor', benchmarks: 'Crash-Safety and Throughput Explorer', system: 'Health and Metrics' }[screen] || titleFor(screen)) : titleFor(screen)}</h1>
-      <div className="command-actions">
-        <nav className="workspace-persistent-actions" aria-label="Account and workspace"><a href="#/login">Log in</a><a href="#/signup">Create account</a><a href="#/app/sandbox">Launch Workspace</a></nav>
-        <details className="workspace-tools-menu"><summary>More Tools</summary><div>{SUITE_LINKS.map((tool) => tool.state === 'unavailable' ? <span key={tool.name} aria-disabled="true">{tool.name} · unavailable (HTTP 404)</span> : <a key={tool.name} href={tool.href} target="_blank" rel="noreferrer">{tool.name}</a>)}</div></details>
-        <label className="command-file-wrap" htmlFor="workbench-file"><span className="visually-hidden">Choose source or sealed log</span><input id="workbench-file" ref={workbenchFileRef} className="command-file-input" type="file" accept=".fseal,.ulg,.tsv,.txt,.tlog,.csv,.json,application/octet-stream,text/plain,application/json,text/csv" disabled={!!busy} aria-label="Choose source or sealed log" aria-describedby="session-file-name" onChange={(e) => chooseWorkbenchFile(e.target.files?.[0] || null)} /></label>
-        <button className="button secondary command-seal" type="button" onClick={() => { if (sealFileInput) runSeal(); else { sealPickerRef.current = true; workbenchFileRef.current?.click(); } }} disabled={!!busy}><FileCheck2 size={16} aria-hidden="true" />Seal new log</button>
-        {result && <button className="button primary command-export" type="button" onClick={downloadPdf} disabled={!!busy}>Export PDF</button>}
-        <ProfileMenu
+  const profileControls = (<ProfileMenu
+          key={`${privateResetVersion}:${activeSession?.userId || ''}`}
+          isCurrent={() => authEpochRef.current === renderedAuthEpoch}
           session={activeSession}
           profile={localProfile}
           currentSample={currentSample}
@@ -1226,22 +1299,61 @@ function App() {
           onLogout={logout}
           onNavigateAuth={(kind) => setHashRoute(`#/${kind}`)}
           syncStatus={syncProvider.status}
-        />
+        />);
+
+  return <div className={`app-shell${canonicalPage ? ` canonical-page canonical-${canonicalPage}` : ''}`}>
+    <a className="skip-link" href="#main" onClick={(event) => { event.preventDefault(); document.getElementById('main')?.focus(); }}>Skip to content</a>
+    <aside className="workbench-rail" aria-label="HashWing">
+      <a className="brand" href={productMode ? '/overview' : '#/'} onClick={(e) => { e.preventDefault(); if(productMode)navigate('overview');else setHashRoute('#/'); }}><span className="brand-mark" aria-hidden="true">H</span><span>HashWing</span></a>
+      <button type="button" className="rail-menu" aria-expanded={menuOpen} aria-controls="primary-nav" onClick={() => setMenuOpen((open) => !open)}><Menu size={16} aria-hidden="true" />Menu</button>
+      <nav id="primary-nav" className={`nav${menuOpen ? ' open' : ''}`} aria-label="Primary navigation">
+        {(productMode ? CANONICAL_NAV : NAV).map(([key, label, Icon]) => <a key={key} href={workspaceHref(key, { sample: currentSample, record: selectedRecord })} aria-current={(productMode ? canonicalPage : screen) === key ? 'page' : undefined} onClick={(e) => { if (e.button !== 0 || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return; e.preventDefault(); navigate(key); }}><Icon size={16} strokeWidth={1.8} aria-hidden="true" />{productMode && key === 'sandbox' ? 'Upload and seal' : label}</a>)}
+      </nav>
+      <div className="rail-foot"><span className="local-dot" aria-hidden="true" />Local files</div>
+        <details className="workspace-tools-menu" onKeyDown={closeDisclosure}><summary>Other apps</summary><div>{SUITE_LINKS.map((tool) => tool.state === 'unavailable' ? <span key={tool.name} aria-disabled="true">{tool.name} · unavailable (HTTP 404)</span> : <a key={tool.name} href={tool.href} target="_blank" rel="noreferrer">{tool.name}</a>)}</div></details>
+    </aside>
+    <div className="workspace">
+    <header className="topbar commandbar">
+      <h1 id={`page-${screen}`} tabIndex="-1">{pageTitle}</h1>
+      <div className="command-actions">
+        <nav hidden={!!canonicalPage} className="workspace-persistent-actions" aria-label="Account and workspace"><a href="#/login">Log in</a><a href="#/signup">Create account</a></nav>
+
+        {!canonicalPage && profileControls}
+
       </div>
     </header>
-    <section className="session-strip" aria-label="Current session">
+    <section hidden={!!canonicalPage && canonicalPage!=='workbench'} className="session-strip" aria-label="Current session">
       <span id="session-file-name" className="session-name" title={selectedFileName || 'Choose a source or sealed log'}>{selectedFileName ? `Selected: ${selectedFileName}` : 'Choose a source or sealed log'}</span>
       {result && <span className="session-result-name">Checked: {result.label}</span>}
       {result && <button type="button" className="hash-copy" title={`Copy full chain head ${result.native.head}`} onClick={async () => { try { await navigator.clipboard.writeText(result.native.head); setOperationStatus('Chain head copied.'); } catch { setError('Clipboard access is unavailable. Select the full hash in the report.'); } }}><span>Copy hash</span><code>{`${result.native.head.slice(0, 10)}…${result.native.head.slice(-8)}`}</code></button>}
       {hasImportedOutput && <button type="button" className="clear-session" onClick={clearImportedSession}>Clear imported session</button>}
     </section>
     <main id="main" className="page-wrap" tabIndex="-1">
+    <details hidden={!!canonicalPage && canonicalPage!=='workbench'} className="source-actions" open={screen === 'sandbox'} onKeyDown={closeDisclosure}><summary>Source and report actions</summary><div className="source-action-items">
+        <label className="command-file-wrap" htmlFor="workbench-file"><span className="visually-hidden">Choose source or sealed log</span><input id="workbench-file" ref={workbenchFileRef} className="command-file-input" type="file" accept=".fseal,.ulg,.tsv,.txt,.tlog,.csv,.json,application/octet-stream,text/plain,application/json,text/csv" disabled={!!busy} aria-label="Choose source or sealed log" aria-describedby="session-file-name" onChange={(e) => chooseWorkbenchFile(e.target.files?.[0] || null)} /></label>
+        <button className="button secondary command-seal" type="button" onClick={() => { if (sealFileInput) runSeal(); else { sealPickerRef.current = true; workbenchFileRef.current?.click(); } }} disabled={!!busy}><FileCheck2 size={16} aria-hidden="true" />Seal new log</button>
+        {result && <button className="button primary command-export" type="button" onClick={downloadPdf} disabled={!!busy}>Export PDF</button>}
+
+    </div></details>
+
 
       {error && <div role="alert" className="alert error-alert"><strong>Could not finish</strong><p>{error}</p><button type="button" className="button secondary" onClick={() => setError('')}>Dismiss</button></div>}
       {busy && <div className="busy-card" role="status" aria-live="polite"><span className="spinner" aria-hidden="true" />{busy}<button className="button secondary" type="button" onClick={cancel}>Cancel</button></div>}
       {operationStatus && !busy && <p className={`operation-status${/before treating|unavailable/i.test(operationStatus) ? ' warning' : ''}`} role="status">{operationStatus}</p>}
-      {(offlineStatus || waitingUpdate || installKind !== 'none') && <section className="offline-controls" aria-label="Offline and installation controls"><p className="offline-note" role="status">{offlineStatus || (offlineReady ? 'Offline verifier is ready on this device.' : 'Offline use needs a one-time online preparation.')}</p><div className="offline-control-actions"><button type="button" className="button secondary" onClick={prepareOffline}>Prepare offline</button>{waitingUpdate && <button type="button" className="button secondary" onClick={activateWaitingUpdate}>Apply safe update</button>}<button type="button" className="button secondary" onClick={installApp}>{installKind === 'ios' ? 'Add to Home Screen help' : installPrompt ? 'Install HashWing' : 'Install help'}</button><button type="button" className="text-action" onClick={() => setFeedbackDialogOpen(true)}>Report a bug</button></div></section>}
 
+
+      {screen === 'overview' && <section className="overview-content" aria-label="Flight evidence overview">
+        <section className="panel"><div className="panel-body"><h2>Flight-log integrity</h2><p>Seal telemetry, check its hash chain, and inspect signed receipts.</p><div className="actions-row"><button className="button primary" disabled={!!busy} onClick={()=>{navigate('sandbox');loadDemo(false);}}>Verify included flight log</button><a className="button secondary" href="/workbench" onClick={event=>{event.preventDefault();navigate('workbench');}}>Open workbench</a></div></div></section>
+        <dl className="overview-facts"><div><dt>Current result</dt><dd>{result ? resultTitle[0] : 'No log checked in this tab'}</dd></div><div><dt>Records checked</dt><dd>{result ? fmtBig(result.native.records) : 'Unavailable'}</dd></div><div><dt>Offline verifier</dt><dd>{offlineReady ? 'Ready' : offlineStatus || 'Checking…'}</dd></div></dl>
+        <server-workspace view="overview" />
+      </section>}
+      {canonicalPage === 'workbench' && <nav className="workbench-tabs" aria-label="Log workflow"><a href={workspaceHref('sandbox',{sample:currentSample,record:selectedRecord})} aria-current={screen==='sandbox'?'page':undefined} onClick={event=>{event.preventDefault();navigate('sandbox');}}>Seal and inspect</a><a href={workspaceHref('verify',{sample:currentSample,record:selectedRecord})} aria-current={screen==='verify'?'page':undefined} onClick={event=>{event.preventDefault();navigate('verify');}}>Verify receipts</a><a href="#/app/records">Records</a><a href="#/app/receipts">Receipts</a><a href="#/app/video">Video alignment</a></nav>}
+      {screen === 'reports' && <section aria-label="Evidence and saved reports"><server-workspace view="reports" />
+        <section className="panel"><div className="panel-body"><h2>Current evidence</h2>{result ? <><button className="button primary" onClick={downloadPdf}>Download PDF</button><ResultPanel result={result} resultTitle={resultTitle} reportText={reportText} onDownloadText={()=>download('verification-report.txt',reportText)} onDownloadMarkdown={()=>download('verification-report.md',reportMarkdown)} onDownloadJson={()=>download('verification-report.json',reportJson,'application/json')} onNavigate={navigate} onShare={()=>setShareDialogOpen(true)} /></> : <p>No checked evidence in this tab. Open Workbench to verify a log, or select a saved run above.</p>}</div></section>
+        <details className="report-details"><summary>Benchmarks and recovery evidence</summary><BenchmarkPage /></details>
+      </section>}
+      {screen === 'settings' && <section aria-label="Workspace settings"><server-workspace view="settings" /><details className="report-details"><summary>Browser profiles and encrypted backups</summary>{profileControls}</details><SystemPage /></section>}
+      {canonicalPage === 'workbench' && <server-workspace view="workbench" />}
       {screen === 'system' && <SystemPage />}
       {screen === 'benchmarks' && <BenchmarkPage />}
       {screen === 'not-found' && <section className="screen"><section className="panel empty-state" aria-labelledby="not-found-title"><h2 id="not-found-title">Page not found</h2><p>The address does not match a HashWing page.</p><button className="button primary" type="button" onClick={() => navigate('sandbox')}>Return to samples</button></section></section>}
@@ -1257,24 +1369,36 @@ function App() {
         {result?.source && <FlightTelemetry source={result.source} points={telemetry} verificationProblem={result.indexed.problem} selectedPointIndex={selectedTelemetryIndex} onMovePoint={(pointIndex) => { const point = telemetry[pointIndex]; if (!point) return; telemetrySelectionRef.current++; setSelectedTelemetryIndex(pointIndex); setSelectedRecord(Number(point.record)); setPage(Math.floor(Number(point.record) / PAGE_SIZE)); }} onSelectPoint={(pointIndex) => { const point = telemetry[pointIndex]; if (!point) return; telemetrySelectionRef.current++; setSelectedTelemetryIndex(pointIndex); setSelectedRecord(Number(point.record)); setPage(Math.floor(Number(point.record) / PAGE_SIZE)); navigate('records'); }} />}
         <div className="section-grid">
           <section className="panel"><div className="panel-head"><FlaskConical aria-hidden="true" size={18} /><h2>Mutations</h2></div><div className="panel-body"><div className="mutation-list"><button className="mutation" type="button" disabled={!result || !!busy} onClick={(event) => doMutation('flip', event.currentTarget)}><span>Flip one payload byte</span></button><button className="mutation" type="button" disabled={!result || !!busy} onClick={(event) => doMutation('delete', event.currentTarget)}><span>Remove one middle record</span></button><button className="mutation" type="button" disabled={!result || !!busy} onClick={(event) => doMutation('truncate', event.currentTarget)}><span>Trim seven tail bytes</span></button></div></div></section>
-          <section className="panel"><div className="panel-head"><FileCheck2 aria-hidden="true" size={18} /><h2>Seal</h2></div><div className="panel-body"><p>Create a sealed log from a timestamped source.</p><p className="field-hint">TSV, CSV, JSON or MAVLink <code>.tlog</code>. Converted values are canonicalized; MAVLink frame CRC is not checked.</p><details className="report-details import-details"><summary>Import details <ChevronDown size={17} aria-hidden="true" /></summary><div className="prose"><p>TSV/TXT uses <code>timestamp_us&lt;TAB&gt;payload</code>. CSV opens a bounded preview and requires explicit column and unit mapping before conversion. JSON accepts an array of objects with an unsigned <code>timestamp_us</code>. MAVLink .tlog records use their 8-byte big-endian timestamps; frame checksum/CRC_EXTRA validation is not performed.</p><p>CSV timestamp units must be microseconds. Coordinates require both latitude and longitude in degrees; altitude is mapped in meters and speed in meters per second. All original CSV columns remain in each payload and the mapping is saved in provenance. Unsupported/conflicting unit labels are rejected. JSON fields use the documented names and units; unknown names are not guessed. Missing/null coordinates stay unavailable. Source files are limited to 16 MiB.</p></div></details><button className="button secondary" type="button" onClick={() => { sealPickerRef.current = true; workbenchFileRef.current?.click(); }}>Choose telemetry source</button>{csvDraft && <CsvMappingEditor draft={csvDraft} setDraft={setCsvDraft} onConvert={convertCsvDraft} onCancel={() => { setCsvDraft(null); if (workbenchFileRef.current) workbenchFileRef.current.value = ''; setOperationStatus('CSV mapping canceled. No source was converted or sealed.'); }} busy={!!busy} />}{sealSourceMetadata && <TelemetrySourcePreview source={sealSourceMetadata} original={sealSourceOriginal} />}<section className="signing-key-controls" aria-labelledby="signing-key-title"><h3 id="signing-key-title">Ed25519 signing key</h3><p>Use a generated or imported key instead of the ephemeral default. The private key stays in tab memory and is never saved. Key possession does not verify operator identity.</p><div className="actions-row"><button type="button" className="button secondary" onClick={generateSigningKey}>Generate Ed25519 key</button><label className="button secondary key-import-button" htmlFor="private-key-file">Import private PEM<input id="private-key-file" type="file" accept=".pem,application/x-pem-file,text/plain" onChange={(event) => importSigningKey(event.target.files?.[0] || null)} /></label>{signingKey && <><button type="button" className="button secondary" onClick={downloadPrivateKeyBackup}>Download private-key backup</button>{signingKey.publicKeyHex && <button type="button" className="button secondary" onClick={downloadSigningPublicKey}>Download public key</button>}<button type="button" className="text-action" onClick={() => { setSigningKey(null); setOperationStatus("Private key cleared from app state."); }}>Clear key</button></>}</div>{signingKey && <p role="status">{signingKey.origin}{signingKey.publicKeyHex ? ` · public key ${signingKey.publicKeyHex}` : ' · import the matching public key separately'}</p>}<p className="field-hint">A plaintext backup is created only after you choose Download. Store it securely outside this browser profile.</p></section><label className="field-label" htmlFor="receipt-interval">Receipt interval (records)</label><input id="receipt-interval" type="number" min="1" max="1000000" value={sealInterval} onChange={(e) => { invalidateCheck(); setSealInterval(e.target.value); }} /><button className="button primary" type="button" disabled={!sealFileInput || !!busy} onClick={runSeal}>Seal and verify</button>{sealOutput && <div className="seal-outputs"><p>Generated from <strong>{sealOutput.filename}</strong>.</p><button className="button secondary" onClick={() => download('sealed.fseal', sealOutput.log, 'application/octet-stream')}>Download sealed log</button><button className="button secondary" onClick={() => download('sealed.receipts', sealOutput.receipts)}>Download receipts</button><button className="button secondary" onClick={() => download('sealed-public-key.txt', sealOutput.publicKey + '\n')}>Download public key</button><p>Keep receipts and public key with a separate witness. The private key is not included in these outputs.</p><label className="output-ack"><input type="checkbox" checked={sealOutputAcknowledged} onChange={(e) => setSealOutputAcknowledged(e.target.checked)} /> I saved these files or no longer need them</label></div>}</div></section>
+          <section className="panel"><div className="panel-head"><FileCheck2 aria-hidden="true" size={18} /><h2>Seal</h2></div><div className="panel-body"><p>Create a sealed log from a timestamped source.</p><p className="field-hint">TSV, CSV, JSON or MAVLink <code>.tlog</code>. Converted values are canonicalized; MAVLink frame CRC is not checked.</p><details className="report-details import-details"><summary>Import details <ChevronDown size={17} aria-hidden="true" /></summary><div className="prose"><p>TSV/TXT uses <code>timestamp_us&lt;TAB&gt;payload</code>. CSV opens a bounded preview and requires explicit column and unit mapping before conversion. JSON accepts an array of objects with an unsigned <code>timestamp_us</code>. MAVLink .tlog records use their 8-byte big-endian timestamps; frame checksum/CRC_EXTRA validation is not performed.</p><p>CSV timestamp units must be microseconds. Coordinates require both latitude and longitude in degrees; altitude is mapped in meters and speed in meters per second. All original CSV columns remain in each payload and the mapping is saved in provenance. Unsupported/conflicting unit labels are rejected. JSON fields use the documented names and units; unknown names are not guessed. Missing/null coordinates stay unavailable. Source files are limited to 16 MiB.</p></div></details><button className="button secondary" type="button" onClick={() => { sealPickerRef.current = true; workbenchFileRef.current?.click(); }}>Choose telemetry source</button>{csvDraft && <CsvMappingEditor draft={csvDraft} setDraft={setCsvDraft} onConvert={convertCsvDraft} onCancel={() => { setCsvDraft(null); if (workbenchFileRef.current) workbenchFileRef.current.value = ''; setOperationStatus('CSV mapping canceled. No source was converted or sealed.'); }} busy={!!busy} />}{sealSourceMetadata && <TelemetrySourcePreview source={sealSourceMetadata} original={sealSourceOriginal} />}<section className="signing-key-controls" aria-labelledby="signing-key-title"><h3 id="signing-key-title">Ed25519 signing key</h3><p>Use a generated or imported key instead of the ephemeral default. The private key stays in tab memory and is never saved. Key possession does not verify operator identity.</p><div className="actions-row"><button type="button" className="button secondary" onClick={generateSigningKey}>Generate Ed25519 key</button><label className="button secondary key-import-button" htmlFor="private-key-file">Import private PEM<input id="private-key-file" type="file" accept=".pem,application/x-pem-file,text/plain" onChange={(event) => { const file = event.target.files?.[0] || null; event.target.value = ''; importSigningKey(file); }} /></label>{signingKey && <><button type="button" className="button secondary" onClick={downloadPrivateKeyBackup}>Download private-key backup</button>{signingKey.publicKeyHex && <button type="button" className="button secondary" onClick={downloadSigningPublicKey}>Download public key</button>}<button type="button" className="text-action" onClick={clearSigningKey}>Clear key</button></>}</div>{signingKey && <p role="status">{signingKey.origin}{signingKey.publicKeyHex ? ` · public key ${signingKey.publicKeyHex}` : ' · import the matching public key separately'}</p>}<p className="field-hint">A plaintext backup is created only after you choose Download. Store it securely outside this browser profile.</p></section><label className="field-label" htmlFor="receipt-interval">Receipt interval (records)</label><input id="receipt-interval" type="number" min="1" max="1000000" value={sealInterval} onChange={(e) => { invalidateCheck(); setSealInterval(e.target.value); }} /><button className="button primary" type="button" disabled={!sealFileInput || !!busy} onClick={runSeal}>Seal and verify</button>{sealOutput && <div className="seal-outputs"><p>Generated from <strong>{sealOutput.filename}</strong>.</p><button className="button secondary" onClick={() => download('sealed.fseal', sealOutput.log, 'application/octet-stream')}>Download sealed log</button><button className="button secondary" onClick={() => download('sealed.receipts', sealOutput.receipts)}>Download receipts</button><button className="button secondary" onClick={() => download('sealed-public-key.txt', sealOutput.publicKey + '\n')}>Download public key</button><p>Keep receipts and public key with a separate witness. The private key is not included in these outputs.</p><label className="output-ack"><input type="checkbox" checked={sealOutputAcknowledged} onChange={(e) => setSealOutputAcknowledged(e.target.checked)} /> I saved these files or no longer need them</label></div>}</div></section>
         </div>
       </section>}
 
-      {screen === 'verify' && <section className="screen verify-layout" aria-labelledby="verify-title"><div className="panel verify-panel"><div className="panel-head"><ShieldCheck aria-hidden="true" size={18} /><h2 id="verify-title">Verification inputs</h2></div><div className="panel-body input-grid"><div><label className="field-label" htmlFor="log-input">HashWing / FlightSeal .fseal log <span>(up to {fmtBytes(MAX_UI_BYTES)})</span></label><input id="log-input" type="file" accept=".fseal,application/octet-stream" onChange={(e) => chooseLog(e.target.files?.[0] || null)} /></div><div><label className="field-label" htmlFor="receipt-input">Witness receipts <span>(optional)</span></label><input id="receipt-input" ref={receiptInputRef} type="file" accept=".receipts,text/plain" aria-invalid={receiptInputError ? 'true' : undefined} aria-describedby={receiptInputError ? 'receipt-input-error' : undefined} onChange={(e) => chooseReceipts(e.target.files?.[0] || null)} />{receiptLoading && <p className="field-hint" role="status">Reading receipts…</p>}{receiptInputError && <p id="receipt-input-error" className="field-hint receipt-error">{receiptInputError}</p>}{receiptSelected && <button className="button secondary remove-receipts" type="button" onClick={removeReceipts}>Remove receipts</button>}</div><div className="field-wide"><label className="field-label" htmlFor="trusted-key">Public key for receipt check <span>(64 lowercase hexadecimal digits)</span></label><input id="trusted-key" className="mono-input" value={keyText} onChange={(e) => { invalidateCheck(); setKeyText(e.target.value); }} autoComplete="off" spellCheck="false" /><TrustedKeyPinControls value={keyText} onUse={(value) => { invalidateCheck(); setKeyText(value); }} /></div><div className="field-wide actions-row"><button className="button primary" type="button" disabled={!logFile || logFile.size > MAX_UI_BYTES || receiptLoading || !!receiptInputError || !!busy} onClick={verifyPicked}>Run check</button><button className="button secondary" type="button" onClick={() => loadDemo(false)}>Load included 800-record demo</button></div></div></div>{result && <ResultPanel result={result} resultTitle={resultTitle} reportText={reportText} onDownloadText={() => download('hashwing-verification-report.txt', reportText)} onDownloadMarkdown={() => download('hashwing-evidence-report.md', reportMarkdown, 'text/markdown;charset=utf-8')} onDownloadJson={() => download('hashwing-verification-report.json', reportJson, 'application/json')} onNavigate={navigate} onShare={() => setShareDialogOpen(true)} />}</section>}
+      {screen === 'verify' && <section className="screen verify-layout" aria-labelledby="verify-title">
+        <section className="panel verify-demo" aria-labelledby="verify-demo-title"><div className="panel-head"><FlaskConical aria-hidden="true" size={18} /><h2 id="verify-demo-title">Try a sample integrity check</h2></div><div className="panel-body">
+          <p>Check whether a sealed flight log has changed and review its signed receipts.</p>
+          <p className="field-hint">Included synthetic sample: 800 records, 8 receipts. The bundled demo signer identifies this fixture only.</p>
+          <label className="field-label" htmlFor="verify-scenario">Sample scenario</label>
+          <select id="verify-scenario" value={demoScenario} disabled={!!busy} onChange={(event) => setDemoScenario(event.target.value)}><option value="intact">Original sample · valid</option><option value="byte-flip">Payload byte flip · detected failure</option></select>
+          <div className="actions-row"><button className="button primary" type="button" disabled={!!busy} onClick={() => loadDemo(demoScenario)}>Run Interactive Demo</button><button className="button secondary" type="button" disabled={!!busy || currentSample !== 'intact' || result?.native.status !== 'intact' || result?.file.name !== 'intact.fseal' || Number(result?.native.records) < 1} onClick={() => loadDemo('byte-flip')}>Simulate Tampering</button><button className="button secondary" type="button" disabled={!!busy || !['intact', 'byte-flip'].includes(currentSample)} onClick={() => loadDemo(false)}>Restore Original</button></div>
+          {quickStartDismissed ? <button className="text-action" type="button" onClick={() => setQuickStartDismissed(false)}>Show demo guidance</button> : <div className="demo-guidance"><p>Pick a sample, inspect or change the copy, then verify the outcome.</p><button className="text-action" type="button" onClick={() => setQuickStartDismissed(true)}>Dismiss guidance</button></div>}
+          {currentSample === 'byte-flip' && result?.native.status === 'bad-link' && <p className="sample-note">The copy changed at record 0 (the first record). Its stored hash no longer matches the payload. The original sample, receipts and public key were retained unchanged. Restore Original runs a new verification.</p>}
+          <details className="report-details"><summary>Technical Diagnostics <ChevronDown size={17} aria-hidden="true" /></summary><div className="prose"><p>The copy flips the first payload byte of zero-based record 0 and recomputes CRC-32, while retaining the stored hash link and original Ed25519 receipts. The C++/OpenSSL WebAssembly verifier detects the hash mismatch. No receipt is re-signed.</p><p>A passing result establishes file integrity against the supplied fixture key, not sensor truth, operator identity or independent custody.</p></div></details>
+        </div></section>
+        <div className="panel verify-panel"><div className="panel-head"><ShieldCheck aria-hidden="true" size={18} /><h2 id="verify-title">Verification inputs</h2></div><div className="panel-body input-grid"><div><label className="field-label" htmlFor="log-input">HashWing / FlightSeal .fseal log <span>(up to {fmtBytes(MAX_UI_BYTES)})</span></label><input id="log-input" type="file" accept=".fseal,application/octet-stream" onChange={(e) => chooseLog(e.target.files?.[0] || null)} /></div><div><label className="field-label" htmlFor="receipt-input">Witness receipts <span>(optional)</span></label><input id="receipt-input" ref={receiptInputRef} type="file" accept=".receipts,text/plain" aria-invalid={receiptInputError ? 'true' : undefined} aria-describedby={receiptInputError ? 'receipt-input-error' : undefined} onChange={(e) => chooseReceipts(e.target.files?.[0] || null)} />{receiptLoading && <p className="field-hint" role="status">Reading receipts…</p>}{receiptInputError && <p id="receipt-input-error" className="field-hint receipt-error">{receiptInputError}</p>}{receiptSelected && <button className="button secondary remove-receipts" type="button" onClick={removeReceipts}>Remove receipts</button>}</div><div className="field-wide"><label className="field-label" htmlFor="trusted-key">Public key for receipt check <span>(64 lowercase hexadecimal digits)</span></label><input id="trusted-key" className="mono-input" value={keyText} onChange={(e) => { invalidateCheck(); setKeyText(e.target.value); }} autoComplete="off" spellCheck="false" /><TrustedKeyPinControls value={keyText} onUse={(value) => { invalidateCheck(); setKeyText(value); }} /></div><div className="field-wide actions-row"><button className="button primary" type="button" disabled={!logFile || logFile.size > MAX_UI_BYTES || receiptLoading || !!receiptInputError || !!busy} onClick={verifyPicked}>Run check</button><button className="button secondary" type="button" disabled={!!busy} onClick={() => loadDemo(false)}>Load included 800-record demo</button></div></div></div>{result && <ResultPanel result={result} resultTitle={resultTitle} reportText={reportText} onDownloadText={() => download('hashwing-verification-report.txt', reportText)} onDownloadMarkdown={() => download('hashwing-evidence-report.md', reportMarkdown, 'text/markdown;charset=utf-8')} onDownloadJson={() => download('hashwing-verification-report.json', reportJson, 'application/json')} onNavigate={navigate} onShare={() => setShareDialogOpen(true)} />}</section>}
 
       {screen === 'records' && <section className="screen">{!result ? <EmptyState onNavigate={navigate} /> : <div className="records-layout"><section className="panel records-panel"><div className="panel-head"><List aria-hidden="true" size={18} /><h2>Records <span className="subcount">{fmtBig(result.native.records)}</span></h2></div><ol className="record-list">{pageRows.map((row, localIndex) => { const index = Number(row.index ?? rowStart + localIndex); const broken = !!result.indexed.problem && index === Number(result.indexed.problem.record); return <li key={index} className={`${broken ? 'record-broken' : 'record-pass'} ${index === selectedRecord ? 'selected' : ''}`}><button type="button" aria-current={index === selectedRecord ? 'true' : undefined} onClick={() => setSelectedRecord(index)}><span className="record-index">{fmtBig(index)}</span><span className="record-status">{broken ? `${problemLabel(result.indexed.problem.token)} (${result.indexed.problem.token})` : 'Checked'}</span><span className="record-bytes">{row.len == null ? 'problem row' : fmtBytes(row.len)}</span></button></li>; })}</ol><div className="pagination"><button className="button secondary" disabled={page === 0} onClick={() => setPage(0)}>First</button><button className="button secondary" disabled={page === 0} onClick={() => setPage((v) => Math.max(0, v - 1))}>Previous</button><span>Page {page + 1} of {pageCount}</span><button className="button secondary" disabled={page >= pageCount - 1} onClick={() => setPage((v) => Math.min(pageCount - 1, v + 1))}>Next</button><button className="button secondary" disabled={page >= pageCount - 1} onClick={() => setPage(pageCount - 1)}>Last</button></div></section><section className="panel detail-panel" aria-labelledby="record-detail-title"><div className="panel-head"><FileCheck2 aria-hidden="true" size={18} /><h2 id="record-detail-title">Record {fmtBig(selectedRecord)}</h2></div><div className="panel-body">{recordError ? <div role="alert" className="alert error-alert"><p>{recordError}</p><button className="button secondary" onClick={() => loadRecord(selectedRecord)}>Retry</button></div> : !recordDetail ? <p className="muted" role="status">Loading record…</p> : <><div className="detail-actions"><button className="button secondary" type="button" onClick={() => navigate('video')}>Video</button></div><RecordDetail record={recordDetail} /></>}</div></section></div>}</section>}
 
-      {screen === 'receipts' && <section className="screen">{!result ? <EmptyState onNavigate={navigate} /> : <section className="panel"><div className="panel-head"><Stamp aria-hidden="true" size={18} /><h2 id="receipt-heading">Receipts</h2></div><p className="receipt-overview">{fmtBig(result.receiptCoverage?.covered ?? result.native.covered)} records covered by a trusted receipt · {fmtBig(result.receiptCoverage?.uncovered ?? result.native.uncovered)} uncovered</p>{result.needsTrustedKey && <p className="muted">Hash chain checked; receipt signatures remain unchecked until a trusted public key is entered.</p>}{activeReceiptChecks.length ? <div className="table-scroll" role="region" aria-labelledby="receipt-heading" tabIndex="0" onKeyDown={(event) => { if ((event.key === 'ArrowRight' || event.key === 'ArrowLeft') && event.currentTarget.scrollWidth > event.currentTarget.clientWidth) { event.preventDefault(); event.currentTarget.scrollLeft += event.key === 'ArrowRight' ? 48 : -48; } }}><table><thead><tr><th scope="col">Receipt</th><th scope="col">After records</th><th scope="col">Check</th><th scope="col">Head</th><th scope="col">Signing key</th></tr></thead><tbody>{activeReceiptChecks.map((receipt, i) => <tr key={`${receipt.count}-${i}`}><td>{i + 1}</td><td className="numeric">{fmtBig(receipt.count)}</td><td><span className={`status-label ${receipt.check === 'ok' ? 'ok' : receipt.check === 'wrong-key' || receipt.check === 'bad-signature' ? 'bad' : 'warn'}`}>{receipt.description}</span></td><td><code>{receipt.head}</code></td><td><code>{receipt.key}</code></td></tr>)}</tbody></table></div> : <div className="panel-body"><p>{result.receipts ? 'No receipts authenticated.' : 'No receipts provided.'}</p></div>}</section>}</section>}
+      {screen === 'receipts' && <section className="screen">{!result ? <EmptyState onNavigate={navigate} /> : <section className="panel"><div className="panel-head"><Stamp aria-hidden="true" size={18} /><h2 id="receipt-heading">Receipts</h2></div><p className="receipt-overview">{fmtBig(result.receiptCoverage?.covered ?? result.native.covered)} records covered by a trusted receipt · {fmtBig(result.receiptCoverage?.uncovered ?? result.native.uncovered)} uncovered</p>{result.needsTrustedKey && <p className="muted">Hash chain checked; receipt signatures remain unchecked until a trusted public key is entered.</p>}{activeReceiptChecks.length ? <div className="table-scroll" role="region" aria-labelledby="receipt-heading" tabIndex="0" onKeyDown={(event) => { if ((event.key === 'ArrowRight' || event.key === 'ArrowLeft') && event.currentTarget.scrollWidth > event.currentTarget.clientWidth) { event.preventDefault(); event.currentTarget.scrollLeft += event.key === 'ArrowRight' ? 48 : -48; } }}><table><thead><tr><th scope="col">Receipt</th><th scope="col">After records</th><th scope="col">Check</th><th scope="col">Head</th><th scope="col">Signing key</th></tr></thead><tbody>{activeReceiptChecks.map((receipt, i) => <tr key={`${receipt.count}-${i}`} id={`receipt-${i+1}`} tabIndex={route.params.get('receipt')===String(i+1)?-1:undefined} aria-current={route.params.get('receipt')===String(i+1)?'true':undefined}><td>{i + 1}</td><td className="numeric">{fmtBig(receipt.count)}</td><td><span className={`status-label ${receipt.check === 'ok' ? 'ok' : receipt.check === 'wrong-key' || receipt.check === 'bad-signature' ? 'bad' : 'warn'}`}>{receipt.description}</span></td><td><code>{receipt.head}</code></td><td><code>{receipt.key}</code></td></tr>)}</tbody></table></div> : <div className="panel-body"><p>{result.receipts ? 'No receipts authenticated.' : 'No receipts provided.'}</p></div>}</section>}</section>}
 
       {screen === 'video' && <section className="screen"><section className="panel"><div className="panel-head"><Video aria-hidden="true" size={18} /><h2>Local clip</h2></div><div className="panel-body video-grid"><label className="field-label" htmlFor="video-input">Video file</label><input id="video-input" type="file" accept="video/*" onChange={(e) => inspectVideo(e.target.files?.[0] || null)} /><video ref={videoRef} src={videoUrl || undefined} controls playsInline aria-label="Selected local video preview" onLoadedMetadata={(e) => { const media = e.currentTarget; const url = videoUrlRef.current; const metadata = { duration: media.duration, width: media.videoWidth, height: media.videoHeight }; if (!url || media.currentSrc !== url) return; setVideoInfo((v) => v && v.url === url ? { ...v, ...metadata, state: 'Browser metadata available. Codec identification is unknown.' } : v); }} onCanPlay={() => setVideoInfo((v) => v && ({ ...v, playable: true }))} onError={() => setVideoInfo((v) => v && ({ ...v, playable: false, state: 'The browser could not read metadata or play this stream. Codec identification is unknown.' }))} />{result && <div className="video-sync-controls"><p className="field-hint">Timestamps may be boot-relative. Alignment is a playback aid, not signed capture-time proof.</p><label className="field-label" htmlFor="video-record-range">Record</label><input id="video-record-range" type="range" min="0" max={Math.max(0, totalRows - 1)} value={Math.min(selectedRecord, Math.max(0, totalRows - 1))} disabled={totalRows < 2} onChange={(e) => { const next = Number(e.target.value); setSelectedRecord(next); setPage(Math.floor(next / PAGE_SIZE)); }} /><p><strong>Selected record {fmtBig(selectedRecord)}</strong>{selectedTelemetryPoint ? ` · telemetry from record ${fmtBig(selectedTelemetryPoint.record)} at ${fmtBig(selectedTelemetryPoint.timestampUs)} µs` : selectedTimestamp == null ? ' · timestamp unavailable' : ` · ${fmtBig(selectedTimestamp)} µs`}{selectedTelemetryPoint?.sourceOffset == null ? '' : ` · source byte ${selectedTelemetryPoint.sourceOffset}`}</p><p>Time base: {firstTimestamp == null ? 'unavailable' : `${fmtBig(firstTimestamp)} µs at first telemetry sample`}</p><label className="field-label" htmlFor="video-offset">Manual offset (seconds)</label><input id="video-offset" type="number" step="any" value={videoOffset} onChange={(e) => setVideoOffset(e.target.value)} /><button className="button primary" type="button" disabled={!videoInfo?.duration || selectedTimestamp == null || firstTimestamp == null} onClick={syncVideo}>Sync to record</button></div>}{videoInfo && <div className="video-meta" role="status"><strong>{videoInfo.name}</strong><span>{fmtBytes(videoInfo.size)}</span>{videoInfo.duration != null && <span>{Number.isFinite(videoInfo.duration) ? `${videoInfo.duration.toFixed(2)} seconds` : 'Duration unavailable'}</span>}{videoInfo.width && <span>{videoInfo.width} × {videoInfo.height} pixels</span>}<p>{videoInfo.state}</p>{videoInfo.syncMessage && <p>{videoInfo.syncMessage}</p>}<p>Video stays local. Codec is not inferred when unavailable.</p></div>}{!result && <p className="muted">Verify a log to align video.</p>}</div></section></section>}
 
-      {screen === 'help' && <section className="screen help-layout"><section className="panel"><div className="panel-head"><CircleHelp aria-hidden="true" size={18} /><h2>Trust and limits</h2></div><div className="panel-body prose"><h3>Formats</h3><p>HashWing verifies .fseal logs, FlightSeal receipt v1 files, and supported PX4 ULog captures. Sealed output remains compatible with FlightSeal tools.</p><h3>Integrity and authenticity</h3><p>Sealing happens after download; it does not prove acquisition time or sensor truth. An intact chain confirms internal links only. A supplied public key is not automatically a trusted identity. Receipt v1 has no signed issue time. PX4 samples contain selected decoded records, not every byte of the original ULog. A chain head is not a whole-file SHA-256 digest.</p><h3>Independent witness</h3><p>Coverage reports how many records supplied receipts cover. Detecting a shortened or rebuilt log requires an independent holder to retain those receipts. Confirm the public key with that holder through another channel.</p><h3>Failures</h3><p>Verification stops at the first inconsistent record. A chain break identifies the first bad link, not every changed record. A torn tail may indicate an interrupted write. HashWing does not repair supplied files.</p><h3>Local handling</h3><p>Files stay on this device. Reports contain verdicts, counts and hashes, not record payloads. The C++/OpenSSL WebAssembly engine checks the chain; a separate JavaScript index loads record details. Engine version appears in each report. The app shell and included samples are cached after online setup; the full PX4 sample is fetched separately and may not be available offline. This AI-assisted project requires human review of generated code and documentation.</p><h3>Reports</h3><p>PDF exports carry ordered heading and paragraph tags plus document language, but are not certified PDF/UA. The screen-reader workflow has not been validated; use the text report as the accessible reading alternative or JSON for structured data.</p><p><a href="https://github.com/anirudh763/flightseal" target="_blank" rel="noreferrer">Source and issue tracker</a></p></div></section><section className="panel limits-panel"><div className="panel-head"><h2>Limits</h2></div><div className="panel-body"><dl><dt>Verify file size</dt><dd>{fmtBytes(MAX_UI_BYTES)}</dd><dt>Native import limit</dt><dd>{fmtBytes(IMPORT_MAX_BYTES)}</dd><dt>Seal source file</dt><dd>16 MiB</dd><dt>Receipt text</dt><dd>4 MiB</dd><dt>Records per page</dt><dd>50</dd><dt>Telemetry plot</dt><dd>1,000 sampled points</dd><dt>Payload display</dt><dd>4 KiB per record</dd></dl></div></section></section>}
+      {screen === 'help' && <section className="screen help-layout"><section className="panel"><div className="panel-head"><CircleHelp aria-hidden="true" size={18} /><h2>Trust and limits</h2></div><div className="panel-body prose"><h3>Formats</h3><p>HashWing verifies .fseal logs, FlightSeal receipt v1 files, and supported PX4 ULog captures. Sealed output remains compatible with FlightSeal tools.</p><h3>Integrity and authenticity</h3><p>Sealing happens after download; it does not prove acquisition time or sensor truth. An intact chain confirms internal links only. A supplied public key is not automatically a trusted identity. Receipt v1 has no signed issue time. PX4 samples contain selected decoded records, not every byte of the original ULog. A chain head is not a whole-file SHA-256 digest.</p><h3>Independent witness</h3><p>Coverage reports how many records supplied receipts cover. Detecting a shortened or rebuilt log requires an independent holder to retain those receipts. Confirm the public key with that holder through another channel.</p><h3>Failures</h3><p>Verification stops at the first inconsistent record. A chain break identifies the first bad link, not every changed record. A torn tail may indicate an interrupted write. HashWing does not repair supplied files.</p><h3>Local handling</h3><p>Files are analyzed on this device. Save current run uploads the selected source, checked log, receipts and report to your private server workspace when available. Private signing keys and video are excluded. Exported verification reports contain verdicts, counts and hashes, not record payloads. The C++/OpenSSL WebAssembly engine checks the chain; a separate JavaScript index loads record details. Engine version appears in each report. The app shell and included samples are cached after online setup; the full PX4 sample is fetched separately and may not be available offline. This AI-assisted project requires human review of generated code and documentation.</p><h3>Reports</h3><p>PDF exports carry ordered heading and paragraph tags plus document language, but are not certified PDF/UA. The screen-reader workflow has not been validated; use the text report as the accessible reading alternative or JSON for structured data.</p><p><a href="https://github.com/anirudh763/flightseal" target="_blank" rel="noreferrer">Source and issue tracker</a></p></div></section><section className="panel limits-panel"><div className="panel-head"><h2>Limits</h2></div><div className="panel-body"><dl><dt>Verify file size</dt><dd>{fmtBytes(MAX_UI_BYTES)}</dd><dt>Native import limit</dt><dd>{fmtBytes(IMPORT_MAX_BYTES)}</dd><dt>Seal source file</dt><dd>16 MiB</dd><dt>Receipt text</dt><dd>4 MiB</dd><dt>Records per page</dt><dd>50</dd><dt>Telemetry plot</dt><dd>1,000 sampled points</dd><dt>Payload display</dt><dd>4 KiB per record</dd></dl></div></section></section>}
+      {(!canonicalPage || canonicalPage === 'settings') && (offlineStatus || waitingUpdate || installKind !== 'none') && <details className="install-tools" onKeyDown={closeDisclosure}><summary>Offline and installation</summary><section className="offline-controls" aria-label="Offline and installation controls"><p className="offline-note" role="status">{offlineStatus || (offlineReady ? 'Offline verifier is ready on this device.' : 'Offline use needs a one-time online preparation.')}</p><div className="offline-control-actions"><button type="button" className="button secondary" onClick={prepareOffline}>Prepare offline</button>{waitingUpdate && <button type="button" className="button secondary" onClick={activateWaitingUpdate}>Apply safe update</button>}<button type="button" className="button secondary" onClick={installApp}>{installKind === 'ios' ? 'Add to Home Screen help' : installPrompt ? 'Install HashWing' : 'Install help'}</button><button type="button" className="text-action" onClick={() => setFeedbackDialogOpen(true)}>Report a bug</button></div></section></details>}
     </main>
     <FooterLinks onFeedback={() => setFeedbackDialogOpen(true)} onInstall={installApp} />
     <InstallGuide open={installDialogOpen} onClose={() => setInstallDialogOpen(false)} ios={installKind === 'ios'} />
-    <FeedbackDialog open={feedbackDialogOpen} onClose={() => setFeedbackDialogOpen(false)} route={route.route} />
-    <ShareDialog open={shareDialogOpen} onClose={() => setShareDialogOpen(false)} summary={shareSummary} shareUrl={shareUrl} onShare={async (data) => { if (!(await invokeNativeShare(data))) throw new Error('Native sharing is unavailable.'); }} />
+    <FeedbackDialog key={`feedback-${privateResetVersion}`} open={feedbackDialogOpen} onClose={() => setFeedbackDialogOpen(false)} route={route.route} />
+    <ShareDialog key={`share-${privateResetVersion}`} isOwnerCurrent={() => authEpochRef.current === renderedAuthEpoch} open={shareDialogOpen} onClose={() => setShareDialogOpen(false)} summary={shareSummary} shareUrl={shareUrl} onShare={async (data) => { if (!(await invokeNativeShare(data))) throw new Error('Native sharing is unavailable.'); }} />
     </div>
   </div>;
 }
@@ -1375,7 +1499,7 @@ function LandingPage({ onDemo, onContinue, result, busy, error, installKind, onI
     </header>
     <main id="main" className="landing-main" tabIndex="-1">
       <section className="landing-hero" aria-labelledby="page-landing">
-        <div className="landing-hero-copy"><p className="landing-kicker">Local flight log verification</p><h1 id="page-landing" tabIndex="-1">Check the log.<br />Keep the evidence.</h1><p className="landing-lede">Seal a downloaded flight log, verify its chain, and hand off receipts for independent review.</p><div className="landing-hero-actions"><button className="landing-demo" type="button" onClick={onDemo} disabled={!!busy}>Run real verification <ArrowRight size={16} aria-hidden="true" /></button><a href="#/signup" className="landing-secondary">Create account</a><button type="button" className="landing-secondary-button" onClick={onContinue}>Launch Workspace</button></div><p className="landing-local-note"><LockKeyhole size={14} aria-hidden="true" />Files stay on this device. Accounts save only an included-sample view.</p></div>
+        <div className="landing-hero-copy"><p className="landing-kicker">Local flight log verification</p><h1 id="page-landing" tabIndex="-1">Check the log.<br />Keep the evidence.</h1><p className="landing-lede">Seal a downloaded flight log, verify its chain, and hand off receipts for independent review.</p><div className="landing-hero-actions"><button className="landing-demo" type="button" onClick={onDemo} disabled={!!busy}>Run real verification <ArrowRight size={16} aria-hidden="true" /></button><a href="#/signup" className="landing-secondary">Create account</a><button type="button" className="landing-secondary-button" onClick={onContinue}>Launch Workspace</button></div><p className="landing-local-note"><LockKeyhole size={14} aria-hidden="true" />Files are analyzed locally. Uploads require Save current run; private keys and video stay in this tab.</p></div>
         {busy && <p role="status" className="hero-verify-status">{busy}</p>}
         {error && <p role="alert" className="hero-verify-error">{error}</p>}
         {result && <section className="hero-actual-result" aria-label="Live verification result"><div><span>Actual C++ / OpenSSL / WebAssembly result</span><strong>{humanStatus(result.overallVerdict || result.native.verdict)[0]}</strong></div><dl><div><dt>Chain</dt><dd>{humanStatus(result.native.status)[0]}</dd></div><div><dt>Receipts</dt><dd>{result.needsTrustedKey ? 'Signature unchecked' : result.receiptChecks.length ? 'Checked against bundled demo key' : 'Not supplied'}</dd></div><div><dt>Coverage</dt><dd>{fmtBig(result.receiptCoverage?.covered ?? result.native.covered)} / {fmtBig(result.native.records)}</dd></div></dl><p>Integrity does not establish sensor truth, capture time, identity or independent custody.</p><button className="button secondary" type="button" onClick={onContinue}>Inspect records and export <ArrowRight size={15} aria-hidden="true" /></button></section>}
@@ -1510,49 +1634,58 @@ function TrustedKeyPinControls({ value, onUse }) {
   return <div className="trusted-key-controls"><label className="field-label" htmlFor="trusted-key-profile">Named local public-key pin</label><select id="trusted-key-profile" defaultValue="" onChange={(event) => { const pin = pins.find((item) => item.name === event.target.value); if (pin) onUse(pin.publicKey); }}><option value="">Choose a saved key profile</option>{pins.map((pin) => <option key={pin.name} value={pin.name}>{pin.name} · {pin.fingerprint.slice(0, 16)}</option>)}</select><label className="field-label" htmlFor="trusted-key-name">Save or rotate key profile</label><input id="trusted-key-name" value={name} maxLength={80} onChange={(event) => setName(event.target.value)} placeholder="For example, Flight recorder 1" /><button type="button" disabled={!value || !name.trim()} onClick={save}>Pin public key on this device</button><p>Pinning is your local trust decision. Confirm every key rotation independently; a fingerprint is not a verified pilot identity.</p>{message && <p role="status">{message}</p>}</div>;
 }
 
-function EncryptedBackupControls({ profileId }) {
+function EncryptedBackupControls({ profileId, isOwnerCurrent }) {
   const [passphrase, setPassphrase] = useState('');
   const [file, setFile] = useState(null);
   const [payload, setPayload] = useState(null);
   const [preview, setPreview] = useState(null);
   const [status, setStatus] = useState('');
   const [busy, setBusy] = useState(false);
+  const revision = useRef(0);
+  useEffect(() => () => { revision.current++; }, []);
+  const changeInput = () => { revision.current++; setBusy(false); setPayload(null); setPreview(null); setStatus(''); };
   const exportBackup = async () => {
+    const operation = ++revision.current, isCurrent = () => operation === revision.current && isOwnerCurrent();
     setBusy(true); setStatus('');
     try {
-      const backup = await createEncryptedProfileBackup(profileId, { passphrase });
+      const backup = await createEncryptedProfileBackup(profileId, { passphrase, isCurrent });
+      if (!isCurrent()) return;
       download('flightseal-encrypted-profile-backup.json', backup, 'application/vnd.flightseal.profile-backup+json');
       setStatus('Encrypted profile backup downloaded. Keep its passphrase separately. Sessions, private keys and flight files are excluded.');
-    } catch (cause) { setStatus(cause?.message || 'Could not create encrypted backup.'); }
-    finally { setBusy(false); }
+    } catch (cause) { if (isCurrent()) setStatus(cause?.message || 'Could not create encrypted backup.'); }
+    finally { if (isCurrent()) setBusy(false); }
   };
   const inspectBackup = async () => {
+    const operation = ++revision.current, isCurrent = () => operation === revision.current && isOwnerCurrent();
     setBusy(true); setStatus(''); setPayload(null); setPreview(null);
     try {
-      const decrypted = await inspectEncryptedProfileBackup(file, passphrase);
+      const decrypted = await inspectEncryptedProfileBackup(file, passphrase, { isCurrent });
+      if (!isCurrent()) return;
       const nextPreview = previewBackupRestore(decrypted);
       setPayload(decrypted); setPreview(nextPreview);
       setStatus(`Restore preview: local profile ${nextPreview.email}; ${nextPreview.hasSavedView ? 'one saved included-sample view' : 'no saved view'}. No changes made.`);
-    } catch (cause) { setStatus(cause?.message || 'Could not open encrypted backup.'); }
-    finally { setBusy(false); }
+    } catch (cause) { if (isCurrent()) setStatus(cause?.message || 'Could not open encrypted backup.'); }
+    finally { if (isCurrent()) setBusy(false); }
   };
   const commit = async () => {
     if (!payload || !preview) return;
+    const operation = ++revision.current, isCurrent = () => operation === revision.current && isOwnerCurrent();
     setBusy(true); setStatus('');
     try {
-      await commitBackupRestore(payload);
+      await commitBackupRestore(payload, globalThis.localStorage, { isCurrent });
+      if (!isCurrent()) return;
       setStatus(`Restored local profile ${preview.email}. Log in on this device to open its saved view.`);
       setPayload(null); setPreview(null); setFile(null);
-    } catch (cause) { setStatus(cause?.message || 'Restore failed. Existing data was not intentionally overwritten.'); }
-    finally { setBusy(false); }
+    } catch (cause) { if (isCurrent()) setStatus(cause?.message || 'Restore failed. Existing data was not intentionally overwritten.'); }
+    finally { if (isCurrent()) setBusy(false); }
   };
   return <section className="profile-backup" aria-label="Encrypted profile backup">
     <h2>Encrypted backup</h2>
     <label className="field-label" htmlFor="backup-passphrase">Backup passphrase</label>
-    <input id="backup-passphrase" type="password" autoComplete="new-password" minLength={12} maxLength={128} value={passphrase} onChange={(event) => { setPassphrase(event.target.value); setPayload(null); setPreview(null); }} placeholder="12–128 characters" />
+    <input id="backup-passphrase" type="password" autoComplete="new-password" minLength={12} maxLength={128} value={passphrase} onChange={(event) => { changeInput(); setPassphrase(event.target.value); }} placeholder="12–128 characters" />
     <button type="button" disabled={busy || !profileId || passphrase.length < 12} onClick={exportBackup}>Download encrypted backup</button>
     <label className="field-label" htmlFor="backup-file">Restore encrypted backup</label>
-    <input id="backup-file" type="file" accept="application/vnd.flightseal.profile-backup+json,.json" onChange={(event) => { setFile(event.target.files?.[0] || null); setPayload(null); setPreview(null); setStatus(''); }} />
+    <input id="backup-file" type="file" accept="application/vnd.flightseal.profile-backup+json,.json" onChange={(event) => { changeInput(); setFile(event.target.files?.[0] || null); }} />
     <button type="button" disabled={busy || !file || passphrase.length < 12} onClick={inspectBackup}>Check backup and preview</button>
     {preview && <button type="button" disabled={busy} onClick={commit}>Restore this profile</button>}
     {status && <p role="status">{status}</p>}
@@ -1560,14 +1693,14 @@ function EncryptedBackupControls({ profileId }) {
   </section>;
 }
 
-function ProfileMenu({ session, profile, currentSample, savedContext, savedContextError, hasUnacknowledgedOutput, message, onSave, onRestore, onDeleteSaved, onRemoveProfile, onLogout, onNavigateAuth, syncStatus }) {
+function ProfileMenu({ isCurrent, session, profile, currentSample, savedContext, savedContextError, hasUnacknowledgedOutput, message, onSave, onRestore, onDeleteSaved, onRemoveProfile, onLogout, onNavigateAuth, syncStatus }) {
   const menuRef = useRef(null);
   const email = profile?.email || (session?.kind === 'guest' ? 'Demo session' : 'Workspace access');
-  return <details className="profile-menu" ref={menuRef}>
+  return <details className="profile-menu" ref={menuRef} onKeyDown={closeDisclosure}>
     <summary aria-label={session?.kind === 'account' ? `Profile menu for ${email}` : email}><UserRound size={15} aria-hidden="true" /><span>{email}</span><ChevronDown size={14} aria-hidden="true" /></summary>
     <div className="profile-menu-panel">
       <p className="profile-menu-identity"><strong>{email}</strong><span>{session?.kind === 'account' ? 'Local profile · this device only' : session?.kind === 'guest' ? 'Separate guest session' : 'No active session'}</span></p>
-      <EncryptedBackupControls profileId={session?.kind === 'account' ? profile?.id : null} />
+      <EncryptedBackupControls isOwnerCurrent={isCurrent} profileId={session?.kind === 'account' ? profile?.id : null} />
       <p className="profile-menu-note">Cloud sync: {syncStatus === 'configured' ? 'connector configured; local profiles are not cloud credentials' : 'not configured'}. No local logs or keys are uploaded.</p>
       {session?.kind === 'account' ? <>
         <button type="button" onClick={onSave} disabled={!currentSample || !!savedContextError}>Save included-sample view</button>

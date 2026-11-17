@@ -111,3 +111,34 @@ test('10,000 receipts cross the native API without truncation or stack overflow'
   assert.equal(result.receipts.length, 10000);
   assert.equal(result.verdict, 'intact');
 });
+
+test('interactive payload flip uses the immutable included sample and original receipt/key, then native restore passes', async () => {
+  const { blobSource, scanLog } = await import('../../docs/verifier.js');
+  const { mutateFile } = await import('../../docs/records.mjs');
+  const original = await readFile(sample('intact.fseal'));
+  const receipts = await readFile(sample('flight.receipts'), 'utf8');
+  const key = (await readFile(sample('pubkey.txt'), 'utf8')).trim();
+  const file = new File([original], 'intact.fseal');
+  const module = await factory({ wasmBinary: await readFile(new URL('../../docs/wasm/flightseal.wasm', import.meta.url)) });
+  const verify = async input => {
+    module.FS.writeFile('/interactive-input', new Uint8Array(await input.arrayBuffer()));
+    return JSON.parse(module.ccall('fseal_verify', 'string', ['string', 'string', 'string'], ['/interactive-input', receipts, key]));
+  };
+  const valid = await verify(file);
+  assert.equal(valid.verdict, 'intact');
+  assert.equal(valid.records, 800);
+  const changed = await mutateFile(file, await scanLog(blobSource(file), { sparse: true }), 'flip');
+  assert.equal(changed.mutation.record, 0);
+  const bad = await verify(changed.file);
+  assert.equal(bad.verdict, 'tampered');
+  assert.equal(bad.status, 'bad-link'); // CRC was recomputed; the stored hash detects the payload change.
+  assert.equal(bad.records, 0);
+  assert.notEqual(bad.fileSha256, valid.fileSha256);
+  assert.deepEqual(new Uint8Array(await file.arrayBuffer()), new Uint8Array(original));
+  const restored = await verify(file);
+  assert.equal(restored.verdict, 'intact');
+  assert.equal(restored.fileSha256, valid.fileSha256);
+  assert.deepEqual(restored.receipts, valid.receipts);
+  assert.equal(await readFile(sample('flight.receipts'), 'utf8'), receipts);
+  assert.equal((await readFile(sample('pubkey.txt'), 'utf8')).trim(), key);
+});

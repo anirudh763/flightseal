@@ -22,7 +22,7 @@ test('new routes, old tool paths, query parameters, and unknown paths share one 
 
 test('direct product routes preserve tab-local queries and legacy hashes', async () => {
   const { parseLocation, productHref } = await import('../src/routes.mjs');
-  for (const [pathname, screen] of [['/', 'sandbox'], ['/verify', 'verify'], ['/benchmarks', 'benchmarks'], ['/system', 'system']]) {
+  for (const [pathname, screen] of [['/', 'overview'], ['/verify', 'verify'], ['/benchmarks', 'benchmarks'], ['/system', 'system']]) {
     const route = parseLocation({ pathname, search: '?sample=tampered&record=7', hash: '' });
     assert.equal(route.screen, screen);
     assert.equal(route.kind, 'workspace');
@@ -33,7 +33,23 @@ test('direct product routes preserve tab-local queries and legacy hashes', async
   assert.equal(parseLocation({ pathname: '/flightseal/console/', hash: '', search: '' }).screen, 'landing');
   assert.equal(parseLocation({ pathname: '/', hash: '#/app/receipts', search: '' }).screen, 'receipts');
   assert.equal(parseLocation({ pathname: '/api/missing', hash: '', search: '' }).screen, 'not-found');
-  assert.equal(productHref('sandbox', { sample: 'intact', record: 4 }), '/?sample=intact&record=4');
-  assert.equal(productHref('system'), '/system');
+  assert.equal(productHref('sandbox', { sample: 'intact', record: 4 }), '/workbench?sample=intact&record=4');
+  assert.equal(productHref('system'), '/settings');
   assert.equal(productHref('records', { record: 3 }), '#/app/records?record=3');
+});
+
+test('canonical workspaces are distinct and verification remains a real workbench tool', async () => {
+  const { parseLocation, productHref } = await import('../src/routes.mjs');
+  for (const page of ['overview','workbench','reports','settings']) {
+    const route=parseLocation({pathname:'/'+page,search:'',hash:''});
+    assert.equal(route.kind,'workspace');assert.equal(route.canonical,page);
+  }
+  assert.equal(parseLocation({pathname:'/workbench',search:'?tool=verify&sample=intact',hash:''}).screen,'verify');
+  assert.equal(productHref('verify',{sample:'intact'}),'/workbench?sample=intact&tool=verify');
+});
+
+test('receipt deep links retain their selected public receipt position',()=>{
+ assert.equal(routeHash('receipts',{sample:'rewritten',receipt:2}),'#/app/receipts?sample=rewritten&receipt=2');
+ assert.equal(safeReturnRoute('#/app/receipts?sample=intact&receipt=2'),'#/app/receipts?sample=intact&receipt=2');
+ assert.equal(routeHash('receipts',{receipt:-1}),'#/app/receipts');
 });

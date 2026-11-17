@@ -50,8 +50,8 @@ function acquireBrowserLock() {
 }
 
 async function route(page, screen) {
-  await page.evaluate(value => { location.hash = `/${value}`; }, screen);
-  await page.waitForFunction(value => location.hash === `#/${value}`, screen);
+  await page.evaluate(value => { location.hash = `/app/${value}`; }, screen);
+  await page.waitForFunction(value => location.hash === `#/app/${value}`, screen);
   const heading = ({ sandbox: 'Samples', verify: 'Verify', records: 'Records', receipts: 'Receipts', video: 'Video', help: 'Trust' })[screen];
   await page.waitForFunction(value => document.querySelector('.commandbar h1')?.textContent === value, heading);
 }
@@ -62,7 +62,10 @@ async function waitForResult(page, label) {
 
 async function loadDemo(page) {
   await route(page, 'sandbox');
-  await page.getByRole('button', { name: /800-record demo/ }).click();
+  const acceptFixtureReplacement = (dialog) => dialog.accept();
+  page.on('dialog', acceptFixtureReplacement);
+  try { await page.getByRole('button', { name: /800-record demo/ }).click(); }
+  finally { page.off('dialog', acceptFixtureReplacement); }
   await page.waitForFunction(() => document.querySelector('.result-stat')?.textContent.includes('800'), null, { timeout: 30000 });
 }
 
@@ -278,7 +281,7 @@ try {
     return { recordCount: 5, interval: 2, receiptCounts, downloaded: [logs.filename, receipts.filename, key.filename], sealedLogMagic: 'FLTSEAL1', invalidIntervalRejected: true, invalidTsvRowRejected: true };
   });
 
-  for (const [width, height] of [[320, 900], [375, 812], [768, 900], [1440, 900]]) {
+  for (const [width, height] of [[320, 900], [375, 812], [768, 900], [1024, 900], [1440, 900]]) {
     await page.setViewportSize({ width, height });
     await page.locator('#workbench-file').setInputFiles([]);
     await loadDemo(page);

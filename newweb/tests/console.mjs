@@ -39,7 +39,7 @@ async function waitResult(page, text = 'Intact') {
 async function loadFreshDemo(page) {
   await route(page, 'sandbox');
   await page.getByRole('button', { name: 'Load 800-record demo' }).click();
-  await page.waitForFunction(() => document.querySelector('.result-stat')?.textContent.includes('800'), null, { timeout: 30000 });
+  await page.waitForFunction(() => document.querySelector('.result-stat')?.textContent.includes('800'), null, { timeout: 30000 }).catch(async () => assert.fail(`800-record demo did not finish loading: ${JSON.stringify(await page.evaluate(() => ({ hash: location.hash, result: document.querySelector('.result-stat')?.textContent || null, sample: document.querySelector('.sample-current')?.textContent || null, busy: document.querySelector('.busy-card')?.textContent || null, alert: document.querySelector('[role="alert"]')?.textContent || null, operation: document.querySelector('.operation-status')?.textContent || null })))}`));
 }
 async function loadLandingDemo(page) {
   await page.goto(url);
@@ -133,6 +133,25 @@ try {
     assert.equal(runtimeErrors.length, 0, runtimeErrors.join('\n'));
   });
 
+  await check('workspace utilities preserve keyboard access without crowding the header', async () => {
+    await route(page, 'verify');
+    assert.equal(await page.locator('.commandbar #workbench-file').count(), 0);
+    assert.equal(await page.locator('#workbench-file').count(), 1);
+    const utilities = page.locator('.install-tools > summary');
+    await utilities.press('Enter');
+    await page.getByRole('button', { name: 'Prepare offline', exact: true }).waitFor();
+    await page.getByRole('button', { name: 'Prepare offline', exact: true }).press('Escape');
+    assert.equal(await page.locator('.install-tools').getAttribute('open'), null);
+    assert.equal(await utilities.evaluate((el) => el === document.activeElement), true);
+    await page.setViewportSize({ width: 375, height: 667 });
+    await page.locator('.profile-menu > summary').click();
+    const menu = await page.locator('.profile-menu-panel').boundingBox();
+    assert.ok(menu.y >= 0 && menu.y + menu.height <= 667, JSON.stringify(menu));
+    await page.locator('.profile-menu > summary').press('Escape');
+    assert.equal(await page.locator('.profile-menu').getAttribute('open'), null);
+    await page.setViewportSize({ width: 1440, height: 1000 });
+  });
+
   await check('allowlisted sample query opens the requested evidence and selected record', async () => {
     await page.goto(`${url}#/records?sample=intact&record=24`);
     await page.reload();
@@ -146,6 +165,19 @@ try {
     await page.goto(`${url}#/sandbox?sample=tampered`);
     await page.reload();
     await waitResult(page, 'Tampered');
+  });
+
+  await check('verify demo mutates a sample copy and restores the original', async () => {
+    await page.goto(`${url}#/verify`);
+    await waitResult(page, 'Intact');
+    await page.getByRole('button', { name: 'Simulate Tampering' }).click();
+    await waitResult(page, 'Tampered');
+    assert.match(await page.locator('.first-failure').textContent(), /bad-link/);
+    assert.match(await page.locator('.sample-note').textContent(), /original sample, receipts and public key were retained unchanged/i);
+    await page.getByRole('button', { name: 'Restore Original' }).click();
+    await waitResult(page, 'Intact');
+    assert.match(await page.locator('#result-heading').textContent(), /Intact/);
+    assert.match(await page.locator('.result-panel').textContent(), /800 records checked/);
   });
 
   await check('payload byte flip on a copy preserves CRC and finds the first bad link', async () => {
@@ -375,6 +407,7 @@ try {
     const videoTimestamp = videoControls.match(/telemetry from record [\d,]+ at ([\d,]+) µs/)?.[1].replaceAll(',', '');
     assert.ok(selectedTimestamp && selectedTimestamp === videoTimestamp, `selected point ${selectedPointLabel}; video selection ${videoControls}`);
     assert.match(await page.locator('.video-sync-controls').textContent(), /source byte/);
+    if (!(await page.getByRole('button', { name: 'Export PDF' }).isVisible())) await page.locator('.source-actions > summary').click();
     const [pdfDownload] = await Promise.all([page.waitForEvent('download'), page.getByRole('button', { name: 'Export PDF' }).first().click()]);
     const report = await PDFDocument.load(readFileSync(await pdfDownload.path()), { updateMetadata: false });
     assert.equal(report.getTitle(), 'HashWing integrity report');
@@ -438,9 +471,9 @@ try {
       };
     });
     await page.locator('#receipt-input').setInputFiles({ name: 'slow.receipts', mimeType: 'text/plain', buffer: Buffer.from('delayed') });
-    await page.waitForFunction(() => typeof window.__rejectSlowReceipt === 'function' && document.querySelector('.field-hint'));
+    await page.waitForFunction(() => typeof window.__rejectSlowReceipt === 'function' && document.querySelector('.input-grid .field-hint[role="status"]'));
     await page.locator('#receipt-input').setInputFiles(resolve(ROOT, '../docs/samples/flight.receipts'));
-    await page.waitForFunction(() => !document.querySelector('.field-hint'));
+    await page.waitForFunction(() => !document.querySelector('.input-grid .field-hint[role="status"]'));
     await page.getByRole('button', { name: 'Run check' }).click(); await waitResult(page, 'Intact');
     await page.evaluate(() => { window.__rejectSlowReceipt(new Error('stale receipt read')); window.__rejectSlowReceipt = null; });
     await page.waitForTimeout(40);
@@ -508,6 +541,8 @@ try {
 
   await check('cancel during sample body read cannot start a stale verification', async () => {
     await route(page, 'sandbox');
+    const acceptFixtureSwitch = (dialog) => dialog.accept();
+    page.on('dialog', acceptFixtureSwitch);
     await page.evaluate(() => {
       const original = window.fetch.bind(window);
       window.__restoreFetch = () => { window.fetch = original; };
@@ -516,8 +551,10 @@ try {
         return original(input, options);
       };
     });
-    await page.getByRole('button', { name: /Load full PX4 sample/ }).click();
-    await page.waitForFunction(() => typeof window.__releaseSampleBody === 'function');
+    try {
+      await page.getByRole('button', { name: /Load full PX4 sample/ }).click();
+      await page.waitForFunction(() => typeof window.__releaseSampleBody === 'function', null, { timeout: 30000 }).catch(async () => assert.fail(`full PX4 response was not intercepted: ${JSON.stringify(await page.evaluate(() => ({ hash: location.hash, releaseHook: typeof window.__releaseSampleBody, result: document.querySelector('#result-heading')?.textContent || null, busy: document.querySelector('.busy-card')?.textContent || null, button: [...document.querySelectorAll('button')].find((item) => item.textContent.includes('Load full PX4'))?.disabled ?? null, fetch: window.fetch.toString().slice(0, 180) })))}`));
+    } finally { page.off('dialog', acceptFixtureSwitch); }
     await page.getByRole('button', { name: 'Cancel' }).click();
     await page.evaluate(() => { window.__releaseSampleBody(new Blob(['cancelled sample response'])); window.__releaseSampleBody = null; window.__restoreFetch(); });
     await page.waitForTimeout(100);
@@ -528,17 +565,18 @@ try {
   await check('record detail file read failure has retry and stale rejection cannot replace a newer record', async () => {
     await route(page, 'sandbox'); await loadFreshDemo(page);
     await route(page, 'records');
-    await page.waitForFunction(() => document.querySelectorAll('.record-list button').length >= 50 && document.querySelector('.detail-grid'));
+    await page.waitForFunction(() => document.querySelectorAll('.record-list button').length >= 50 && document.querySelector('.detail-grid'), null, { timeout: 30000 }).catch(async () => assert.fail(`record view did not load after sample verification: ${JSON.stringify(await page.evaluate(() => ({ hash: location.hash, sample: document.querySelector('.sample-current')?.textContent || null, result: document.querySelector('.result-stat')?.textContent || null, rows: document.querySelectorAll('.record-list button').length, detail: !!document.querySelector('.detail-grid'), alert: document.querySelector('[role="alert"]')?.textContent || null, busy: document.querySelector('.busy-card')?.textContent || null, operation: document.querySelector('.operation-status')?.textContent || null })))}`));
     await page.evaluate(() => {
       const original = Blob.prototype.arrayBuffer; window.__originalBlobArrayBuffer = original; let rejectNext = true;
       Blob.prototype.arrayBuffer = function (...args) { if (rejectNext) { rejectNext = false; return new Promise((_, reject) => { window.__rejectRecordRead = reject; }); } return original.apply(this, args); };
     });
     await page.locator('.record-list button').nth(1).click();
-    await page.waitForFunction(() => typeof window.__rejectRecordRead === 'function');
+    await page.waitForFunction(() => typeof window.__rejectRecordRead === 'function', null, { timeout: 3000 }).catch(async () => assert.fail(`record read injection did not start: ${JSON.stringify(await page.evaluate(() => ({ heading: document.querySelector('#record-detail-title')?.textContent || null, detail: !!document.querySelector('.detail-grid'), alert: document.querySelector('[role="alert"]')?.textContent || null, rejectHook: typeof window.__rejectRecordRead })))}`));
+    const newerRecord = (await page.locator('.record-list button').nth(2).locator('.record-index').textContent()).trim();
     await page.locator('.record-list button').nth(2).click();
-    await page.waitForFunction(() => document.querySelector('#record-detail-title')?.textContent === 'Record 752' && document.querySelector('.detail-grid'));
+    await page.waitForFunction((index) => document.querySelector('#record-detail-title')?.textContent === `Record ${index}` && document.querySelector('.detail-grid'), newerRecord, { timeout: 5000 }).catch(async () => assert.fail(`newer record did not replace delayed read: ${JSON.stringify(await page.evaluate(() => ({ heading: document.querySelector('#record-detail-title')?.textContent || null, detail: !!document.querySelector('.detail-grid'), alert: document.querySelector('[role="alert"]')?.textContent || null, rows: [...document.querySelectorAll('.record-list button')].slice(0, 4).map((row) => row.innerText) })))}`));
     await page.evaluate(() => { window.__rejectRecordRead(new Error('injected stale read failure')); window.__rejectRecordRead = null; });
-    assert.equal(await page.locator('#record-detail-title').textContent(), 'Record 752');
+    assert.equal(await page.locator('#record-detail-title').textContent(), `Record ${newerRecord}`);
     await page.evaluate(() => {
       const original = window.__originalBlobArrayBuffer; let rejectOnce = true;
       Blob.prototype.arrayBuffer = function (...args) { if (rejectOnce) { rejectOnce = false; return Promise.reject(new Error('injected current read failure')); } return original.apply(this, args); };
@@ -547,14 +585,13 @@ try {
     await page.getByRole('button', { name: 'Retry' }).waitFor({ timeout: 5000 }).catch(async () => assert.fail(`current record read did not expose retry: ${(await page.locator('.detail-panel').innerText()).slice(0, 500)}`));
     await page.evaluate(() => { Blob.prototype.arrayBuffer = window.__originalBlobArrayBuffer; });
     await page.getByRole('button', { name: 'Retry' }).click();
-    await page.waitForFunction(() => document.querySelector('.detail-grid')?.textContent.includes('Payload length'));
+    await page.waitForFunction(() => document.querySelector('.detail-grid')?.textContent.includes('Payload length'), null, { timeout: 5000 }).catch(async () => assert.fail(`record retry did not restore detail: ${JSON.stringify(await page.evaluate(() => ({ heading: document.querySelector('#record-detail-title')?.textContent || null, detail: document.querySelector('.detail-grid')?.textContent.slice(0, 240) || null, alert: document.querySelector('[role="alert"]')?.textContent || null, status: document.querySelector('[role="status"]')?.textContent || null })))}`));
     assert.equal(runtimeErrors.length, 0, runtimeErrors.join('\n'));
   });
 
   await check('video sync decodes real H.264, preserves it across record navigation and seeks native timestamps', async () => {
     await route(page, 'sandbox'); await loadFreshDemo(page);
     await route(page, 'records');
-    await page.getByRole('button', { name: 'First', exact: true }).click();
     await page.locator('.record-list button').first().click();
     await route(page, 'video');
     await page.locator('#video-input').setInputFiles(join(HERE, 'fixtures/synthetic-sync.mp4'));
@@ -576,13 +613,15 @@ try {
     assert.match(await page.locator('.video-meta').textContent(), /outside this video/);
   });
 
-  await check('320/768/1440 layouts have no page overflow and pass axe; keyboard skip link works', async () => {
+  await check('320/375/768/1024/1440 layouts contain result values and pass axe; keyboard skip link works', async () => {
     await route(page, 'sandbox'); await page.reload(); await loadFreshDemo(page);
-    for (const [width, height] of [[320, 900], [375, 812], [768, 900], [1440, 900]]) {
+    for (const [width, height] of [[320, 900], [375, 812], [768, 900], [1024, 900], [1440, 900]]) {
       await page.setViewportSize({ width, height });
       await page.waitForTimeout(80);
       const dimensions = await page.evaluate(() => ({ doc: document.documentElement.scrollWidth, client: document.documentElement.clientWidth }));
       assert.ok(dimensions.doc <= dimensions.client + 1, `${width}px overflow: ${JSON.stringify(dimensions)}`);
+      const overflowingFacts = await page.locator('.stats-grid > div').evaluateAll((cells) => cells.filter((cell) => cell.scrollWidth > cell.clientWidth + 1).map((cell) => cell.querySelector('span')?.textContent));
+      assert.deepEqual(overflowingFacts, [], `${width}px result values overlap neighboring cells`);
       const targets = await page.locator('.sample-toolbar button, .quickstart-head .text-action').evaluateAll((elements) => elements.map((element) => ({ name: element.textContent, width: element.getBoundingClientRect().width, height: element.getBoundingClientRect().height })));
       assert.ok(targets.every((target) => target.width >= 44 && target.height >= 44), `${width}px sample targets: ${JSON.stringify(targets)}`);
       await auditAxe(page, `${width}px sandbox`);
@@ -650,7 +689,7 @@ try {
     await page.evaluate(() => history.back());
     await page.waitForFunction(() => location.hash.startsWith('#/app/sandbox') && document.activeElement?.id === 'page-sandbox').catch(async () => assert.fail(`browser Back did not restore Samples focus: ${await page.evaluate(() => location.hash)}; focus=${await page.evaluate(() => document.activeElement?.id)}`));
     await page.evaluate(() => history.forward());
-    await page.waitForFunction(() => location.hash === '#/verify' && document.activeElement?.id === 'page-verify').catch(async () => assert.fail(`browser Forward did not restore Verify focus: ${await page.evaluate(() => location.hash)}; focus=${await page.evaluate(() => document.activeElement?.id)}`));
+    await page.waitForFunction(() => location.hash.startsWith('#/app/verify') && document.activeElement?.id === 'page-verify').catch(async () => assert.fail(`browser Forward did not restore Verify route/focus: ${await page.evaluate(() => location.hash)}; focus=${await page.evaluate(() => document.activeElement?.id)}`));
     await auditAxe(page, '320px routed page');
   });
 
@@ -674,6 +713,7 @@ try {
       }
       return false;
     }, required, { timeout: 60000 });
+    await offlinePage.locator('.install-tools > summary').click();
     await offlinePage.getByRole('button', { name: 'Prepare offline' }).click();
     await offlinePage.waitForFunction(() => document.querySelector('.offline-note')?.textContent.includes('ready on this device'), null, { timeout: 60000 });
     await route(offlinePage, 'sandbox');
@@ -738,6 +778,7 @@ try {
 
   await check('PDF export is a valid downloadable integrity report', async () => {
     await loadLandingDemo(page);
+    if (!(await page.getByRole('button', { name: 'Export PDF' }).isVisible())) await page.locator('.source-actions > summary').click();
     const [pdfDownload] = await Promise.all([page.waitForEvent('download'), page.getByRole('button', { name: 'Export PDF' }).first().click()]);
     assert.equal(pdfDownload.suggestedFilename(), 'hashwing-integrity-report.pdf');
     const pdf = await PDFDocument.load(readFileSync(await pdfDownload.path()), { updateMetadata: false });
@@ -750,6 +791,7 @@ try {
     await page.locator('#workbench-file').setInputFiles({ name: 'Café-東京-שלום.fseal', mimeType: 'application/octet-stream', buffer: readFileSync(resolve(ROOT, '../docs/samples/intact.fseal')) });
     await page.waitForFunction(() => location.hash.startsWith('#/app/verify'), null, { timeout: 10000 }).catch(async () => assert.fail(`PDF test file selection did not open Verify: ${(await page.locator('body').innerText()).slice(0, 900)}`));
     await page.getByRole('button', { name: 'Run check' }).click(); await waitResult(page, 'Intact');
+    if (!(await page.getByRole('button', { name: 'Export PDF' }).isVisible())) await page.locator('.source-actions > summary').click();
     const [unicodePdfDownload] = await Promise.all([page.waitForEvent('download'), page.getByRole('button', { name: 'Export PDF' }).click()]);
     const unicodePdf = await PDFDocument.load(readFileSync(await unicodePdfDownload.path()), { updateMetadata: false });
     assert.ok(unicodePdf.catalog.get(PDFName.of('StructTreeRoot')));
