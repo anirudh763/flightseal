@@ -49,6 +49,13 @@ async function loadLandingDemo(page) {
   await page.getByRole('button', { name: 'Inspect records and export' }).click();
   await waitResult(page, 'Intact');
 }
+// Samples, Video, Benchmarks and System sit behind the rail's "More tools" disclosure.
+async function clickNav(page, name) {
+  const nav = page.getByRole('navigation', { name: 'Primary navigation' });
+  const link = nav.getByRole('link', { name, exact: true });
+  if (!(await link.isVisible())) { const more = nav.locator('.nav-more'); if (!(await more.evaluate((d) => d.open))) await more.locator('summary').click(); }
+  await link.click();
+}
 async function route(page, screen) {
   await page.evaluate((s) => { location.hash = `/app/${s}`; }, screen);
   await page.waitForFunction((s) => location.hash === `#/app/${s}`, screen);
@@ -161,7 +168,7 @@ try {
     const selectedUrl = new URL(page.url());
     assert.equal(selectedUrl.search, '', 'sample identity is not sent as an HTTP query string');
     assert.match(selectedUrl.hash, /sample=intact/);
-    await page.getByRole('navigation', { name: 'Primary navigation' }).getByRole('link', { name: 'Samples' }).click();
+    await clickNav(page, 'Samples');
     await waitResult(page, 'Intact');
     await page.goto(`${url}#/sandbox?sample=tampered`);
     await page.reload();
@@ -374,7 +381,7 @@ try {
     await page.getByRole('button', { name: 'Clear imported session' }).click();
     await page.waitForFunction(() => !document.querySelector('#result-heading')).catch(async () => assert.fail(`ULog clear did not finish: ${(await page.locator('body').innerText()).slice(0, 1200)}`));
 
-    await page.getByRole('navigation', { name: 'Primary navigation' }).getByRole('link', { name: 'Samples' }).click();
+    await clickNav(page, 'Samples');
     await page.getByRole('button', { name: 'Load telemetry sample' }).click();
     await waitResult(page, 'Intact');
     await page.waitForFunction(() => document.querySelector('.telemetry-panel')?.textContent.includes('256 decoded points')).catch(async () => assert.fail(`synthetic ULog telemetry preview missing: ${(await page.locator('body').innerText()).slice(0, 1600)}`));
@@ -413,7 +420,7 @@ try {
     const report = await PDFDocument.load(readFileSync(await pdfDownload.path()), { updateMetadata: false });
     assert.equal(report.getTitle(), 'HashWing integrity report');
     assert.equal(report.getCreationDate(), undefined);
-    await page.getByRole('navigation', { name: 'Primary navigation' }).getByRole('link', { name: 'Samples' }).click();
+    await clickNav(page, 'Samples');
     await page.getByRole('button', { name: 'Flip one payload byte' }).click();
     await page.waitForFunction(() => document.querySelector('.first-failure')?.textContent.includes('bad-link'), null, { timeout: 30000 });
     assert.equal(await page.getByRole('button', { name: 'Clear imported session' }).count(), 1, 'temporary native import stays available while derived output is open');
@@ -425,7 +432,7 @@ try {
     if (await page.getByRole('button', { name: 'First', exact: true }).isEnabled()) await page.getByRole('button', { name: 'First', exact: true }).click();
     await page.locator('.record-list button').first().click();
     await page.waitForFunction(() => document.querySelector('#record-detail-title')?.textContent === 'Record 0');
-    await page.getByRole('navigation', { name: 'Primary navigation' }).getByRole('link', { name: 'Samples' }).click();
+    await clickNav(page, 'Samples');
     const [afterMutation] = await Promise.all([page.waitForEvent('download'), page.getByRole('button', { name: 'Download text report' }).click()]);
     assert.match(readFileSync(await afterMutation.path(), 'utf8'), /bad-link/);
     await page.getByRole('button', { name: 'Clear imported session' }).click();
@@ -740,16 +747,38 @@ try {
     await page.setViewportSize({ width: 1440, height: 900 });
     await loadLandingDemo(page);
     for (const [screen, title] of [['verify', 'Verify'], ['records', 'Records'], ['receipts', 'Receipts'], ['video', 'Video'], ['help', 'Trust'], ['sandbox', 'Samples']]) {
-      await page.getByRole('navigation', { name: 'Primary navigation' }).getByRole('link', { name: title }).click();
+      await clickNav(page, title);
       await page.waitForFunction((target) => document.activeElement?.id === `page-${target}`, screen, { timeout: 1500 });
     }
     assert.match(await page.locator('.result-stat').textContent(), /800/);
+    const rail = page.getByRole('navigation', { name: 'Primary navigation' });
+    assert.equal(await rail.locator('.nav-more').evaluate((d) => d.open), true, 'More tools stays open on a secondary page');
+    assert.equal(await rail.getByRole('link', { name: 'Samples', exact: true }).getAttribute('aria-current'), 'page');
     await page.getByRole('navigation', { name: 'Primary navigation' }).getByRole('link', { name: 'Verify' }).click();
     await page.locator('#trusted-key').fill('editing');
     await page.getByRole('navigation', { name: 'Primary navigation' }).getByRole('link', { name: 'Records' }).click();
     assert.equal(await page.evaluate(() => location.hash), '#/app/records?sample=intact&record=799');
     await page.getByRole('navigation', { name: 'Primary navigation' }).getByRole('link', { name: 'Verify' }).click();
     assert.equal(await page.locator('#trusted-key').inputValue(), 'editing');
+    await page.goto(`${url}#/protect`); await page.waitForSelector('#page-protect');
+    assert.equal(await rail.locator('.nav-more').evaluate((d) => d.open), false, 'More tools starts closed on a primary page');
+    for (const name of ['Samples', 'Video', 'Benchmarks', 'System']) assert.equal(await rail.getByRole('link', { name, exact: true }).isVisible(), false, `${name} is behind More tools`);
+    assert.equal(await rail.locator('a:visible').count(), 5, 'only the five primary links show');
+    assert.equal(await page.locator('.session-strip').isVisible(), false, 'Seal & send hides the workbench session strip');
+    assert.equal(await page.locator('.source-actions').isVisible(), false, 'Seal & send hides the workbench source actions');
+    await rail.locator('.nav-more summary').click();
+    assert.equal(await rail.getByRole('link', { name: 'Benchmarks', exact: true }).isVisible(), true);
+    await rail.locator('.nav-more summary').press('Escape');
+    assert.equal(await rail.locator('.nav-more').evaluate((d) => d.open), false, 'Escape closes More tools');
+    await page.goto(`${url}#/video`); await page.waitForSelector('#page-video');
+    assert.equal(await rail.locator('.nav-more').evaluate((d) => d.open), true, 'a secondary page opens More tools by itself');
+    assert.equal(await rail.getByRole('link', { name: 'Video', exact: true }).getAttribute('aria-current'), 'page');
+    await page.setViewportSize({ width: 320, height: 900 });
+    await page.goto(`${url}#/protect`); await page.waitForSelector('#page-protect');
+    await page.getByRole('button', { name: 'Menu' }).click();
+    await rail.locator('.nav-more summary').focus(); await page.keyboard.press('Escape');
+    assert.equal(await page.locator('#primary-nav').isVisible(), false, 'Escape on a closed More tools still closes the mobile menu');
+    await page.setViewportSize({ width: 1440, height: 900 });
   });
 
   await check('direct routes and root hash resolve to their own current screens', async () => {
@@ -814,6 +843,7 @@ try {
     await page.getByLabel(/Import this guest session/).check();
     await page.getByRole('button', { name: 'Create account' }).click();
     await page.waitForFunction(() => document.querySelector('.profile-menu > summary')?.textContent.includes('backup-'));
+    assert.equal(await page.getByRole('navigation', { name: 'Account and workspace' }).isVisible(), false, 'signed-in account sees no Log in / Create account links');
     await page.locator('.profile-menu').locator('summary').click();
     await page.locator('#backup-passphrase').fill(backupPassphrase);
     const [backupDownload] = await Promise.all([page.waitForEvent('download'), page.getByRole('button', { name: 'Download encrypted backup' }).click()]);
