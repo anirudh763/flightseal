@@ -62,3 +62,4 @@ Pass 1 (quick lens): 5 real (2 medium, 3 low), 1 rejected.
 - low, rejected: duplicate `useState` initializer plus effect. The initializer avoids one closed-then-open render on a deep link; harmless.
 
 Verification (macOS, this branch): console browser 33/33, JS 131/131, edge-matrix ok, e2e 5/5 (the file has 5 checks; AGENTS.md says 6, pre-existing), routes 6/6, private-lifecycle 19/19, action-offline 3/3, product-routes no unexpected HTTP failures. Screenshots at 320/768/1440 px: no console errors, no horizontal scroll. newweb/tests/profiles.mjs fails 3/7 identically on unchanged main (not in CI); deferred.
+- medium, patched (CI pass 2): More tools sometimes stayed closed on a secondary page. A <details> toggle event fires late, so the mirrored React state was still true after Escape and the reopen was a no-op. Now the route sets the DOM open state directly in a layout effect; repro script went from 13/15 failures to 0/15, console suite 33/33 six runs in a row.

@@ -114,8 +114,9 @@ function App() {
   const [activeSession, setActiveSession] = useState(activeLocalSession);
   const [localProfile, setLocalProfile] = useState(() => localProfileFor(activeLocalSession()));
   const [menuOpen, setMenuOpen] = useState(false);
-  const [moreOpen, setMoreOpen] = useState(() => MORE_NAV.some(([key]) => key === route.screen));
-  useEffect(() => { setMoreOpen(MORE_NAV.some(([key]) => key === screen)); }, [screen]); // opens on a secondary page, tidies away on a primary one
+  const moreRef = useRef(null);
+  // Set the DOM directly: a <details> toggle event arrives late, so a mirrored state value can be stale.
+  useLayoutEffect(() => { if (moreRef.current) moreRef.current.open = MORE_NAV.some(([key]) => key === screen); }, [screen]); // opens on a secondary page, tidies away on a primary one
   const [result, setResult] = useState(null);
   const [busy, setBusy] = useState('');
   const [error, setError] = useState('');
@@ -1374,7 +1375,7 @@ function App() {
       <button type="button" className="rail-menu" aria-expanded={menuOpen} aria-controls="primary-nav" onClick={() => setMenuOpen((open) => !open)}><Menu size={16} aria-hidden="true" />Menu</button>
       <nav id="primary-nav" className={`nav${menuOpen ? ' open' : ''}`} aria-label="Primary navigation">
         {(productMode ? CANONICAL_NAV : PRIMARY_NAV).map(navLink)}
-        {!productMode && <details className="nav-more" open={moreOpen} onToggle={(e) => setMoreOpen(e.currentTarget.open)} onKeyDown={closeDisclosure}><summary>More tools</summary>{MORE_NAV.map(navLink)}</details>}
+        {!productMode && <details ref={moreRef} className="nav-more" onKeyDown={closeDisclosure}><summary>More tools</summary>{MORE_NAV.map(navLink)}</details>}
       </nav>
       <div className="rail-foot"><span className="local-dot" aria-hidden="true" />Local files</div>
         <details className="workspace-tools-menu" onKeyDown={closeDisclosure}><summary>Other apps</summary><div>{SUITE_LINKS.map((tool) => tool.state === 'unavailable' ? <span key={tool.name} aria-disabled="true">{tool.name} · unavailable (HTTP 404)</span> : <a key={tool.name} href={tool.href} target="_blank" rel="noreferrer">{tool.name}</a>)}</div></details>

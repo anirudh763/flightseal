@@ -761,7 +761,7 @@ try {
     await page.getByRole('navigation', { name: 'Primary navigation' }).getByRole('link', { name: 'Verify' }).click();
     assert.equal(await page.locator('#trusted-key').inputValue(), 'editing');
     await page.goto(`${url}#/protect`); await page.waitForSelector('#page-protect');
-    assert.equal(await rail.locator('.nav-more').evaluate((d) => d.open), false, 'More tools starts closed on a primary page');
+    await page.waitForFunction(() => document.querySelector('.nav-more')?.open === false, null, { timeout: 3000 }).catch(() => assert.fail('More tools starts closed on a primary page'));
     for (const name of ['Samples', 'Video', 'Benchmarks', 'System']) assert.equal(await rail.getByRole('link', { name, exact: true }).isVisible(), false, `${name} is behind More tools`);
     assert.equal(await rail.locator('a:visible').count(), 5, 'only the five primary links show');
     assert.equal(await page.locator('.session-strip').isVisible(), false, 'Seal & send hides the workbench session strip');
@@ -771,7 +771,7 @@ try {
     await rail.locator('.nav-more summary').press('Escape');
     assert.equal(await rail.locator('.nav-more').evaluate((d) => d.open), false, 'Escape closes More tools');
     await page.goto(`${url}#/video`); await page.waitForSelector('#page-video');
-    assert.equal(await rail.locator('.nav-more').evaluate((d) => d.open), true, 'a secondary page opens More tools by itself');
+    await page.waitForFunction(() => document.querySelector('.nav-more')?.open === true, null, { timeout: 3000 }).catch(() => assert.fail('a secondary page opens More tools by itself'));
     assert.equal(await rail.getByRole('link', { name: 'Video', exact: true }).getAttribute('aria-current'), 'page');
     await page.setViewportSize({ width: 320, height: 900 });
     await page.goto(`${url}#/protect`); await page.waitForSelector('#page-protect');
