@@ -359,6 +359,38 @@ export function ed25519Supported() {
   return ed25519Probe;
 }
 
+export const WEAK_KEY_MESSAGE = "This public key is weak and can't prove anything";
+
+// The y coordinates (sign bit cleared) of the 8 small-order points, as in libsodium's has_small_order list; the
+// other entries of that list have y >= p and are caught as non-canonical. Same rule as weak_public_key in src/fseal.cpp.
+const SMALL_ORDER_Y = [
+  "00".repeat(32),
+  "01" + "00".repeat(31),
+  "26e8958fc2b227b045c3f489f2ef98f0d5dfac05d3c63339b13802886d53fc05",
+  "c7176a703d4dd84fba3c0b760d10670f2a2053fa2c39ccc64ec7fd7792ac037a",
+  "ec" + "ff".repeat(30) + "7f",
+];
+
+/**
+ * True for an Ed25519 public key that can prove nothing: a small-order point or a non-canonical encoding (y >= p).
+ * Under such a key a signature R = small-order point, S = 0 verifies for any message in OpenSSL and Chromium.
+ */
+export function weakPublicKey(key) {
+  const y = Uint8Array.from(key);
+  y[31] &= 0x7f;
+  if (y[31] === 0x7f && y.subarray(1, 31).every((b) => b === 0xff) && y[0] >= 0xed) return true;
+  return SMALL_ORDER_Y.includes(hex(y));
+}
+
+/** Ed25519 verify that returns false for a weak key without asking WebCrypto. `cache` holds imported keys by hex. */
+export async function ed25519Verify(key, sig, message, cache = new Map()) {
+  if (weakPublicKey(key)) return false;
+  const k = hex(key);
+  if (!cache.has(k)) cache.set(k, subtle().importKey("raw", key, { name: "Ed25519" }, false, ["verify"]).catch(() => null));
+  const imported = await cache.get(k);
+  return imported ? subtle().verify({ name: "Ed25519" }, imported, sig, message) : false;
+}
+
 function signedMessage(count, head) {
   const label = new TextEncoder().encode("fseal-receipt v1");
   const m = new Uint8Array(label.length + 8 + 32);
@@ -377,6 +409,7 @@ export async function checkReceipts(receipts, trustedKey, scan, signal = null) {
   // Cancel (or a new run) stops the checks between signatures, and no result is returned after it.
   const stop = () => { if (signal && signal.aborted) throw new DOMException("verification cancelled", "AbortError"); };
   stop();
+  if (weakPublicKey(trustedKey)) throw new Error(WEAK_KEY_MESSAGE);
   const canVerify = await ed25519Supported();
   stop();
   const keys = new Map();
@@ -390,12 +423,8 @@ export async function checkReceipts(receipts, trustedKey, scan, signal = null) {
       continue;
     }
     if (canVerify) {
-      const k = hex(rc.key);
-      if (!keys.has(k)) keys.set(k, subtle().importKey("raw", rc.key, { name: "Ed25519" }, false, ["verify"]).catch(() => null));
       stop();
-      const key = await keys.get(k);
-      stop();
-      const ok = key ? await subtle().verify({ name: "Ed25519" }, key, rc.sig, signedMessage(rc.count, rc.head)) : false;
+      const ok = await ed25519Verify(rc.key, rc.sig, signedMessage(rc.count, rc.head), keys);
       stop();
       out.sigChecked = true;
       if (!ok) {

@@ -131,3 +131,17 @@ public key, and the verifier pastes that message. A saved signing key is used wh
 flights); otherwise the key is generated per file and discarded.
 **Rejected:** a new format version (breaks three readers for no gain); trusting a public key that travels with the
 log; storing a generated key silently.
+
+### 22. Refuse weak Ed25519 public keys before any signature check
+OpenSSL's Ed25519 verify (3.5.9 CLI, OpenSSL 4 as linked by `fseal`) and Chromium's WebCrypto accept a small-order
+or non-canonical public key, and under one of them `R` = a small-order point with `S` = 0 verifies for any message.
+A rewritten log with such a receipt and key printed `RESULT: INTACT`. Every verifier (`src/fseal.cpp`
+`weak_public_key`, used by the CLI, Wasm bridge and `ed25519_verify`; `docs/verifier.js` `weakPublicKey`; named key
+pins in `newweb/src/trusted-keys.mjs`) now refuses a key whose y, sign bit ignored, is at least p or is one of the five
+y values of the 8 small-order points. Together these are libsodium's `has_small_order` blacklist
+(`crypto_core/ed25519/ref10/ed25519_ref10.c`) plus the canonical-encoding check. A weak trusted key is an input error
+("This public key is weak and can't prove anything"), not a verdict. The primitive also returns false for one. The
+vectors and the generator that derives them from the curve are in `tests/fixtures/`.
+**Rejected:** relying on the platform verifier (OpenSSL and BoringSSL both accept); reporting a weak key as UNVERIFIED
+(it is a mistake in the input, and saying so is clearer); also rejecting small-order `R` (the key check together with
+OpenSSL's `S < L` check already closes the forgery).

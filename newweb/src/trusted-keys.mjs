@@ -1,3 +1,5 @@
+import { WEAK_KEY_MESSAGE, parseHex, weakPublicKey } from '../../docs/verifier.js';
+
 const STORAGE_KEY = 'flightseal_trusted_keys_v1';
 const MAX_KEYS = 32;
 export async function fingerprintHex(publicKey, cryptoObject = globalThis.crypto) {
@@ -19,6 +21,7 @@ export async function pinTrustedKey(nameInput, publicKey, { storage = globalThis
   if (!name || name.length > 80) throw new Error('Enter a key profile name up to 80 characters.');
   const value = String(publicKey || '').trim().toLowerCase();
   const fingerprint = await fingerprintHex(value, cryptoObject);
+  if (weakPublicKey(parseHex(value, 32))) throw new Error(WEAK_KEY_MESSAGE);
   const entries = read(storage);
   const existing = entries.find((entry) => entry.name.toLowerCase() === name.toLowerCase());
   if (existing && existing.publicKey !== value && !confirmRotation) throw new Error(`Key changed for “${existing.name}” (old fingerprint ${existing.fingerprint}). Confirm rotation after verifying the new key independently.`);

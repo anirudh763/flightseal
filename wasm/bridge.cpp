@@ -98,6 +98,7 @@ EMSCRIPTEN_KEEPALIVE const char* fseal_verify(const char* path, const char* rece
     if (receipts_text.empty() != key.empty()) throw std::invalid_argument("receipts and independently trusted public key must be supplied together");
     fseal::PublicKey trusted{};
     if (!key.empty() && !fseal::parse_hex(key, trusted.data(), trusted.size())) throw std::invalid_argument("trusted key must contain 64 lowercase hexadecimal digits");
+    if (!key.empty() && fseal::weak_public_key(trusted)) throw std::invalid_argument(fseal::kWeakKeyMessage);
     std::vector<fseal::Receipt> receipts;
     std::map<uint64_t, fseal::Hash> links;
     std::istringstream lines(receipts_text);

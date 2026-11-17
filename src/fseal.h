@@ -97,6 +97,12 @@ struct Receipt {
 PublicKey generate_key(const std::string& pem_path);  // Ed25519 private key, PEM, file mode 0600; returns its public key
 PublicKey public_key(const std::string& pem_path);
 Receipt sign_receipt(const std::string& pem_path, uint64_t count, const Hash& head);
+// A weak key (small-order point or non-canonical encoding) lets anyone forge a signature OpenSSL accepts for any
+// message, so it can never prove anything. Verifiers refuse it as a trusted key with kWeakKeyMessage.
+extern const char kWeakKeyMessage[];
+bool weak_public_key(const PublicKey& key);
+// Plain Ed25519 verify that returns false for a weak key; throws CryptoError if OpenSSL fails (not a verdict).
+bool ed25519_verify(const PublicKey& key, const uint8_t* msg, size_t n, const Signature& sig);
 // Checks the signature against the key inside the receipt; throws CryptoError if OpenSSL fails (not a verdict).
 bool signature_ok(const Receipt& r);
 std::string to_line(const Receipt& r);

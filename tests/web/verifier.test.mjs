@@ -355,3 +355,44 @@ test("a receipt past the end of the log names both causes, in the CLI and the JS
   assert.match(cli(c).stdout, want);
   assert.match((await js(c)).report, want);
 });
+
+// Weak Ed25519 keys (small-order or non-canonical): Chromium's WebCrypto accepts R = small-order, S = 0 for any
+// message under them, so the verifier refuses them before WebCrypto runs. Vectors: tests/fixtures/ed25519-weak-keys.json.
+const WEAK = JSON.parse(readFileSync(join(ROOT, "tests/fixtures/ed25519-weak-keys.json"), "utf8"));
+const unhex = (h) => Uint8Array.from(h.match(/../g) || [], (b) => parseInt(b, 16));
+
+test("weak Ed25519 keys are detected, and RFC 8032 vectors 1-3 still verify", async () => {
+  const { weakPublicKey, ed25519Verify, WEAK_KEY_MESSAGE } = await import("../../docs/verifier.js");
+  assert.equal(WEAK_KEY_MESSAGE, WEAK.error);
+  assert.equal(WEAK.weak.length, 48);
+  for (const e of WEAK.weak) assert.equal(weakPublicKey(unhex(e.key)), true, e.key);
+  for (const k of WEAK.not_weak) assert.equal(weakPublicKey(unhex(k)), false, k);
+  const message = (count, head) => {
+    const m = new Uint8Array(56);
+    m.set(new TextEncoder().encode("fseal-receipt v1"));
+    new DataView(m.buffer).setBigUint64(16, BigInt(count), true);
+    m.set(unhex(head), 24);
+    return m;
+  };
+  const forged = WEAK.weak.filter((e) => e.sig);
+  assert.equal(forged.length, 14);
+  for (const e of forged) assert.equal(await ed25519Verify(unhex(e.key), unhex(e.sig), message(e.count, e.head)), false, e.key);
+  for (const v of WEAK.rfc8032) {
+    assert.equal(weakPublicKey(unhex(v.key)), false);
+    assert.equal(await ed25519Verify(unhex(v.key), unhex(v.sig), unhex(v.msg)), true, v.key);
+  }
+});
+
+test("checkReceipts refuses a weak trusted key with a clear error, and a real key still checks out", async () => {
+  const samples = join(ROOT, "docs", "samples");
+  const scan = await scanLog(bytesSource(new Uint8Array(readFileSync(join(samples, "intact.fseal")))), { linksAt: [1n, 7n] });
+  for (const e of WEAK.weak.filter((x) => x.sig)) {
+    const { receipts } = parseReceipts(`fseal-receipt v1 count=${e.count} head=${e.head} key=${e.key} sig=${e.sig}\n`);
+    await assert.rejects(checkReceipts(receipts, unhex(e.key), scan), { message: WEAK.error });
+  }
+  const real = parseReceipts(readFileSync(join(samples, "flight.receipts"), "utf8")).receipts;
+  const key = parseHex(readFileSync(join(samples, "pubkey.txt"), "utf8").trim(), 32);
+  const full = await scanLog(bytesSource(new Uint8Array(readFileSync(join(samples, "intact.fseal")))), { linksAt: real.map((r) => r.count) });
+  const check = await checkReceipts(real, key, full);
+  assert.equal(summarize(full, check).result, "INTACT");
+});
