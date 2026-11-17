@@ -117,6 +117,17 @@ try {
     await layout(page, 'manifest sealed');
   });
 
+  await check('the sealed list survives a route change, with unique ids on the other screen', async () => {
+    await page.evaluate(() => { location.hash = '/app/verify'; });
+    await page.waitForFunction(() => document.querySelector('.commandbar h1')?.textContent === 'Verify');
+    const duplicates = await page.evaluate(() => { const ids = [...document.querySelectorAll('[id]')].map((el) => el.id); return ids.filter((id, i) => ids.indexOf(id) !== i); });
+    assert.deepEqual(duplicates, []);
+    await page.evaluate(() => { location.hash = '/app/protect'; });
+    await page.waitForFunction(() => document.querySelector('.commandbar h1')?.textContent === 'Seal & send');
+    assert.equal(await page.getByLabel('Large files (fingerprint only)').isChecked(), true);
+    assert.equal(await page.locator('#manifest-handover-text').inputValue(), handover);
+  });
+
   await check('Check: modified, missing and extra files get Bytes differ / Missing / Not in manifest', async () => {
     const changed = Buffer.from(a); changed[10] ^= 1;
     const localPaths = [join(dir, 'local'), join(dir, 'local', 'a.bin'), join(dir, 'local', 'b.bin'), join(dir, 'local', 'extra.bin')];
@@ -132,7 +143,7 @@ try {
     assert.deepEqual(rows.map((r) => [r[0], r[3].split('\n')[0], r[4]]), [['1', 'Bytes differ', 'a.bin'], ['2', 'Matches', 'b.bin'], ['3', 'Missing', '—'], ['—', 'Not in manifest', 'extra.bin']]);
     assert.match(rows[0][1], /a\.bin/);
     assert.match(rows[1][1], /Operator note: Camera B, landed 14:02/);
-    assert.match(rows[0][3], /This can happen from editing, re-saving, compression, truncation or corruption — it isn't proof of tampering\./);
+    assert.match(rows[0][3], /This can happen from editing, re-saving, metadata changes, recompression, truncation or corruption — it isn't proof of tampering\./);
     const chips = await page.locator('.manifest-table .status-label').evaluateAll((els) => els.map((el) => [el.textContent, el.className]));
     assert.deepEqual(chips, [['Bytes differ', 'status-label warn'], ['Matches', 'status-label ok'], ['Missing', 'status-label grey'], ['Not in manifest', 'status-label neutral']]);
     const text = await page.locator('.manifest-outcome').innerText();

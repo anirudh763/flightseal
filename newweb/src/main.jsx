@@ -140,7 +140,8 @@ function App() {
   const [sealSourceMetadata, setSealSourceMetadata] = useState(null);
   const [protectFile, setProtectFile] = useState(null);
   const [protectMode, setProtectMode] = useState('embedded');
-  const [manifestActive, setManifestActive] = useState(false);
+  const [manifestSealActive, setManifestSealActive] = useState(false);
+  const [manifestCheckActive, setManifestCheckActive] = useState(false);
   const [protectSealed, setProtectSealed] = useState(null);
   const [checkFile, setCheckFile] = useState(null);
   const [checkText, setCheckText] = useState('');
@@ -198,7 +199,7 @@ function App() {
   const workspaceScreenRef = useRef('sandbox');
   const authAttemptRef = useRef({ mode: null, email: null });
   const updateSafeRef = useRef(true);
-  updateSafeRef.current = !busy && !manifestActive && !(sealOutput && !sealOutputAcknowledged);
+  updateSafeRef.current = !busy && !manifestSealActive && !manifestCheckActive && !(sealOutput && !sealOutputAcknowledged);
 
   const navigate = useCallback((next, options = {}) => {
     const routeName = [...NAV,...CANONICAL_NAV].some(([key]) => key === next) ? next : 'not-found';
@@ -1435,8 +1436,6 @@ function App() {
           <label><input type="radio" name="protect-mode" value="manifest" checked={protectMode === 'manifest'} disabled={!!busy} onChange={() => setProtectMode('manifest')} />Large files (fingerprint only)</label>
           <label><input type="radio" name="protect-mode" value="embedded" checked={protectMode === 'embedded'} onChange={() => setProtectMode('embedded')} />Small file (seal the whole file, up to 45 MiB)</label>
         </fieldset>
-        {/* Kept mounted while hidden, so switching modes never drops a running hash or an unsaved sealed list. */}
-        <div className="section-grid" hidden={protectMode !== 'manifest'}><ManifestSeal signingKey={signingKey} onActiveChange={setManifestActive} /><ManifestCheck /></div>
         {protectMode === 'embedded' && <div className="section-grid">
           <section className="panel" aria-labelledby="seal-title"><div className="panel-head"><FileLock2 aria-hidden="true" size={18} /><h2 id="seal-title">Seal a flight log</h2></div><div className="panel-body">
             <p>For the pilot or operator. Works with any log file: PX4 <code>.ulg</code>, ArduPilot <code>.bin</code>, DJI flight records, CSV and others. The exact bytes are sealed.</p>
@@ -1480,6 +1479,10 @@ function App() {
         </div>}
         {protectMode === 'embedded' && result && result === protectResult && <ResultPanel result={result} resultTitle={resultTitle} reportText={reportText} onDownloadText={() => download('hashwing-verification-report.txt', reportText)} onDownloadMarkdown={() => download('hashwing-evidence-report.md', reportMarkdown, 'text/markdown;charset=utf-8')} onDownloadJson={() => download('hashwing-verification-report.json', reportJson, 'application/json')} onNavigate={navigate} onShare={() => setShareDialogOpen(true)} />}
       </section>}
+      {/* Always mounted (hidden elsewhere), so changing mode or route never drops a running hash or an unsaved sealed list. */}
+      <section className="screen protect-screen" aria-label="Large files" hidden={screen !== 'protect' || protectMode !== 'manifest'}>
+        <div className="section-grid"><ManifestSeal signingKey={signingKey} onActiveChange={setManifestSealActive} /><ManifestCheck onActiveChange={setManifestCheckActive} /></div>
+      </section>
 
       {screen === 'sandbox' && <section className="screen" aria-label="Samples and sealing">
         <section className="sandbox-tools" aria-label="Samples">
@@ -1739,7 +1742,7 @@ function AuthPage({ mode, returnTo, guestCanImport, currentSampleName, outputNee
   </div>;
 }
 
-function TrustedKeyPinControls({ value, onUse }) {
+function TrustedKeyPinControls({ value, onUse, idPrefix = 'trusted-key' }) {
   const [name, setName] = useState('');
   const [pins, setPins] = useState(() => { try { return listTrustedKeys(); } catch { return []; } });
   const [message, setMessage] = useState('');
@@ -1754,7 +1757,7 @@ function TrustedKeyPinControls({ value, onUse }) {
       setPins(listTrustedKeys()); setMessage(`Saved local pin ${pinned.name} · SHA-256 ${pinned.fingerprint}. This device decision does not verify pilot identity.`);
     } catch (cause) { setMessage(cause?.message || 'Could not save this public-key pin.'); }
   };
-  return <div className="trusted-key-controls"><label className="field-label" htmlFor="trusted-key-profile">Named local public-key pin</label><select id="trusted-key-profile" defaultValue="" onChange={(event) => { const pin = pins.find((item) => item.name === event.target.value); if (pin) onUse(pin.publicKey); }}><option value="">Choose a saved key profile</option>{pins.map((pin) => <option key={pin.name} value={pin.name}>{pin.name} · {pin.fingerprint.slice(0, 16)}</option>)}</select><label className="field-label" htmlFor="trusted-key-name">Save or rotate key profile</label><input id="trusted-key-name" value={name} maxLength={80} onChange={(event) => setName(event.target.value)} placeholder="For example, Flight recorder 1" /><button type="button" disabled={!value || !name.trim()} onClick={save}>Pin public key on this device</button><p>Pinning is your local trust decision. Confirm every key rotation independently; a fingerprint is not a verified pilot identity.</p>{message && <p role="status">{message}</p>}</div>;
+  return <div className="trusted-key-controls"><label className="field-label" htmlFor={`${idPrefix}-profile`}>Named local public-key pin</label><select id={`${idPrefix}-profile`} defaultValue="" onChange={(event) => { const pin = pins.find((item) => item.name === event.target.value); if (pin) onUse(pin.publicKey); }}><option value="">Choose a saved key profile</option>{pins.map((pin) => <option key={pin.name} value={pin.name}>{pin.name} · {pin.fingerprint.slice(0, 16)}</option>)}</select><label className="field-label" htmlFor={`${idPrefix}-name`}>Save or rotate key profile</label><input id={`${idPrefix}-name`} value={name} maxLength={80} onChange={(event) => setName(event.target.value)} placeholder="For example, Flight recorder 1" /><button type="button" disabled={!value || !name.trim()} onClick={save}>Pin public key on this device</button><p>Pinning is your local trust decision. Confirm every key rotation independently; a fingerprint is not a verified pilot identity.</p>{message && <p role="status">{message}</p>}</div>;
 }
 
 function EncryptedBackupControls({ profileId, isOwnerCurrent }) {
@@ -1979,7 +1982,8 @@ async function hashAll(files, signal, onProgress) {
     try { r = await hashFile(file, { signal, onProgress: (done) => onProgress({ index, done, started }) }); }
     catch (cause) {
       if (cause?.name === 'AbortError') throw cause;
-      throw new Error(`Could not read ${file.name}. It may have been moved, changed or deleted after you chose it. Choose the files again and retry.`);
+      if (/could not be read|NotReadable|the file changed or became unreadable/i.test(cause?.message || '')) throw new Error(`Could not read ${file.name}. It may have been moved, changed or deleted after you chose it. Choose the files again and retry.`);
+      throw new Error(`${cause?.message || 'Hashing failed'}. Reload the page and try again.`);
     }
     out.push({ name: file.name, bytes: r.bytes, sha256: r.sha256 });
   }
@@ -2004,6 +2008,7 @@ function FileProgressList({ files, progress, idPrefix, label, onCancel }) {
 const stamp = () => new Date().toISOString().replace(/[-:]/g, '').replace(/\..*/, '').replace('T', '-');
 const friendlyLimit = (cause) => cause instanceof RangeError && /exceeds 65536 bytes/.test(cause.message)
   ? 'The list is too long to seal. Turn off "Include file names", shorten the notes, or seal fewer files at a time.'
+  : / name /.test(cause.message) ? `${cause.message} Rename the file or turn off Include file names under More options, then press Seal again.`
   : `${cause.message} Shorten it under More options, then press Seal again.`;
 
 function ManifestSeal({ signingKey, onActiveChange }) {
@@ -2102,7 +2107,7 @@ function ManifestSeal({ signingKey, onActiveChange }) {
 }
 
 const STATUS_KIND = { match: 'ok', 'bytes-differ': 'warn', missing: 'grey', 'not-in-manifest': 'neutral' };
-function ManifestCheck() {
+function ManifestCheck({ onActiveChange }) {
   const [sealed, setSealed] = useState(null);
   const [text, setText] = useState('');
   const [key, setKey] = useState('');
@@ -2114,6 +2119,8 @@ function ManifestCheck() {
   const controllerRef = useRef(null);
   const revisionRef = useRef(0);
   useEffect(() => () => controllerRef.current?.abort(), []);
+  useEffect(() => { onActiveChange(running); }, [running, onActiveChange]);
+  useEffect(() => () => onActiveChange(false), [onActiveChange]);
   const changed = (apply) => { revisionRef.current++; controllerRef.current?.abort(); setOutcome(null); setMessage(''); apply(); };
   const run = async () => {
     const revision = ++revisionRef.current;
@@ -2139,7 +2146,7 @@ function ManifestCheck() {
     <textarea id="manifest-check-text" className="mono-input" rows={5} value={text} spellCheck="false" disabled={running} onChange={(e) => changed(() => setText(e.target.value))} />
     <label className="field-label" htmlFor="manifest-trusted-key">Trusted public key <span>(64 hexadecimal digits, received separately)</span></label>
     <input id="manifest-trusted-key" className="mono-input" value={key} autoComplete="off" spellCheck="false" disabled={running} onChange={(e) => changed(() => setKey(e.target.value))} />
-    <TrustedKeyPinControls value={key} onUse={(value) => changed(() => setKey(value))} />
+    <TrustedKeyPinControls idPrefix="manifest-trusted-key-pin" value={key} onUse={(value) => changed(() => setKey(value))} />
     <label className="field-label" htmlFor="manifest-local-files">Your copies of the files</label>
     <input id="manifest-local-files" type="file" multiple disabled={running} onChange={(e) => changed(() => setLocals([...(e.target.files || [])]))} />
     {progress && <FileProgressList files={locals} progress={progress} idPrefix="manifest-check" label="Files being checked" onCancel={() => controllerRef.current?.abort()} />}
@@ -2151,7 +2158,7 @@ function ManifestCheck() {
     {comparison && <div className="manifest-outcome">
       <h3><span role="status" className="manifest-summary"><span className="status-label ok">Manifest verified</span> {comparison.items.filter((item) => item.status === 'match').length} of {comparison.items.length} files match</span></h3>
       <div className="table-scroll" role="region" aria-label="Manifest check results" tabIndex={0}><table className="manifest-table"><thead><tr><th scope="col">Item</th><th scope="col">Name in manifest</th><th scope="col">Size</th><th scope="col">Status</th><th scope="col">Local file</th></tr></thead><tbody>
-        {comparison.items.map((item) => <tr key={item.id}><td className="mono-values">{item.id}</td><td className="wrap">{item.name || <span className="muted">Not included</span>}{item.note && <span className="manifest-note">Operator note: {item.note}</span>}</td><td className="mono-values">{fmtBytes(item.bytes)}</td><td><span className={`status-label ${STATUS_KIND[item.status]}`}>{MANIFEST_STATUS[item.status]}</span>{item.status === 'bytes-differ' && <span className="manifest-note">This can happen from editing, re-saving, compression, truncation or corruption — it isn't proof of tampering.</span>}</td><td className="wrap">{item.local == null ? '—' : outcome.locals[item.local].name}</td></tr>)}
+        {comparison.items.map((item) => <tr key={item.id}><td className="mono-values">{item.id}</td><td className="wrap">{item.name || <span className="muted">Not included</span>}{item.note && <span className="manifest-note">Operator note: {item.note}</span>}</td><td className="mono-values">{fmtBytes(item.bytes)}</td><td><span className={`status-label ${STATUS_KIND[item.status]}`}>{MANIFEST_STATUS[item.status]}</span>{item.status === 'bytes-differ' && <span className="manifest-note">This can happen from editing, re-saving, metadata changes, recompression, truncation or corruption — it isn't proof of tampering.</span>}</td><td className="wrap">{item.local == null ? '—' : outcome.locals[item.local].name}</td></tr>)}
         {comparison.extras.map((extra) => <tr key={`extra-${extra.local}`}><td>—</td><td>—</td><td className="mono-values">{fmtBytes(extra.bytes)}</td><td><span className={`status-label ${STATUS_KIND['not-in-manifest']}`}>{MANIFEST_STATUS['not-in-manifest']}</span></td><td className="wrap">{extra.name}</td></tr>)}
       </tbody></table></div>
       {comparison.items.some((item) => item.status === 'missing' && !item.name) && <p className="field-hint">Files sealed without a name can only match or be missing.</p>}

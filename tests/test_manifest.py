@@ -76,6 +76,11 @@ def test_strict_parse_and_limits():
         manifest.encode(s, [(3, d, "a\udc80", "")])
 
 
+def test_base_name_matches_browser_file_name():
+    for path, name in [("a/b.mp4", "b.mp4"), ("a\\b.mp4", "b.mp4"), ("dir/x\\y.bin", "y.bin"), ("plain.ulg", "plain.ulg")]:
+        assert manifest.base_name(path) == name
+
+
 def _seal(tmp_path, lines):
     if not FSEAL.exists():
         pytest.skip(f"{FSEAL} not built")

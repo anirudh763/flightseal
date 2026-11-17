@@ -30,6 +30,11 @@ ITEM = re.compile(rf"([1-9][0-9]{{0,2}}),(0|[1-9][0-9]{{0,14}}),([0-9a-f]{{64}})
 STATUS = {"match": "Matches", "bytes-differ": "Bytes differ", "missing": "Missing", "not-in-manifest": "Not in manifest"}
 
 
+def base_name(path):
+    """Last path part; either slash separates folders, as for a browser File.name."""
+    return re.split(r"[\\/]", path)[-1]
+
+
 def digest(path):
     """Streaming SHA-256 of the file's bytes in order; memory stays at one 4 MiB buffer."""
     h, buf, size = hashlib.sha256(), bytearray(CHUNK), 0
@@ -156,7 +161,7 @@ def main(argv):
         items = []
         for i, path in enumerate(files, 1):
             size, sha = digest(path)
-            items.append((size, sha, re.split(r"[\\/]", path)[-1] if names else "", notes.get(i, "")))
+            items.append((size, sha, base_name(path) if names else "", notes.get(i, "")))
         try:
             payload = encode(salt or secrets.token_hex(32), items)
         except (TypeError, ValueError) as e:
@@ -168,7 +173,7 @@ def main(argv):
             _salt, items = parse(read_sealed(argv[1]))
         except (OSError, ValueError, TypeError) as e:
             sys.exit(f"{argv[1]}: {e}")
-        locals_ = [(os.path.basename(p), *digest(p)) for p in argv[2:]]
+        locals_ = [(base_name(p), *digest(p)) for p in argv[2:]]
         status, paired, extras = compare(items, locals_)
         for it in items:
             label = it["name"] or "(name not included)"
