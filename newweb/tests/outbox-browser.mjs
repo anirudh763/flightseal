@@ -13,12 +13,17 @@ const sha = (s) => createHash('sha256').update(s).digest('hex');
 let base, server, lock, browser;
 
 before(async () => {
-  server = spawn(process.env.PYTHON || 'python3', [SERVER, '--port', '0'], { stdio: ['ignore', 'pipe', 'ignore'] });
-  base = await new Promise((resolve, reject) => {
-    let out = '';
-    server.stdout.on('data', (c) => { out += c; const m = /READY (\S+)/.exec(out); if (m) resolve(m[1]); });
-    server.once('exit', (code) => reject(new Error(`dev server exited ${code}`)));
-  });
+  // REGISTRY_DEV_URL: use a dev server that is already running (CI starts one in its step); else start our own.
+  if (process.env.REGISTRY_DEV_URL) {
+    base = process.env.REGISTRY_DEV_URL.replace(/\/+$/, '');
+  } else {
+    server = spawn(process.env.PYTHON || 'python3', [SERVER, '--port', '0'], { stdio: ['ignore', 'pipe', 'ignore'] });
+    base = await new Promise((resolve, reject) => {
+      let out = '';
+      server.stdout.on('data', (c) => { out += c; const m = /READY (\S+)/.exec(out); if (m) resolve(m[1]); });
+      server.once('exit', (code) => reject(new Error(`dev server exited ${code}`)));
+    });
+  }
   lock = await acquireBrowserLock();
   browser = await chromium.launch({ headless: true, ...(process.platform === 'darwin' ? { executablePath: '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome' } : {}) });
 });
@@ -167,11 +172,11 @@ test('a withdrawn share stays withdrawn when a fresh profile re-registers the sa
     const p1 = await harness(one);
     await p1.evaluate(async ([t, line]) => { hw.setToken(t); await hw.open(); await hw.enqueue(line); }, [tok, r]);
     const first = await firstIn(p1, 'registered');
-    const share = await p1.evaluate((rid) => hw.client.createShare(rid, 30), first.registration_id);
+    const share = await p1.evaluate((rid) => hw.client.createShare({ registration_id: rid, expires_days: 30 }), first.registration_id);
     assert.equal(share.ok, true);
-    const link = `${base}/v1/shares/${share.data.token}`;
+    const link = `${base}${share.share.path}`;
     assert.equal((await fetch(link)).status, 200);
-    assert.equal((await p1.evaluate((t) => hw.client.withdrawShare(t), share.data.token)).ok, true);
+    assert.equal((await p1.evaluate((t) => hw.client.withdrawShare(t), share.share.token)).ok, true);
     assert.equal((await fetch(link)).status, 404);
 
     await dev('advance?s=120');
@@ -186,4 +191,53 @@ test('a withdrawn share stays withdrawn when a fresh profile re-registers the sa
     assert.equal(server[0].shares, 1, 'no new share was created');
     assert.equal((await dev('log')).log.filter((e) => e.route === 'create_share').length, 1);
   } finally { await one.close(); await two.close(); }
+});
+
+test('a share whose response was lost is retried with the same token and key: one share, the link works', async () => {
+  const ctx = await browser.newContext();
+  try {
+    const [tok, r] = [await tokenFor('orgA'), await receiptFor(7)];
+    const page = await harness(ctx);
+    await page.evaluate(async ([t, line]) => { hw.setToken(t); await hw.open(); await hw.enqueue(line); }, [tok, r]);
+    const reg = await firstIn(page, 'registered');
+    await dev('drop?route=create_share');
+    const lost = await page.evaluate((rid) => hw.client.createShare({ registration_id: rid }), reg.registration_id);
+    assert.equal(lost.ok, false);
+    assert.equal(lost.kind, 'network');
+    assert.equal((await regs())[0].shares, 1, 'the server committed the share before the connection dropped');
+    const retry = await page.evaluate(([rid, prepared]) => hw.client.createShare({ registration_id: rid, ...prepared }), [reg.registration_id, lost.share]);
+    assert.equal(retry.ok, true);
+    assert.equal(retry.status, 200);
+    assert.equal(retry.data.disposition, 'active');
+    assert.equal((await regs())[0].shares, 1, 'no second share');
+    const view = await fetch(`${base}${lost.share.path}`);
+    assert.equal(view.status, 200);
+    assert.equal((await view.json()).received_at, reg.received_at);
+  } finally { await ctx.close(); }
+});
+
+test('CORS: an allowlisted origin can register cross-origin; any other origin is blocked by the browser', async () => {
+  const ctx = await browser.newContext();
+  try {
+    const [tok, r] = [await tokenFor('orgA'), await receiptFor(8)];
+    const port = new URL(base).port;
+    const other = `http://localhost:${port}`; // a different origin from the API at 127.0.0.1
+    await dev('cors?origins=http://localhost:*'); // the default allowlist is http://127.0.0.1:* only
+    const page = await ctx.newPage();
+    await page.goto(`${other}/harness.html?api=${encodeURIComponent(base)}`);
+    await page.locator('#ready', { hasText: 'ready' }).waitFor();
+    await page.evaluate(async ([t, line]) => { hw.setToken(t); await hw.open(); await hw.enqueue(line); }, [tok, r]);
+    const row = await firstIn(page, 'registered');
+    assert.equal((await regs())[0].received_at, row.received_at);
+    const log = (await dev('log')).log;
+    assert.ok(log.some((e) => e.route === 'preflight' && e.origin === other && e.status === 204), 'a real preflight ran');
+    assert.ok(log.some((e) => e.route === 'register' && e.origin === other));
+
+    await dev('cors?origins=http://127.0.0.1:*'); // localhost no longer allowed
+    const blocked = await page.evaluate(() => hw.client.getEpoch());
+    assert.equal(blocked.ok, false);
+    assert.equal(blocked.kind, 'network', 'the browser refuses the response without a CORS grant');
+    const last = (await dev('log')).log.at(-1);
+    assert.deepEqual([last.route, last.status], ['preflight', 403]);
+  } finally { await ctx.close(); }
 });

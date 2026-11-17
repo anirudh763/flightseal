@@ -84,20 +84,42 @@ fail and are retried once.
 
 ## Abuse scenario
 
-Someone sends public share checks with random, well-formed tokens as fast as the stage throttle allows: 10 requests a
-second, every second of a 30-day month, which is 25.92 M requests. (The throttle is for the whole stage, so this also
-locks out real users.)
+Someone sends public share checks with random, well-formed tokens, every second of a 30-day month. The public route
+`GET /v1/shares/{token}` now has its own route throttle of **2 requests a second, burst 5**. The signed-in routes
+keep the stage default of 10 a second, burst 20. So the flood reaches the Lambda at most 2 × 86,400 × 30 =
+**5.184 M times a month**. The rates are the same Price List figures as above.
 
 | Item | Quantity | Cost / month |
 |---|---|---|
-| HTTP API requests | 25.92 M | $25.92 |
-| Lambda requests | 25.92 M | $5.18 |
-| Lambda compute | 25.92 M × 0.02 s × 0.125 GB = 64,800 GB-s | $0.86 |
-| DynamoDB reads | 1 RRU per check (the share lookup misses) | $3.24 |
-| CloudWatch Logs | about 9 GB | $4.54 |
-| **Total** | | **about $40** |
+| HTTP API requests | 5.184 M × $1.00 per million | $5.18 |
+| Lambda requests | 5.184 M × $0.20 per million | $1.04 |
+| Lambda compute | 5.184 M × 0.02 s × 0.125 GB = 12,960 GB-s × $0.0000133334 | $0.17 |
+| DynamoDB reads | 1 RRU per check (the share lookup misses): 5.184 M × $0.125 per million | $0.65 |
+| CloudWatch Logs | about 350 bytes per invocation: 1.81 GB × $0.50 per GB | $0.91 |
+| **Total** | | **about $8** (was about $40 at the 10-a-second stage limit) |
 
-Whether API Gateway bills requests that it throttles or that fail the JWT authorizer was **not retrieved**; the table
-assumes every request is billed. Ways to lower the ceiling without fixed-fee services: lower the stage rate, shorten
-the log retention or log only errors, or remove the public route. A WAF would cost a fixed monthly fee and is
-excluded.
+**Why 2 a second, burst 5.** The baseline is 5,000 checks a month, which averages 0.002 a second. A person opening a
+handful of links at once fits inside the burst of 5, and a steady 2 a second is still about 1,000 times the baseline
+average. Going lower (for example 1 a second, about $4) would get under $5, but it would start rejecting a
+recipient's page that opens several shared links at once. 2 a second is the smallest round limit that keeps that
+case working.
+
+The throttle protects the bill, not availability. While the flood runs, real link checks share those 2 a second,
+so they get 429s. The signed-in routes have their own limits and keep working.
+
+**Still not a cap.**
+
+- **Throttled requests:** whether API Gateway bills requests that it throttles (429) or that fail the JWT authorizer
+  was **not retrieved**. If throttled requests are billed, the HTTP API line grows with the attacker's send rate at
+  $1.00 per million. Only the Lambda, DynamoDB and log lines stay capped by the throttle.
+- **Invalid-token floods:** a flood of the signed-in routes with invalid tokens is stopped by the JWT authorizer
+  before the Lambda. Its API Gateway charge, if billed, is the same $1.00 per million.
+- **Budget alerts:** they only send email. They do not stop requests or limit spend.
+
+Ways to lower the ceiling further without fixed-fee services:
+
+- lower the public route throttle
+- log only errors
+- remove the public route
+
+A WAF would cost a fixed monthly fee and is excluded.

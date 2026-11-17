@@ -37,6 +37,11 @@ def apply_tombstones(source, target, source_name, target_name, restore_id, serve
             key = ("SHARE#" + t["ref"], "SHARE")
             if target.get(*key) is not None:
                 target.update(*key, set={"state": "withdrawn", "withdrawn_at": t["at"]})
+            else:  # created after the backup: a withdrawn record keeps its hash claimed, so no retry reopens it
+                stub = {"PK": key[0], "SK": key[1], "org": t["org"], "state": "withdrawn", "withdrawn_at": t["at"]}
+                if t.get("rid"):
+                    stub["rid"] = t["rid"]
+                target.put(stub)
         elif t["kind"] == "key":
             pk, state = f"ORG#{t['org']}", t.get("state", "compromised")
             key_orgs.add(pk)

@@ -19,7 +19,9 @@ const ACK_FIELDS = ['registration_id', 'received_at', 'count', 'head', 'key_fing
 export const ROW_FIELDS = Object.freeze([...BASE_FIELDS, ...ACK_FIELDS]);
 export const STATES = Object.freeze(['sealed_local', 'registering', 'waiting_for_connection', 'registered', 'needs_attention']);
 // needs_attention reasons that retryNow(id) may act on; every other reason is terminal.
-const RETRYABLE = new Set(['envelope_expired', 'key_not_enrolled', 'key_not_active', 'attempts_exhausted']);
+// The three envelope refusals: each needs a new envelope (and so a new key), bound only by an explicit retryNow(id).
+const ENVELOPE_REASONS = new Set(['envelope_expired', 'epoch_mismatch', 'sub_mismatch']);
+const RETRYABLE = new Set([...ENVELOPE_REASONS, 'key_not_enrolled', 'key_not_active', 'attempts_exhausted']);
 const REASONS = { idempotency_conflict: 'conflict' };
 
 // Same shape as registry/registry/receipt.py parse(): six tokens, lowercase hex, 0 < count < 2^64.
@@ -201,6 +203,7 @@ export async function openOutbox({
   let spill = null; // rows whose persistent write failed
   let gen = 0, closed = false, needsSignIn = false, badToken = null;
   let timer = null, inflight = null, running = null, rerun = false, force = false, prefetched = false, wakeAt = Infinity;
+  let serverEpoch = null; // read once per open, before anything is dispatched
   const listeners = new Set();
 
   const emit = () => { for (const fn of listeners) { try { fn(); } catch { /* listener errors stay with the listener */ } } };
@@ -288,7 +291,7 @@ export async function openOutbox({
       return STOP;
     }
     const reason = REASONS[res.code] ?? res.code;
-    if (reason === 'envelope_expired') {
+    if (ENVELOPE_REASONS.has(reason)) {
       prefetched = true; // no new envelope until an explicit retryNow(id)
       const cached = await safe(store.getMeta('envelope'), null);
       if (g !== gen) return STOP;
@@ -310,6 +313,10 @@ export async function openOutbox({
       if (e.result) return handleResult(row, prev, e.result, token, g);
       row = await bind(row, e.env);
       if (g !== gen) return STOP;
+    } else if (serverEpoch !== null && !(row.envelope_epoch >= serverEpoch)) { // an admin bumped the epoch
+      await save({ ...row, state: 'needs_attention', reason: 'epoch_mismatch', next_attempt_at: undefined, updated_at: now() });
+      if (g === gen) emit();
+      return NEXT;
     } else if (!(row.envelope_expires_at > now())) {
       await save({ ...row, state: 'needs_attention', reason: 'envelope_expired', next_attempt_at: undefined, updated_at: now() });
       if (g === gen) emit();
@@ -327,6 +334,23 @@ export async function openOutbox({
     return handleResult(row, prev, res, token, g);
   }
 
+  // An admin may have bumped the epoch since envelopes were issued. Read it once per open, before dispatching, and
+  // drop a cached envelope from an older epoch (or with none recorded) rather than bind or send it.
+  async function checkEpoch(g) {
+    const token = await authToken(g);
+    if (!token || g !== gen) return;
+    inflight = new AbortController();
+    const ep = await client.getEpoch({ token, signal: inflight.signal });
+    inflight = null;
+    if (g !== gen) return;
+    if (ep.status === 401) { badToken = token; setSignIn(true); return; }
+    if (!ep.ok || !Number.isInteger(ep.data?.epoch)) return; // try again next drain
+    serverEpoch = ep.data.epoch;
+    const cached = await safe(store.getMeta('envelope'), null);
+    if (g !== gen) return;
+    if (cached && !(Number.isInteger(cached.epoch) && cached.epoch >= serverEpoch)) await safe(store.deleteMeta('envelope'));
+  }
+
   async function drain() {
     const g = gen;
     const forced = force;
@@ -334,6 +358,10 @@ export async function openOutbox({
     clearTimer();
     wakeAt = Infinity;
     if (!forced && !online.isOnline()) return;
+    if (serverEpoch === null) {
+      await checkEpoch(g);
+      if (g !== gen) return;
+    }
     const rows = await allQueue();
     if (g !== gen) return;
     const t = now();
@@ -432,7 +460,7 @@ export async function openOutbox({
       if (row.state === 'needs_attention') {
         if (!RETRYABLE.has(row.reason)) return; // terminal
         const next = { ...row, state: 'sealed_local', reason: undefined, attempts: 0, next_attempt_at: undefined, updated_at: now() };
-        if (row.reason === 'envelope_expired') { // explicit: bind a new envelope and a new key
+        if (ENVELOPE_REASONS.has(row.reason)) { // explicit: bind a new envelope and a new key
           const cached = await safe(store.getMeta('envelope'), null);
           if (g !== gen) return;
           if (cached?.envelope_id === row.envelope_id) await safe(store.deleteMeta('envelope'));

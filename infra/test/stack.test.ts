@@ -95,7 +95,7 @@ test('HTTP API: default stage throttled at rate 10, burst 20', () => {
 
 test('every route has the JWT authorizer except GET /v1/shares/{token}', () => {
   const routes = resources('AWS::ApiGatewayV2::Route').map(([, r]) => r.Properties);
-  assert.equal(routes.length, 12);
+  assert.equal(routes.length, 13);
   for (const r of routes) {
     if (r.RouteKey === 'GET /v1/shares/{token}') {
       assert.ok(r.AuthorizationType === undefined || r.AuthorizationType === 'NONE');
@@ -130,6 +130,34 @@ test('restore mode serves the restored table, closed by RESTORED_FROM, with the 
   assert.ok(!policy.includes('"Resource":"*"'));
   assert.throws(() => new RegistryStack(new App(), 'Half', { restoredTableName: 'x' }));
   assert.throws(() => new RegistryStack(new App(), 'NoId', { restoredTableName: 'x', restoredFrom: 'y' }));
+});
+
+test('the public share check has its own tighter throttle (2 rps, burst 5); other routes keep the stage default', () => {
+  const [[, stage]] = resources('AWS::ApiGatewayV2::Stage');
+  assert.deepEqual(stage.Properties.RouteSettings, {
+    'GET /v1/shares/{token}': { ThrottlingRateLimit: 2, ThrottlingBurstLimit: 5 },
+  });
+  assert.deepEqual(stage.Properties.DefaultRouteSettings, { ThrottlingRateLimit: 10, ThrottlingBurstLimit: 20 });
+  // route settings name a route key, so the stage must be created after that route
+  const [publicRouteId] = resources('AWS::ApiGatewayV2::Route')
+    .find(([, r]) => r.Properties.RouteKey === 'GET /v1/shares/{token}')!;
+  assert.ok([stage.DependsOn].flat().includes(publicRouteId));
+});
+
+test('CORS on the HTTP API: only the allowlisted origins, Authorization allowed, never "*", no credentials', () => {
+  const [[, api]] = resources('AWS::ApiGatewayV2::Api');
+  const cors = api.Properties.CorsConfiguration;
+  assert.deepEqual(cors.AllowOrigins, ['https://anirudh763.github.io']);
+  assert.deepEqual([...cors.AllowHeaders].sort(), ['authorization', 'content-type', 'idempotency-key']);
+  assert.deepEqual([...cors.AllowMethods].sort(), ['DELETE', 'GET', 'OPTIONS', 'POST']);
+  assert.notEqual(cors.AllowCredentials, true);
+  assert.ok(!JSON.stringify(cors).includes('*'));
+  const custom = Template.fromStack(new RegistryStack(new App(), 'Cors', { corsOrigins: ['https://example.org'] }));
+  custom.hasResourceProperties('AWS::ApiGatewayV2::Api', { CorsConfiguration: { AllowOrigins: ['https://example.org'] } });
+  assert.throws(() => new RegistryStack(new App(), 'Star', { corsOrigins: ['*'] }));
+  assert.throws(() => new RegistryStack(new App(), 'Wild', { corsOrigins: ['https://*.github.io'] }));
+  assert.throws(() => new RegistryStack(new App(), 'Http', { corsOrigins: ['http://example.org'] }));
+  assert.throws(() => new RegistryStack(new App(), 'None', { corsOrigins: [] }), /at least one/);
 });
 
 test('ID and access tokens live 15 minutes, so a demoted admin loses the role quickly', () => {

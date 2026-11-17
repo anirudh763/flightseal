@@ -16,7 +16,7 @@ const settle = async () => { for (let i = 0; i < 20; i += 1) await tick(); };
 
 // A stub registry: envelopes are minted in order; each registration takes the next scripted reply (default 201).
 function harness({ token = jwt('orgA', 'p1'), online = true, store = createMemoryStore(), locks = null } = {}) {
-  const h = { t: 1_800_000_000_000, calls: [], replies: [], envSeq: 0, token, timers: [] };
+  const h = { t: 1_800_000_000_000, calls: [], replies: [], envSeq: 0, epoch: 0, token, timers: [] };
   h.now = () => h.t;
   h.online = { on: online, isOnline() { return this.on; }, subscribe(cb) { this.cb = cb; return () => { this.cb = null; }; } };
   h.fetch = async (url, init) => {
@@ -25,8 +25,9 @@ function harness({ token = jwt('orgA', 'p1'), online = true, store = createMemor
     h.calls.push(call);
     if (path === '/v1/envelopes') {
       h.envSeq += 1;
-      return Response.json({ envelope_id: h.envSeq.toString(16).padStart(32, '0'), expires_at: new Date(h.t + 7 * 864e5).toISOString(), epoch: 0 }, { status: 201 });
+      return Response.json({ envelope_id: h.envSeq.toString(16).padStart(32, '0'), expires_at: new Date(h.t + 7 * 864e5).toISOString(), epoch: h.epoch }, { status: 201 });
     }
+    if (path === '/v1/epoch') return Response.json({ epoch: h.epoch });
     const reply = h.replies.shift() ?? [201, {}];
     const got = typeof reply === 'function' ? await reply(init, call) : reply;
     if (got instanceof Response) return got;
@@ -368,7 +369,7 @@ test('close() aborts the in-flight request and drops its late result', async () 
   const q = await h.store.listQueue();
   assert.equal(q.length, 1, 'no ack was recorded after close');
   assert.equal((await h.store.listAcks()).length, 0);
-  assert.equal(h.calls.length, 2, 'no further requests (envelope + one registration)');
+  assert.equal(h.calls.filter((c) => c.path !== '/v1/epoch').length, 2, 'no further requests (envelope + one registration)');
   await assert.rejects(ob.enqueue({ receipt: receipt(2) }), /closed/);
 });
 
@@ -455,4 +456,89 @@ test('a 401 on the open-time envelope prefetch sets needsSignIn', async () => {
   await settle();
   assert.equal(ob.status().needsSignIn, true);
   ob.close();
+});
+
+for (const code of ['epoch_mismatch', 'sub_mismatch']) {
+  test(`422 ${code}: needs attention, no silent new envelope; retryNow(id) binds a new envelope and key`, async () => {
+    const h = harness({ online: false });
+    h.replies.push([422, { error: code }]);
+    const ob = await h.open();
+    await settle();
+    const row = await ob.enqueue({ receipt: receipt(1) });
+    h.online.on = true;
+    await ob.retryNow();
+    await settle();
+    const [r] = await ob.list();
+    assert.equal(r.state, 'needs_attention');
+    assert.equal(r.reason, code);
+    assert.equal(h.envSeq, 1, 'no envelope minted after the 422');
+    await ob.retryNow(row.id);
+    const [a, b] = h.regs();
+    assert.notEqual(b.body.envelope_id, a.body.envelope_id);
+    assert.notEqual(b.body.idempotency_key, a.body.idempotency_key);
+    assert.equal((await ob.list())[0].state, 'registered');
+    ob.close();
+  });
+}
+
+test('the open-time prefetch drops a cached envelope from an older epoch and binds a current one', async () => {
+  const h = harness({ online: false });
+  await h.store.putMeta('envelope', { envelope_id: 'e'.repeat(32), expires_at: h.t + 864e5, epoch: 0 });
+  h.epoch = 2;
+  h.online.on = true;
+  const ob = await h.open();
+  await settle();
+  assert.ok(h.calls.some((c) => c.path === '/v1/epoch'));
+  assert.equal(h.envSeq, 1, 'a fresh envelope replaced the stale one');
+  h.online.on = false;
+  const row = await ob.enqueue({ receipt: receipt(1) });
+  assert.equal(row.envelope_epoch, 2);
+  assert.notEqual(row.envelope_id, 'e'.repeat(32));
+  ob.close();
+});
+
+test('the epoch is read before any dispatch: a row bound to an older epoch is not sent and needs attention', async () => {
+  const h = harness({ online: false });
+  await h.store.putMeta('envelope', { envelope_id: 'e'.repeat(32), expires_at: h.t + 864e5, epoch: 0 });
+  const ob = await h.open();
+  await settle();
+  const stale = await ob.enqueue({ receipt: receipt(1) }); // bound offline to the cached epoch-0 envelope
+  assert.equal(stale.envelope_epoch, 0);
+  h.epoch = 3;
+  h.online.on = true;
+  await ob.retryNow();
+  await settle();
+  assert.equal(h.calls[0].path, '/v1/epoch', 'the epoch is read first');
+  assert.equal(h.regs().length, 0, 'nothing is sent with a stale envelope');
+  const [r] = await ob.list();
+  assert.equal(r.state, 'needs_attention');
+  assert.equal(r.reason, 'epoch_mismatch');
+  await ob.retryNow(stale.id);
+  assert.equal(h.regs().length, 1);
+  assert.equal((await ob.list())[0].state, 'registered');
+  ob.close();
+});
+
+test('a cached envelope with no epoch is treated as stale', async () => {
+  const h = harness({ online: false });
+  await h.store.putMeta('envelope', { envelope_id: 'e'.repeat(32), expires_at: h.t + 864e5 });
+  h.online.on = true;
+  const ob = await h.open();
+  await settle();
+  assert.equal(h.envSeq, 1);
+  assert.notEqual((await h.store.getMeta('envelope')).envelope_id, 'e'.repeat(32));
+  ob.close();
+});
+
+test('close() also aborts an in-flight epoch read', async () => {
+  const h = harness();
+  let aborted = false;
+  const base = h.fetch;
+  h.fetch = (url, init) => (new URL(url).pathname === '/v1/epoch'
+    ? new Promise((_, reject) => init.signal.addEventListener('abort', () => { aborted = true; reject(new DOMException('a', 'AbortError')); }))
+    : base(url, init));
+  const ob = await h.open();
+  await settle();
+  ob.close();
+  assert.equal(aborted, true);
 });

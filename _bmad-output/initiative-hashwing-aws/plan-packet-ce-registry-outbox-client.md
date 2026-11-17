@@ -110,6 +110,24 @@ deferred:
 
 ## Plan Change Log
 
+### 2026-11-17 — Follow-up scope from the coordinator (after PR #21 merged)
+- **Trigger:** the coordinator asked for the contract problems reported in pass 1 to be fixed, with registry/ and
+  infra/ now editable.
+- **Added scope:**
+  - wire the tests into CI and the AGENTS.md gates;
+  - CORS, as an allowlist in both the Lambda and the HTTP API;
+  - idempotent share creation, with the token made by the client and only its SHA-256 sent;
+  - `GET /v1/epoch` and the three envelope error codes;
+  - a per-route throttle on the public share check, with the COST and COVERAGE updates.
+- **Known-bad states avoided:**
+  - a lost share response that leaves a token the client never received;
+  - a console on another origin that cannot reach the API;
+  - a public-route flood billed at the 10 rps stage limit.
+- **KEEP:**
+  - the outbox state machine and its store interface;
+  - the field allowlist and the generation guard;
+  - the behaviour of all eight browser scenarios.
+
 ## Review Triage Log
 
 ### 2026-11-17 — Review pass
@@ -125,6 +143,22 @@ deferred:
   - `[low]` `[reject]` exportPending returns needs_previous_export even when storage is healthy — deliberate: the client cannot tell eviction apart from an empty queue, so the conservative message is the honest one.
   - `[low]` `[patch]` registry-client accepted a 2xx JSON array as ok — Array.isArray now gives bad_response; an assertion was added.
   - `[low]` `[patch]` devserver unverified_claims crashed on a payload that is JSON but not an object — it returns {} now.
+
+### 2026-11-17 — Review pass 2 (contract fixes: CORS, shares, epoch)
+- verdicts: 8 findings — high 2, medium 3, low 3, false 0, maybe-false 0
+- findings:
+  - `[high]` `[patch]` A client-chosen token hash could be re-registered once TTL removed its SHARE record, which would reopen an old withdrawn link — SHARE records now have no TTL. Deletion writes a TTL-free withdrawn stub with org and rid. A taken hash is a 409 unless it is the same org and registration (a replay). New tests: hash never reusable (other org, other registration, 400 days later), and delete leaves a permanent stub.
+  - `[high]` `[patch]` A restore plus the client's own retry recreated a share that had been created and withdrawn after the backup — restore now writes a withdrawn record for a share tombstone whose share is missing, and tombstones carry rid. New test: restore, then retry, gives 200 withdrawn and the link stays 404.
+  - `[medium]` `[patch]` A retry after DEDUPE_SECONDS got an unexplained 409 — a taken hash of the same org and registration now returns the share with its disposition. New test: a late retry gets the original share.
+  - `[medium]` `[patch]` The concurrent same-key branch had no test — added a racy-read test.
+  - `[medium]` `[patch]` Client epoch gaps: the epoch check ran after dispatch, had no abort signal, and kept a cached envelope with no epoch — the epoch is now read before any dispatch, under the in-flight AbortController. Rows bound to an older epoch become needs_attention `epoch_mismatch` locally and are not sent. A cached envelope with no epoch is dropped. Three new unit tests.
+  - `[low]` `[patch]` The CI step did not start the dev server — the step now starts it and passes `REGISTRY_DEV_URL`. Locally the test still starts its own server. Verified both ways (8/8 each).
+  - `[low]` `[patch]` The dev CORS default included localhost — the default is now `http://127.0.0.1:*` only, and the cross-origin browser test sets `localhost` through `/__dev/cors` first.
+  - `[low]` `[patch]` Small gaps in createShare and the stack:
+    - createShare accepted a malformed token, and threw where `crypto.subtle` was missing. It now returns `kind: 'client'` (`bad_token` or `insecure_context`); a unit test was added.
+    - `-c corsOrigins=` (empty) shipped with no origins. The stack now throws, with a synth assertion.
+    - Array context is now accepted in bin/app.ts.
+    - The AGENTS infra count is 13.
 
 ## Design Notes
 
@@ -164,3 +198,28 @@ Status: built.
 - IndexedDB ack pruning and real quota failure are tested only against the memory store.
 - Rows in needs_attention count toward MAX_QUEUE, and there is no way to delete them.
 - The modules are not wired into main.jsx.
+
+### Follow-up pass (2026-11-17)
+
+**Built:**
+- CORS allowlist in the Lambda (`CORS_ORIGINS`) and on the HTTP API (`corsOrigins`, default `https://anirudh763.github.io`).
+- Idempotent shares: the client makes the token and sends only its hash; hashes are never reusable.
+- `GET /v1/epoch` and the codes `envelope_expired`, `sub_mismatch` and `epoch_mismatch`.
+- Public share route throttle (2 rps, burst 5).
+- CI steps and AGENTS.md gates, plus COST, COVERAGE, ARCHITECTURE_AWS and OUTBOX docs.
+
+**Verification:**
+- `uv run --no-project -p 3.12 --with pyulog==1.3.0 --with pytest --with pyyaml==6.0.2 python -m pytest -q`: 141 passed, 30 skipped.
+- `registry/tests`: 81 passed.
+- `infra` npm test: 13/13.
+- ctest: 5/5.
+- JS gate: 139/139.
+- `newweb/tests/*.test.mjs`: 88/88.
+- Outbox unit tests: 43/43.
+- Outbox browser tests: 8/8, both with a self-started server and with an external `REGISTRY_DEV_URL` server.
+- LocalStack e2e: 19 pass, 2 fail, 2 blocked, the same as before this change. The fails are the known Lambda/API persistence after a container restart; HTTP API and Cognito are blocked in community.
+
+**Residual risks:**
+- Whether API Gateway bills throttled (429) and authorizer-rejected requests was not retrieved.
+- CORS and throttle on the real HTTP API are synthesised only.
+- A share hash claimed forever costs about 150 bytes per share.

@@ -9,7 +9,8 @@ import { createRegistryClient, tokenOwner } from '/src/registry-client.mjs';
 
 let token = null;
 const getToken = async () => token;
-const client = createRegistryClient({ baseUrl: location.origin, getToken });
+// ?api=<origin> calls the registry cross-origin (CORS); default is this page's origin.
+const client = createRegistryClient({ baseUrl: new URLSearchParams(location.search).get('api') || location.origin, getToken });
 // A manual online source, for tests that need "offline" without cutting the page's network.
 const manual = { on: false, cbs: new Set(), isOnline() { return this.on; }, subscribe(cb) { this.cbs.add(cb); return () => this.cbs.delete(cb); } };
 

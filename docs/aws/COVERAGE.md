@@ -27,7 +27,7 @@ Columns:
 | Conflicting retry → 409 | yes | — | not verified | |
 | Same receipt with a new key → original ack; after deletion → 410 | yes | pass (410) | not verified | |
 | Replay after the dedupe window → original ack | yes | pass (`DEDUPE_SECONDS=8`) | not verified | |
-| Expired / wrong-sub / stale-epoch envelope → 422; committed retry still acked | yes | — | not verified | |
+| Expired / wrong-sub / stale-epoch envelope → 422 `envelope_expired` / `sub_mismatch` / `epoch_mismatch`; committed retry still acked | yes | — | not verified | |
 | Monthly quota → 429 with no partial write | yes | — | not verified | |
 | Body over 4096 bytes → 413; invalid base64 body → 400; deeply nested JSON or token header → 400 / 401 | yes | — | not verified | |
 | Share lifecycle; unknown / withdrawn / expired / deleted → identical 404 | yes | pass (create, view, withdraw, 404) | not verified | |
@@ -47,6 +47,12 @@ Columns:
 | DynamoDB data after `docker rm` and re-create on the same volume | — | survived | not verified | |
 | Lambda and REST API after re-create | — | **did not survive** | not verified | |
 | HTTP API, JWT authorizer, `$default` stage throttling | — | blocked: not in the community plan | not verified | synthesised; asserted in `infra/test/stack.test.ts` |
+| Public share route throttle (2 rps, burst 5) on top of the stage default | — | blocked: HTTP API not in the community plan | not verified | synthesised; asserted (`RouteSettings` and the stage's dependency on the route) |
+| CORS on the HTTP API: exact allowlisted origins, no `*`, no credentials, `authorization` / `content-type` / `idempotency-key` | — | blocked: HTTP API not in the community plan | not verified | synthesised; asserted (bad origins rejected at synth) |
+| CORS in the Lambda (`CORS_ORIGINS`): preflight 204/403, origin echoed only when allowlisted, public share view `*` without credentials | yes | not run (the REST v1 stand-in run sets no `CORS_ORIGINS`) | not verified | |
+| CORS from a real browser: a cross-origin page registers through a preflight; an origin off the allowlist is blocked | yes (Playwright Chromium against the dev server, `newweb/tests/outbox-browser.mjs`) | — | not verified | |
+| Share idempotency: client-made token, hash + idempotency key; a lost-response retry returns the same share; key bound to registration and token hash; a withdrawn share is never reopened | yes, and in Chromium (the dev server commits, then drops the connection) | pass for create/view/withdraw with the new body; the lost-response retry is not run there | not verified | |
+| `GET /v1/epoch`; 422 `envelope_expired` / `sub_mismatch` / `epoch_mismatch` | yes | pass (`epoch_mismatch` after an epoch bump) | not verified | |
 | Cognito Lite pool, read-only custom attributes, ID-token claims | — | blocked: not in the community plan | not verified | synthesised; asserted |
 | IAM scoped to the table ARN with item actions only | — | not enforced by LocalStack community | not verified | synthesised; asserted |
 | Log group with 7-day retention | — | — | not verified | synthesised; asserted |

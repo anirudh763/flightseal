@@ -1,5 +1,13 @@
 // The one HTTP edge to the receipt registry. Every call resolves (never throws) to
-//   {ok:true, status, data}  or  {ok:false, kind:'network'|'timeout'|'aborted'|'http', status, code}.
+//   {ok:true, status, data}  or  {ok:false, kind:'network'|'timeout'|'aborted'|'http'|'client', status, code}.
+// kind 'client' means nothing was sent (a malformed share token, or no Web Crypto outside a secure context).
+
+const b64url = (bytes) => btoa(String.fromCharCode(...bytes)).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+const randomId = () => b64url(crypto.getRandomValues(new Uint8Array(32))); // 43 chars, 256 bits
+async function sha256Hex(text) {
+  const d = new Uint8Array(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(text)));
+  return Array.from(d, (b) => b.toString(16).padStart(2, '0')).join('');
+}
 
 function b64urlDecode(text) {
   const b64 = text.replace(/-/g, '+').replace(/_/g, '/') + '='.repeat((4 - (text.length % 4)) % 4);
@@ -64,7 +72,19 @@ export function createRegistryClient({ baseUrl = '', getToken, fetch: doFetch = 
     envelope: (opts) => request('POST', '/v1/envelopes', {}, opts),
     register: ({ receipt, idempotency_key, envelope_id }, opts) => request('POST', '/v1/registrations', { receipt, idempotency_key, envelope_id }, opts),
     listRegistrations: (opts) => request('GET', '/v1/registrations', undefined, opts),
-    createShare: (rid, days = 30, opts) => request('POST', '/v1/shares', { registration_id: rid, expires_days: days }, opts),
+    getEpoch: (opts) => request('GET', '/v1/epoch', undefined, opts),
+    // The share token is made here and never sent: the registry stores only its SHA-256. The result always carries
+    // `share` ({token, idempotency_key, path}); keep it and pass it back on a retry after a lost response, and the
+    // registry returns the same share (or its current disposition) instead of making a second one.
+    async createShare({ registration_id, expires_days = 30, token = randomId(), idempotency_key = randomId() } = {}, opts) {
+      const share = { token, idempotency_key, path: `/v1/shares/${token}` };
+      // the registry serves only 43-character base64url tokens, so any other token would make a dead link
+      if (typeof token !== 'string' || !/^[A-Za-z0-9_-]{43}$/.test(token)) return { ok: false, kind: 'client', status: 0, code: 'bad_token', share };
+      let tokenHash;
+      try { tokenHash = await sha256Hex(token); } catch { return { ok: false, kind: 'client', status: 0, code: 'insecure_context', share }; }
+      const body = { registration_id, token_hash: tokenHash, idempotency_key, expires_days };
+      return { ...(await request('POST', '/v1/shares', body, opts)), share };
+    },
     withdrawShare: (token, opts) => request('DELETE', `/v1/shares/${encodeURIComponent(token)}`, undefined, opts),
   };
 }

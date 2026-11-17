@@ -1,6 +1,6 @@
 """Regressions for the independent security review of PR #21 (rotation tombstones, restore lineage, existence oracle)."""
 import pytest
-from registry_helpers import SEED_A, SEED_B, call, enroll, envelope, line, make_app, register, token
+from registry_helpers import SEED_A, SEED_B, call, enroll, envelope, line, make_app, register, share, token
 
 from registry import ed25519, receipt
 from registry.restore import apply_tombstones
@@ -42,7 +42,7 @@ def test_a_marker_copied_into_a_later_backup_does_not_open_the_gate():
     enroll(app, clock)
     pilot = token(clock)
     _, reg, _ = register(app, pilot, line(SEED_A, 1))
-    path = call(app, "POST", "/v1/shares", pilot, {"registration_id": reg["registration_id"]})[1]["path"]
+    path = share(app, pilot, reg["registration_id"])[1]["path"]
     gen1 = _copy(live)
     apply_tombstones(live, gen1, source_name="live", target_name="gen1", restore_id="r1", served="live")
     serving = _restored(gen1, clock, "gen1", "live", "r1")

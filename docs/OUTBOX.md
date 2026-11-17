@@ -50,7 +50,7 @@ idempotency key, which returns the original ack.
 | 200 `disposition: deleted` | `registered`, "Registered, later deleted" | none (terminal) |
 | 410 `registration_deleted` | `needs_attention`, `registration_deleted` | terminal; `retryNow` ignores it |
 | 409 `idempotency_conflict` | `needs_attention`, `conflict` | terminal |
-| 422 `envelope_expired`, or the local expiry has passed | `needs_attention`, `envelope_expired` | `retryNow(id)` binds a new envelope and a new key |
+| 422 `envelope_expired`, `epoch_mismatch` or `sub_mismatch`, or the local expiry has passed | `needs_attention`, that code | `retryNow(id)` binds a new envelope and a new key |
 | 422 `bad_signature`, 400, 413 | `needs_attention`, the server's code | terminal |
 | 403 `key_not_enrolled` / `key_not_active` | `needs_attention`, the server's code | `retryNow(id)` retries with the same binding |
 | 401 | stays queued, `needsSignIn: true`, dispatch stops | resumes once a different token for the same owner is available |
@@ -58,7 +58,15 @@ idempotency key, which returns the original ack.
 
 `retryNow()` with no id sends every queued row now, ignoring backoff and `navigator.onLine`. The outbox also
 dispatches on open and on the `online` event. It never creates or retries a share. It mints a new envelope only for
-a row that has none yet, as a once-per-open prefetch, or through an explicit `retryNow(id)` after `envelope_expired`.
+a row that has none yet, as a once-per-open prefetch, or through an explicit `retryNow(id)` after one of the three
+envelope refusals. The prefetch first reads `GET /v1/epoch` and drops a cached envelope from an older epoch.
+
+Shares are explicit client calls, never queued. `createShare({registration_id, expires_days})` makes the token
+locally, sends only its SHA-256 plus an idempotency key, and always returns `share: {token, idempotency_key, path}`,
+even on failure. After a lost response, call `createShare({registration_id, ...share})` again: the registry returns
+the same share, or its current disposition if it was withdrawn or expired. This also works after the 7-day
+idempotency window. A malformed `token`, or a page without Web Crypto (not a secure context), returns
+`{ok: false, kind: 'client'}` and sends nothing.
 
 ## Limits and recovery
 
@@ -77,19 +85,19 @@ a row that has none yet, as a once-per-open prefetch, or through an explicit `re
 ## Commands
 
 ```sh
-node --test newweb/tests/outbox.test.mjs newweb/tests/registry-client.test.mjs   # 31 tests, stub fetch + memory store
-node --test newweb/tests/outbox-browser.mjs                                      # 6 tests, Chromium + dev server
+node --test newweb/tests/outbox.test.mjs newweb/tests/registry-client.test.mjs   # 43 tests, stub fetch + memory store
+node --test newweb/tests/outbox-browser.mjs                                      # 8 tests, Chromium + dev server
 ```
 
 The browser tests start `registry/devserver/server.py` (DEV ONLY; it refuses to bind to anything but loopback),
 which runs the real registry `App` over `MemoryTable` with dev HS256 tokens, plus `/__dev/*` controls for the
-clock, held and dropped registrations, and a request log. Set `PYTHON` to choose the interpreter (default `python3`).
+clock, held registrations, dropped registrations or shares, the CORS allowlist, and a request log. Set `PYTHON` to choose the interpreter (default `python3`).
 
 ## Contract problems found
 
-1. **No CORS.** The registry sends no CORS headers, so a console on another origin cannot call the deployed HTTP API.
-   The tests are same-origin only. Deploying needs either CORS on the API or the console served from the API's
-   origin.
+1. **No CORS.** Fixed: an allowlist of exact origins, both in the stack and in the Lambda (see ARCHITECTURE_AWS.md,
+   CORS). The browser suite registers from a real cross-origin page, and checks that a page from an origin off the
+   allowlist is blocked.
 2. **Envelopes are bound to `sub`.** An envelope that one user fetched cannot be used by another user in the same org.
    This is why the outbox is scoped per user, not per org.
 3. **A deleted registration gets two different answers.** A retry with the original key returns 200
@@ -101,9 +109,8 @@ clock, held and dropped registrations, and a request log. Set `PYTHON` to choose
    still exhausted after 10 attempts (9 backoff waits totalling about 9 to 17 minutes), the row ends in `attempts_exhausted`.
 6. **`received_at` is rounded to the second** (ISO 8601 UTC), so two commits in the same second have the same
    timestamp.
-7. **`POST /v1/shares` takes no idempotency key.** If its response is lost, the share exists but the client never
-   received its token, so it cannot withdraw that share. Only an admin deleting the registration withdraws it.
-   The outbox never retries share creation.
-8. **There is no way to read the current epoch, and one 422 covers three cases.** `envelope_expired` is returned for
-   an expired envelope, an epoch bump and a `sub` mismatch alike. A client finds out about an epoch bump only when
-   a registration fails.
+7. **`POST /v1/shares` took no idempotency key.** Fixed: the client makes the token and sends its hash with an
+   idempotency key, so a retry returns the same share (browser test: the server commits, the connection drops, the
+   retry gets 200 and the original link works).
+8. **There was no way to read the current epoch, and one 422 covered three cases.** Fixed: `GET /v1/epoch`, and
+   `envelope_expired` / `epoch_mismatch` / `sub_mismatch`.

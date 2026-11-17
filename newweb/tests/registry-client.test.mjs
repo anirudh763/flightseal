@@ -1,5 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { createHash } from 'node:crypto';
 import { createRegistryClient, tokenOwner } from '../src/registry-client.mjs';
 
 const b64 = (o) => Buffer.from(JSON.stringify(o)).toString('base64url');
@@ -42,9 +43,50 @@ test('errors are typed: http with server code, network, timeout, aborted, missin
   ctl.abort();
   assert.equal((await p).kind, 'aborted');
   const none = createRegistryClient({ getToken: async () => null, fetch: async () => assert.fail('must not send') });
-  assert.deepEqual(await none.createShare('r', 3), { ok: false, kind: 'http', status: 401, code: 'unauthorized' });
+  const noTok = await none.createShare({ registration_id: 'r', expires_days: 3 });
+  assert.deepEqual({ ...noTok, share: undefined }, { ok: false, kind: 'http', status: 401, code: 'unauthorized', share: undefined });
+  assert.match(noTok.share.token, /^[A-Za-z0-9_-]{43}$/, 'a failed call still hands back what a retry needs');
   const arr = createRegistryClient({ getToken: async () => 't', fetch: async () => json(200, []) });
   assert.deepEqual(await arr.listRegistrations(), { ok: false, kind: 'http', status: 200, code: 'bad_response' });
   const html = createRegistryClient({ getToken: async () => 't', fetch: async () => new Response('<html>', { status: 502 }) });
   assert.deepEqual(await html.withdrawShare('tok'), { ok: false, kind: 'http', status: 502, code: 'http_502' });
+});
+
+test('createShare makes the token locally, sends only its SHA-256 and an idempotency key; a retry reuses both', async () => {
+  const calls = [];
+  const client = createRegistryClient({ baseUrl: 'http://x', getToken: async () => 't', fetch: async (url, init) => { calls.push(JSON.parse(init.body)); return calls.length === 1 ? Promise.reject(new TypeError('lost')) : json(200, { registration_id: 'a'.repeat(32), expires_at: '2027-01-01T00:00:00Z', disposition: 'active' }); } });
+  const first = await client.createShare({ registration_id: 'a'.repeat(32), expires_days: 7 });
+  assert.equal(first.kind, 'network');
+  const { token, idempotency_key: key, path } = first.share;
+  assert.match(token, /^[A-Za-z0-9_-]{43}$/);
+  assert.match(key, /^[A-Za-z0-9_-]{16,128}$/);
+  assert.equal(path, `/v1/shares/${token}`);
+  assert.deepEqual(calls[0], { registration_id: 'a'.repeat(32), token_hash: createHash('sha256').update(token).digest('hex'), idempotency_key: key, expires_days: 7 });
+  assert.ok(!JSON.stringify(calls[0]).includes(token), 'the token itself never leaves the client');
+  const retry = await client.createShare({ registration_id: 'a'.repeat(32), expires_days: 7, ...first.share });
+  assert.equal(retry.ok, true);
+  assert.deepEqual(calls[1], calls[0]);
+  assert.deepEqual(retry.share, first.share);
+  const other = await client.createShare({ registration_id: 'a'.repeat(32) });
+  assert.notEqual(other.share.token, token);
+});
+
+test('getEpoch reads GET /v1/epoch', async () => {
+  const seen = [];
+  const client = createRegistryClient({ getToken: async () => 't', fetch: async (url, init) => { seen.push([init.method, url]); return json(200, { epoch: 3 }); } });
+  assert.deepEqual(await client.getEpoch(), { ok: true, status: 200, data: { epoch: 3 } });
+  assert.deepEqual(seen, [['GET', '/v1/epoch']]);
+});
+
+test('createShare refuses a malformed token and a context without Web Crypto, without sending and without throwing', async () => {
+  const client = createRegistryClient({ getToken: async () => 't', fetch: async () => assert.fail('must not send') });
+  const bad = await client.createShare({ registration_id: 'a'.repeat(32), token: 'short' });
+  assert.deepEqual({ ...bad, share: undefined }, { ok: false, kind: 'client', status: 0, code: 'bad_token', share: undefined });
+  const real = Object.getOwnPropertyDescriptor(globalThis, 'crypto');
+  Object.defineProperty(globalThis, 'crypto', { configurable: true, value: { getRandomValues: (a) => a } }); // no subtle
+  try {
+    const r = await client.createShare({ registration_id: 'a'.repeat(32) });
+    assert.equal(r.ok, false);
+    assert.equal(r.code, 'insecure_context');
+  } finally { Object.defineProperty(globalThis, 'crypto', real); }
 });

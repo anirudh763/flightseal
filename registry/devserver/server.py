@@ -10,7 +10,8 @@ Prints `READY http://<host>:<port>` once listening. Refuses any non-loopback bin
   /__dev/receipt?count=&seed=A|B        a signed receipt v1 line
   /__dev/advance?s=       move the server clock forward
   /__dev/hold?ms=         delay the next registration before it is handled
-  /__dev/drop             the next registration commits, then the socket closes with no response
+  /__dev/drop?route=register|create_share   the next such request commits, then the socket closes unanswered
+  /__dev/cors?origins=    replace the CORS allowlist (comma list; default http://127.0.0.1:*)
   /__dev/log              [{route, status, org, sub, receipt}] for every /v1 request
   /__dev/registrations?org=   the stored registrations of one org
   /__dev/reset            a fresh table; orgA (SEED_A) and orgB (SEED_B) enrolled again
@@ -32,10 +33,12 @@ ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / "registry" / "tests"))
 
 import registry_helpers as rh  # noqa: E402  (also puts registry/ on sys.path)
+from registry.app import _cors_allowlist  # noqa: E402
 
 SRC = ROOT / "newweb" / "src"
 HARNESS = ROOT / "newweb" / "tests" / "fixtures" / "outbox-harness.html"
 MAX_REQUEST = 64 * 1024
+DEV_CORS = "http://127.0.0.1:*"  # dev servers only; the stack sets exact https origins
 
 
 def loopback(host):
@@ -59,13 +62,15 @@ def unverified_claims(auth):
 class Dev:
     def __init__(self):
         self.lock = threading.Lock()
+        self.cors = DEV_CORS
         self.reset()
 
     def reset(self):
-        self.app, self.table, self.clock = rh.make_app()
+        self.cors = DEV_CORS
+        self.app, self.table, self.clock = rh.make_app(CORS_ORIGINS=self.cors)
         self.offset = 0
         self.hold_ms = 0
-        self.drop = False
+        self.drop = None  # the route name whose next request is dropped after it commits
         self.log = []
         self.sync_clock()
         for seed, org in ((rh.SEED_A, "orgA"), (rh.SEED_B, "orgB")):
@@ -109,6 +114,9 @@ class Handler(BaseHTTPRequestHandler):
     def do_DELETE(self):
         self.route("DELETE")
 
+    def do_OPTIONS(self):
+        self.route("OPTIONS")
+
     def route(self, method):
         url = urlsplit(self.path)
         query = {k: v[-1] for k, v in parse_qs(url.query).items()}
@@ -130,11 +138,13 @@ class Handler(BaseHTTPRequestHandler):
 
     def registry(self, method, path, query, raw):
         is_reg = method == "POST" and path == "/v1/registrations"
+        target = "register" if is_reg else "create_share" if (method, path) == ("POST", "/v1/shares") else None
         hold = drop = False
         with DEV.lock:
             if is_reg:
                 hold, DEV.hold_ms = DEV.hold_ms, 0
-                drop, DEV.drop = DEV.drop, False
+            if target and DEV.drop == target:
+                drop, DEV.drop = True, None
         if hold:
             time.sleep(hold / 1000)
         try:
@@ -150,7 +160,8 @@ class Handler(BaseHTTPRequestHandler):
             out = DEV.app.handle(event)
             route = DEV.app._route(method, path)
             claims = unverified_claims(headers.get("authorization", ""))
-            entry = {"route": route[0] if route else "unrouted", "method": method, "status": out["statusCode"],
+            entry = {"route": route[0] if route else ("preflight" if method == "OPTIONS" else "unrouted"),
+                     "method": method, "origin": headers.get("origin"), "status": out["statusCode"],
                      "org": claims.get("org_id"), "sub": claims.get("sub"), "dropped": drop}
             if is_reg:
                 try:
@@ -183,8 +194,12 @@ class Handler(BaseHTTPRequestHandler):
                 DEV.hold_ms = int(query.get("ms", 0))
                 return self.send(200, {"hold_ms": DEV.hold_ms})
             if name == "drop":
-                DEV.drop = True
-                return self.send(200, {"drop": True})
+                DEV.drop = query.get("route", "register")
+                return self.send(200, {"drop": DEV.drop})
+            if name == "cors":
+                DEV.cors = query.get("origins", DEV_CORS)
+                DEV.app.cors = _cors_allowlist(DEV.cors)
+                return self.send(200, {"cors": DEV.cors})
             if name == "log":
                 return self.send(200, {"log": DEV.log})
             if name == "registrations":
