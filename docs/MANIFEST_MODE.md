@@ -1,7 +1,8 @@
 # Manifest-only sealing (`hashwing-manifest v1`)
 
-Seal & send has two modes. **Embedded file** (unchanged, `docs/rawfile.js`) puts the whole file inside the sealed
-log, up to 45 MiB. **Manifest only** seals a list of file sizes and SHA-256 digests instead, so multi-GiB flight
+Seal & send has two modes. **Small file (seal the whole file, up to 45 MiB)** is the unchanged embedded mode
+(`docs/rawfile.js`), which puts the whole file inside the sealed log. **Large files (fingerprint only)** is manifest
+mode, which seals a list of file sizes and SHA-256 digests instead, so multi-GiB flight
 videos and logs, or up to 100 files at once, can be sealed. The originals stay on the operator's storage.
 
 **A manifest is not a backup.** If an original is lost, the manifest cannot bring it back.
@@ -78,6 +79,21 @@ file with that name now has different bytes. Editing, re-saving, a metadata chan
 corruption can cause it. It is not proof of tampering, and the check does not pick a cause. Similarity is never
 estimated.
 
+## Interface
+
+The owner's copy direction of 2026-11-17 replaces the plan's labels. The mode choices are "Large files (fingerprint
+only)" and "Small file (seal the whole file, up to 45 MiB)", and small file stays the default. The page shows "This
+keeps a fingerprint, not a copy. Keep your original files." The terms manifest, salt and "A manifest is not a
+backup" are explained in a "What is this?" disclosure.
+
+- **Steps**: a step list (Choose files, Seal, Send) marks the current step with `aria-current="step"`.
+- **Progress**: each file has its own progress bar with percent and MB/s (10^6 bytes per second), and Cancel on the
+  file being read.
+- **More options** (hidden until opened): include file names, operator notes, and the receipt interval and
+  signing-key details.
+- **Result chips**: Matches is green, Bytes differ is amber, Missing is grey and Not in manifest is neutral.
+- **Limits checked first**: limit errors are checked before any file is read.
+
 ## Implementation
 
 - **Browser**: `hashFile()` in `docs/wasm/client.mjs` starts one Web Worker per file
@@ -123,3 +139,6 @@ How the browser numbers were measured:
 - A manifest is not a backup.
 - An item sealed without a name can only be Matches or Missing, never Bytes differ.
 - The receipt carries no signed time. The "Sealed:" line uses the sealing computer's clock.
+- Sealing and checking a manifest in the browser need WebCrypto Ed25519, because the signature check runs in
+  `docs/verifier.js`. Without it, the result is "Manifest not verified". Embedded mode verifies in WebAssembly and
+  does not have this requirement.

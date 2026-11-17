@@ -61,29 +61,53 @@ try {
   await page.waitForFunction(() => location.hash === '#/app/protect' && document.querySelector('.commandbar h1')?.textContent === 'Seal & send');
   let handover, sealedPath, publicKey;
 
-  await check('Embedded file is the default and keeps its controls', async () => {
-    assert.equal(await page.getByLabel('Embedded file (up to 45 MiB)').isChecked(), true);
+  const steps = () => page.locator('.manifest-steps li').evaluateAll((lis) => lis.map((li) => [li.textContent, li.getAttribute('aria-current')]));
+  const currentStep = async () => (await steps()).find(([, current]) => current === 'step')?.[0];
+
+  await check('Small file (embedded) is the default and keeps its controls', async () => {
+    assert.equal(await page.getByLabel('Small file (seal the whole file, up to 45 MiB)').isChecked(), true);
     assert.equal(await page.locator('#protect-file').count(), 1);
-    assert.equal(await page.locator('#manifest-files').count(), 0);
+    assert.equal(await page.locator('#manifest-files').isVisible(), false);
   });
 
-  await check('Manifest only: seal three files, one record and a count=1 receipt, not-a-backup notice', async () => {
-    await page.getByLabel('Manifest only (large or multiple files)').check();
+  await check('friendly limit errors say what to do next, before any hashing', async () => {
+    await page.getByLabel('Large files (fingerprint only)').check();
+    const many = Array.from({ length: 101 }, (_, i) => write(`many-${i}.txt`, Buffer.from(String(i))));
+    await page.locator('#manifest-files').setInputFiles(many);
+    assert.match(await page.getByRole('alert').first().textContent(), /You picked 101 files\. Choose up to 100 at a time/);
+    await page.locator('#manifest-files').setInputFiles(sealPaths[2]);
+    await page.locator('.manifest-options summary').click();
+    await page.locator('#manifest-note-0').fill('x'.repeat(1001));
+    await page.getByRole('button', { name: 'Seal', exact: true }).click();
+    assert.match(await page.getByRole('alert').first().textContent(), /note exceeds 1000 UTF-8 bytes\. Shorten it under More options/);
+    assert.equal(await page.locator('[id^=manifest-seal-progress-]').count(), 0, 'nothing was hashed');
+    await page.locator('.manifest-options summary').click();
+  });
+
+  await check('Large files: seal three files, one record and a count=1 receipt, steps and not-a-backup notice', async () => {
     assert.equal(await page.locator('#protect-file').count(), 0);
-    assert.match(await page.locator('.manifest-notice').textContent(), /A manifest is not a backup/);
+    assert.match(await page.locator('.manifest-notice').textContent(), /This keeps a fingerprint, not a copy\. Keep your original files\./);
+    await page.locator('.manifest-help summary').click();
+    assert.match(await page.locator('.manifest-help').innerText(), /A manifest is not a backup\./);
+    await page.locator('#manifest-files').setInputFiles([]);
+    assert.equal(await currentStep(), 'Choose files');
     await page.locator('#manifest-files').setInputFiles(sealPaths);
-    await page.getByText('More options').click();
+    assert.equal(await currentStep(), 'Seal');
+    await page.locator('.manifest-options summary').click();
+    await page.locator('#manifest-note-0').fill('');
     await page.getByLabel('Include file names').check();
     await page.locator('#manifest-note-1').fill('Camera B, landed 14:02');
-    await page.getByRole('button', { name: 'Seal manifest' }).click();
+    await page.getByRole('button', { name: 'Seal', exact: true }).click();
     await page.waitForSelector('#manifest-handover-text', { timeout: 60000 });
+    assert.equal(await currentStep(), 'Send');
+    assert.deepEqual(await page.locator('[id^=manifest-seal-progress-]').count(), 0);
     handover = await page.locator('#manifest-handover-text').inputValue();
     const receipts = handover.split('\n').filter((line) => line.startsWith('fseal-receipt v1 '));
     assert.equal(receipts.length, 1);
     assert.match(receipts[0], /count=1 /);
     assert.ok(!handover.includes('a.bin') && !handover.includes('Camera B'), 'no names or notes in the handover');
     publicKey = /Public key: ([0-9a-f]{64})/.exec(handover)[1];
-    const [download] = await Promise.all([page.waitForEvent('download'), page.getByRole('button', { name: 'Download sealed manifest' }).click()]);
+    const [download] = await Promise.all([page.waitForEvent('download'), page.getByRole('button', { name: 'Download sealed list' }).click()]);
     assert.match(download.suggestedFilename(), /^hashwing-\d{8}-\d{6}\.manifest\.fseal$/);
     sealedPath = join(EVIDENCE, 'sealed.manifest.fseal');
     await download.saveAs(sealedPath);
@@ -105,13 +129,15 @@ try {
     await page.getByRole('button', { name: 'Check files' }).click();
     await page.waitForSelector('.manifest-table', { timeout: 60000 });
     const rows = await page.locator('.manifest-table tbody tr').evaluateAll((trs) => trs.map((tr) => [...tr.cells].map((td) => td.innerText.trim())));
-    assert.deepEqual(rows.map((r) => [r[0], r[3], r[4]]), [['1', 'Bytes differ', 'a.bin'], ['2', 'Matches', 'b.bin'], ['3', 'Missing', '—'], ['—', 'Not in manifest', 'extra.bin']]);
+    assert.deepEqual(rows.map((r) => [r[0], r[3].split('\n')[0], r[4]]), [['1', 'Bytes differ', 'a.bin'], ['2', 'Matches', 'b.bin'], ['3', 'Missing', '—'], ['—', 'Not in manifest', 'extra.bin']]);
     assert.match(rows[0][1], /a\.bin/);
     assert.match(rows[1][1], /Operator note: Camera B, landed 14:02/);
+    assert.match(rows[0][3], /This can happen from editing, re-saving, compression, truncation or corruption — it isn't proof of tampering\./);
+    const chips = await page.locator('.manifest-table .status-label').evaluateAll((els) => els.map((el) => [el.textContent, el.className]));
+    assert.deepEqual(chips, [['Bytes differ', 'status-label warn'], ['Matches', 'status-label ok'], ['Missing', 'status-label grey'], ['Not in manifest', 'status-label neutral']]);
     const text = await page.locator('.manifest-outcome').innerText();
     assert.match(text, /Manifest verified/);
-    assert.match(text, /Editing, re-saving, a metadata change, recompression, truncation or corruption/);
-    assert.doesNotMatch(text, /tampered/i);
+    assert.doesNotMatch(text, /tampered(?! )/i);
     await layout(page, 'manifest checked');
   });
 
@@ -120,7 +146,7 @@ try {
       await page.locator('#manifest-trusted-key').fill(key);
       await page.getByRole('button', { name: 'Check files' }).click();
       await page.waitForSelector('.manifest-outcome [role=alert], .manifest-outcome[role=alert]', { timeout: 30000 });
-      assert.match(await page.locator('.manifest-outcome').innerText(), /Manifest not verified/);
+      assert.match(await page.locator('.manifest-outcome').innerText(), /Manifest not verified[\s\S]*trusted public key[\s\S]*entered the key the sender gave you separately/);
       assert.equal(await page.locator('.manifest-table').count(), 0);
     }
   });
@@ -128,12 +154,16 @@ try {
   await check('Cancel stops hashing and the UI is usable again', async () => {
     const big = join(dir, 'big.bin'); const fd = openSync(big, 'w'); ftruncateSync(fd, 2 ** 31); closeSync(fd);
     await page.locator('#manifest-files').setInputFiles(big);
-    await page.getByRole('button', { name: 'Seal manifest' }).click();
-    await page.waitForSelector('#manifest-progress-bar');
-    await page.waitForFunction(() => Number(document.querySelector('#manifest-progress-bar')?.value) > 0);
+    await page.getByRole('button', { name: 'Seal', exact: true }).click();
+    await page.waitForSelector('#manifest-seal-progress-0');
+    await page.waitForFunction(() => Number(document.querySelector('#manifest-seal-progress-0')?.value) > 0);
+    await page.waitForFunction(() => /\d+% · \d+\.\d MB\/s/.test(document.querySelector('.manifest-progress')?.textContent || ''));
+    await layout(page, 'manifest hashing');
+    const before = await page.locator('#manifest-seal-progress-0').evaluate((el) => el.value);
     await page.getByRole('button', { name: 'Cancel' }).click();
-    await page.waitForFunction(() => !document.querySelector('#manifest-progress-bar') && [...document.querySelectorAll('[role=status]')].some((n) => n.textContent === 'Cancelled'));
-    assert.equal(await page.getByRole('button', { name: 'Seal manifest' }).isEnabled(), true);
+    await page.waitForFunction(() => !document.querySelector('#manifest-seal-progress-0') && [...document.querySelectorAll('[role=status]')].some((n) => n.textContent === 'Cancelled'));
+    assert.ok(before < 2 ** 31, 'cancelled before the end');
+    assert.equal(await page.getByRole('button', { name: 'Seal', exact: true }).isEnabled(), true);
     assert.equal(await page.locator('#manifest-handover-text').count(), 0);
     rmSync(big);
   });

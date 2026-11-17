@@ -104,7 +104,8 @@ test('a file changed on disk after selection rejects with a readable error', asy
     console.log('read failure as Chrome reports it:', JSON.stringify(r));
     assert.equal(r.ok, undefined, 'no digest is produced');
     assert.equal(r.name, 'Error');
-    assert.match(r.message, /^changing\.bin: The requested file could not be read/);
+    // Chrome reports NotReadableError when it sees the change; a short read is caught by the worker itself.
+    assert.match(r.message, /^changing\.bin: (The requested file could not be read|Read \d+ of \d+ bytes at offset \d+; the file changed)/);
   });
 });
 

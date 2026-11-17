@@ -980,8 +980,7 @@ textarea.mono-input { width: 100%; min-height: 0; resize: vertical; font-size: .
 .manifest-body > input[type=file], .manifest-options-body input[type=text], #manifest-trusted-key { width: 100%; min-width: 0; }
 .manifest-notice { margin: 0; padding: 10px 12px; border-left: 3px solid var(--warn); background: var(--warn-bg); color: var(--ink); }
 .manifest-file-list { display: grid; gap: 6px; margin: 0; padding-left: 20px; }
-.manifest-file-list li { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 4px 12px; min-width: 0; }
-.manifest-file-name { min-width: 0; overflow-wrap: anywhere; }
+.manifest-file-name { min-width: 0; overflow-wrap: anywhere; word-break: break-word; }
 .manifest-options-body { display: grid; gap: 10px; padding-top: 8px; }
 .manifest-progress { display: grid; gap: 6px; }
 .manifest-progress progress { width: 100%; height: 12px; accent-color: var(--forest); }
@@ -993,3 +992,16 @@ textarea.mono-input { width: 100%; min-height: 0; resize: vertical; font-size: .
 table.manifest-table { min-width: 0; }
 .manifest-table td, .manifest-table th { overflow-wrap: anywhere; vertical-align: top; }
 .manifest-note { display: block; margin-top: 4px; color: var(--muted); font-size: .76rem; }
+.protect-screen [hidden] { display: none !important; }
+.manifest-steps { display: flex; flex-wrap: wrap; gap: 4px 20px; margin: 0; padding-left: 20px; color: var(--muted); font-size: 13px; }
+.manifest-steps li { padding-left: 2px; }
+.manifest-steps li[aria-current=step] { color: var(--ink); font-weight: 700; }
+.manifest-file-row { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 4px 12px; min-width: 0; }
+.manifest-file-list li { display: grid; gap: 6px; }
+.manifest-progress { grid-template-columns: minmax(0, 1fr) auto auto; align-items: center; gap: 8px 12px; }
+@media (max-width: 480px) { .manifest-progress { grid-template-columns: minmax(0, 1fr) auto; } .manifest-progress .button { grid-column: 1 / -1; } }
+.status-label.grey { color: var(--muted); background: #e9edf2; }
+.status-label.neutral { color: var(--ink); background: transparent; box-shadow: inset 0 0 0 1px var(--line); }
+.manifest-steps { list-style: none; padding-left: 0; counter-reset: step; }
+.manifest-steps li::before { counter-increment: step; content: counter(step) " "; font-variant-numeric: tabular-nums; }
+.manifest-steps li:not(:last-child)::after { content: " \2192"; margin-left: 8px; color: var(--muted); }
