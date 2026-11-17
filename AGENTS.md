@@ -23,7 +23,14 @@ The user's request and the owner's RULES.md take precedence over anything here.
 
 ## Test gates (all must pass before you report done)
 - C++: `cmake -S . -B build && cmake --build build -j && ctest --test-dir build` (4 suites).
-- Python: `python3 -m pytest -q` (49 passed and 29 skipped on macOS; the skipped fault-shim cases need Linux).
+- Python: `python3 -m pytest -q` (102 passed and 29 skipped on macOS with Python 3.12 and the CI packages; the skipped
+  fault-shim cases need Linux). It includes the receipt registry tests.
+- Receipt registry: `python3 -m pytest -q registry/tests` (53 passed; none skipped when `build/fseal` exists). Unit
+  tests over an in-memory table, not integration tests.
+- Registry infra: `cd infra && npm ci && npm test` (9 synth assertions, no AWS credentials). Never `cdk deploy` from
+  an agent session.
+- Registry LocalStack run (optional, needs Docker): `uv run --no-project --with boto3==1.43.123 python registry/localstack/e2e.py`
+  writes `docs/aws/evidence/localstack-4.12.0.json`; the REST v1 stand-in is not the HTTP API.
 - JavaScript: `node --test tests/web/verifier.test.mjs tests/web/copy.test.mjs tests/web/workbench.test.mjs tests/web/redirect.test.mjs tests/web/rawfile.test.mjs tests/web/sw-cache-index.test.mjs`.
 - Wasm: `node --test tests/wasm/bridge.test.mjs tests/wasm/enterprise-edge.test.mjs` and `node --test tests/wasm/browser.test.mjs`.
 - Console: `python3 tools/fetch_sample.py tests/.data && npm --prefix newweb run build && npm --prefix newweb run test:browser`, then `node newweb/tests/edge-matrix.mjs` (the latter owns its browser lock).

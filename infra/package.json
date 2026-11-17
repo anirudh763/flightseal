@@ -1,0 +1,25 @@
+{
+  "name": "hashwing-registry-infra",
+  "version": "0.1.0",
+  "private": true,
+  "description": "CDK (TypeScript) for the optional HashWing receipt registry. Synth only; never deployed by CI.",
+  "license": "MIT",
+  "bin": {
+    "hashwing-registry": "dist/bin/app.js"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "synth": "npm run build && cdk synth --quiet",
+    "test": "npm run build && node --test dist/test/stack.test.js"
+  },
+  "devDependencies": {
+    "@types/node": "22.20.5",
+    "aws-cdk": "2.1148.1",
+    "aws-cdk-local": "3.1.0",
+    "typescript": "7.0.2"
+  },
+  "dependencies": {
+    "aws-cdk-lib": "2.277.0",
+    "constructs": "10.8.1"
+  }
+}

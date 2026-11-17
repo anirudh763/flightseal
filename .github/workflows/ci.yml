@@ -31,10 +31,33 @@ jobs:
         run: ctest --test-dir build --output-on-failure
       - name: Python tests (CLI, independent reader, real PX4 flight)
         run: python -m pytest -q
+      - name: Receipt registry (Ed25519 vectors, fresh C++ receipts, every matrix row over the in-memory table)
+        run: python -m pytest -q registry/tests
       - name: JS verifier agrees with the CLI and the Python reader (every attack, hostile files, PX4 flight)
         run: node --test tests/web/verifier.test.mjs tests/web/copy.test.mjs tests/web/workbench.test.mjs tests/web/redirect.test.mjs tests/web/rawfile.test.mjs tests/web/sw-cache-index.test.mjs
       - name: Demo on a real PX4 flight
         run: tools/demo.sh
+
+  infra:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: "22"
+      - name: Install the pinned CDK toolchain
+        working-directory: infra
+        run: npm ci
+      - name: Build, synthesise with no AWS credentials and assert the registry stack
+        working-directory: infra
+        env:
+          AWS_CONFIG_FILE: /dev/null
+          AWS_SHARED_CREDENTIALS_FILE: /dev/null
+        run: |
+          npm run build
+          npm test
 
   browser:
     runs-on: ubuntu-24.04
