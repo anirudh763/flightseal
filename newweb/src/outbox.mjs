@@ -531,5 +531,6 @@ export async function openOutbox({
     enqueue, list, retryNow, exportPending, importProofs, close,
     subscribe(fn) { listeners.add(fn); return () => listeners.delete(fn); },
     status: () => ({ storage, exportOffered, needsSignIn }),
+    busy: () => running !== null, // a dispatch pass is in progress
   };
 }

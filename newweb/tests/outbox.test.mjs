@@ -12,7 +12,13 @@ const receipt = (n) => `fseal-receipt v1 count=${n} head=${'1'.repeat(64)} key=$
 const sha = (s) => createHash('sha256').update(s).digest();
 const OWNER = 'orgA/p1';
 const tick = () => new Promise((r) => setImmediate(r));
-const settle = async () => { for (let i = 0; i < 20; i += 1) await tick(); };
+// WebCrypto digests finish on the thread pool, so a fixed number of ticks is not enough on a slow machine:
+// keep ticking while any outbox opened by a harness is mid-dispatch (capped, for tests that hold a request open).
+const live = new Set();
+const settle = async () => {
+  const end = Date.now() + 1000;
+  for (let i = 0; i < 20 || ([...live].some((o) => o.busy()) && Date.now() < end); i += 1) await tick();
+};
 
 // A stub registry: envelopes are minted in order; each registration takes the next scripted reply (default 201).
 function harness({ token = jwt('orgA', 'p1'), online = true, store = createMemoryStore(), locks = null } = {}) {
@@ -37,11 +43,11 @@ function harness({ token = jwt('orgA', 'p1'), online = true, store = createMemor
     return Response.json(data, { status });
   };
   h.regs = () => h.calls.filter((c) => c.path === '/v1/registrations');
-  h.open = (extra = {}) => openOutbox({
+  h.open = async (extra = {}) => { const ob = await openOutbox({
     ownerId: OWNER, client: createRegistryClient({ baseUrl: 'http://reg', fetch: h.fetch }), getToken: async () => h.token,
     store, locks, now: h.now, random: () => 0.5, online: h.online,
     setTimeout: (fn, ms) => { h.timers.push({ fn, ms }); return h.timers.length; }, clearTimeout: () => {}, ...extra,
-  });
+  }); live.add(ob); return ob; };
   h.store = store;
   return h;
 }
