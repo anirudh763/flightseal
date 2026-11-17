@@ -1,0 +1,136 @@
+{
+  "image": "localstack/localstack:4.12.0",
+  "digest": "sha256:0df3a97da57de03a588c05d9b8f390f15c7033fc7c4512f94619d344bc3cd317",
+  "boto3": "1.43.123",
+  "host_machine": "arm64",
+  "started_at": "2026-11-17T21:53:57Z",
+  "mode": "rest-v1-stand-in",
+  "note": "REST API v1 {proxy+} stand-in, not the HTTP API; dev-hs256 identity adapter; LocalStack community",
+  "localstack_version": "4.12.0",
+  "edition": "community",
+  "lambda_architecture": "arm64",
+  "finished_at": "2026-11-17T21:54:44Z",
+  "summary": {
+    "pass": 19,
+    "fail": 2,
+    "blocked": 2,
+    "skipped": 0
+  },
+  "steps": [
+    {
+      "step": "start pinned image on 127.0.0.1",
+      "result": "pass",
+      "detail": "version 4.12.0"
+    },
+    {
+      "step": "probe apigatewayv2",
+      "result": "blocked",
+      "detail": "An error occurred (InternalFailure) when calling the CreateApi operation: The API for service 'apigatewayv2' is either not included in your current license plan or has not yet been emulated by LocalStack. Please refer to https://docs.localstack.cloud/references/coverage for more details."
+    },
+    {
+      "step": "probe cognito-idp",
+      "result": "blocked",
+      "detail": "An error occurred (InternalFailure) when calling the CreateUserPool operation: The API for service 'cognito-idp' is either not included in your current license plan or has not yet been emulated by LocalStack. Please refer to https://docs.localstack.cloud/references/coverage for more details."
+    },
+    {
+      "step": "deploy table, Lambda (python3.12) and REST v1 {proxy+} stand-in",
+      "result": "pass",
+      "detail": "<endpoint>/_aws/execute-api/<api-id>/e2e"
+    },
+    {
+      "step": "enroll company key (admin, signed challenge)",
+      "result": "pass",
+      "detail": "201 active"
+    },
+    {
+      "step": "authorized register",
+      "result": "pass",
+      "detail": "201"
+    },
+    {
+      "step": "denied: no token",
+      "result": "pass",
+      "detail": "401 {'error': 'unauthorized'}"
+    },
+    {
+      "step": "denied: wrong org (key enrolled in orgA, token orgB)",
+      "result": "pass",
+      "detail": "403 {'error': 'key_not_enrolled'}"
+    },
+    {
+      "step": "duplicate retry returns the original ack",
+      "result": "pass",
+      "detail": "200"
+    },
+    {
+      "step": "lost ack: retry after a discarded response",
+      "result": "pass",
+      "detail": "200; registration items in DynamoDB: 1"
+    },
+    {
+      "step": "withdrawal: share 200, withdrawn, then 404 (also after an identical register retry)",
+      "result": "pass",
+      "detail": "GET 200, DELETE 200, GET 404, retry 200, GET 404"
+    },
+    {
+      "step": "deletion: registration tombstoned, its share 404",
+      "result": "pass",
+      "detail": "DELETE 200, GET share 404, stored state deleted"
+    },
+    {
+      "step": "replay after deletion (new idempotency key)",
+      "result": "pass",
+      "detail": "410 {'error': 'registration_deleted'}"
+    },
+    {
+      "step": "replay after dedupe expiry (8s)",
+      "result": "pass",
+      "detail": "200"
+    },
+    {
+      "step": "list registrations, one per page with a cursor (DynamoDB Query)",
+      "result": "pass",
+      "detail": "200 200"
+    },
+    {
+      "step": "list keys",
+      "result": "pass",
+      "detail": "200"
+    },
+    {
+      "step": "epoch bump (transaction with its tombstone) invalidates an outstanding envelope",
+      "result": "pass",
+      "detail": "epoch 200 {'epoch': 1}, register 422 {'error': 'envelope_expired'}"
+    },
+    {
+      "step": "restore gate: public and authenticated routes 503 restore_pending before tombstones are applied",
+      "result": "pass",
+      "detail": "GET share x3, POST /v1/envelopes, GET /v1/registrations: ['restore_pending', 'restore_pending', 'restore_pending', 'restore_pending', 'restore_pending']"
+    },
+    {
+      "step": "restore apply (Scan, Put, Update in DynamoDB): withdrawn and deleted views 404, active one 200",
+      "result": "pass",
+      "detail": "5 tombstones applied; live/withdrawn/deleted share GET: [200, 404, 404]; backup emulated by copying items and undoing the withdrawal and deletion (no PITR in LocalStack community)"
+    },
+    {
+      "step": "persistence: share served before restart",
+      "result": "pass",
+      "detail": ""
+    },
+    {
+      "step": "persistence after docker restart (same container, volume, PERSISTENCE=1)",
+      "result": "fail",
+      "detail": "{\"api_share_matches\": false, \"api_share_status\": 404, \"lambda_exists\": false, \"registration_item_readable\": true, \"rest_api_exists\": false, \"table_exists\": true}"
+    },
+    {
+      "step": "persistence after docker rm and re-create on the same volume",
+      "result": "fail",
+      "detail": "{\"api_share_matches\": false, \"api_share_status\": 404, \"lambda_exists\": false, \"registration_item_readable\": true, \"rest_api_exists\": false, \"table_exists\": true}"
+    },
+    {
+      "step": "teardown: container and volume removed",
+      "result": "pass",
+      "detail": "containers left: 0, volumes left: 0"
+    }
+  ]
+}

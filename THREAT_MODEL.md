@@ -57,3 +57,25 @@ The records written after sealing starts: their contents, their order and their 
 Timestamps are stored exactly as the source gives them and are not trusted. Flight-controller clocks reset at boot
 and different sources disagree, so order and completeness rest on sequence numbers. `fseal verify` counts timestamps
 that go backwards so an analyst can look at them.
+
+## Receipt registry (optional server)
+
+`registry/` and `infra/` describe an optional witness server (see [docs/aws/ARCHITECTURE_AWS.md](docs/aws/ARCHITECTURE_AWS.md)).
+It has not been deployed to real AWS. It stores only commitments: org, key fingerprint, head, count, the time the
+server received the receipt, idempotency records and share/withdrawal/deletion state. It never receives the log,
+file names, manifests, salts, per-file digests, GPS or notes.
+
+| Attack | Result | Why |
+|---|---|---|
+| Register a receipt for another company | refused (403) | the org comes only from the verified token; a body `org_id` is a 400; the key must be enrolled in the caller's org |
+| Register a forged or altered receipt | refused (422) | Ed25519 verification against the receipt key, which must be the org's active enrolled key; S ≥ L and non-canonical points are rejected |
+| Enroll an attacker's key | refused unless the attacker is an admin of that org | admin role, a single-use 5-minute challenge bound to the admin's `sub`, signed by the new key; replacing the active key needs `confirm_replace` |
+| Keep registering with a stolen key | stopped once reported | `POST /v1/keys/{fp}/compromised`; earlier registrations keep their server-received time |
+| Keep using an envelope after a pilot leaves | stopped | `POST /v1/epoch` invalidates every outstanding envelope |
+| Replay a registration to resurrect a withdrawn share or a deleted registration | no effect | a retry returns the original ack (or 410) and never creates a share |
+| Restore an old backup to bring back withdrawn shares | refused until tombstones are applied | `RESTORED_FROM` closes every route (503) until `apply_tombstones` writes its marker |
+| Guess a share link | infeasible | 256-bit random token; only its SHA-256 is stored; unknown, withdrawn, expired and deleted links give the same 404 |
+| Read state during a store outage | refused (503) | every read of share, registration, key or restore state fails closed |
+| Run up the bill | **not prevented** | stage throttling bounds the rate; a budget only alerts and does not cap spend ([COST.md](docs/aws/COST.md)) |
+| A compromised AWS account or Cognito administrator | **not detected** | they can rewrite the table, which is the witness record |
+| Time the registry says it received a receipt | trusted only as far as the operator | `received_at` is the server's clock, not a timestamp authority |
