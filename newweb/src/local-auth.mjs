@@ -16,8 +16,9 @@ const LEGACY_PROFILE_KEY = 'hashwing:local-profiles:v1';
 const LEGACY_SESSION_KEY = 'hashwing:active-session:v1';
 const LEGACY_LOGOUT_SIGNAL_KEY = 'hashwing:logout-signal:v1';
 const channelNames = ['flightseal_auth_v1', 'hashwing:local-auth:v1'];
-const allowedScreens = new Set(['sandbox', 'verify', 'records', 'receipts', 'video', 'help']);
-const allowedSamples = new Set(['intact', 'byte-flip', 'tampered', 'rewritten', 'truncated', 'px4', 'px4-tampered', 'px4-full']);
+export const allowedScreens = new Set(['protect', 'sandbox', 'verify', 'records', 'receipts', 'video', 'help']);
+export const MAX_SAVED_RECORD = 64_541; // last record of the bundled full PX4 sample
+export const allowedSamples = new Set(['intact', 'byte-flip', 'tampered', 'rewritten', 'truncated', 'px4', 'px4-tampered', 'px4-full']);
 
 function storageOrThrow(storage) {
   if (!storage || typeof storage.getItem !== 'function' || typeof storage.setItem !== 'function') {
@@ -254,7 +255,7 @@ export function saveWorkspaceContext(userId, context, { storage = globalThis.loc
     app: APP_ID, schema: WORKSPACE_SCHEMA, userId,
     screen: context.screen,
     sample: allowedSamples.has(context.sample) ? context.sample : null,
-    record: Number.isSafeInteger(context.record) && context.record >= 0 && context.record <= 64_541 ? context.record : 0,
+    record: Number.isSafeInteger(context.record) && context.record >= 0 && context.record <= MAX_SAVED_RECORD ? context.record : 0,
   };
   const encoded = JSON.stringify(clean);
   if (new TextEncoder().encode(encoded).length > MAX_SAVED_CONTEXT_BYTES) throw new Error('Saved workspace context exceeds the local size limit.');
@@ -284,7 +285,7 @@ export function readWorkspaceContext(userId, { storage = globalThis.localStorage
     throw new Error('Saved view uses an unsupported format. Remove the old view and save it again from this version.');
   }
   if (value.sample !== null && !allowedSamples.has(value.sample)) throw new Error('Saved view contains an unsupported sample reference. Remove it before saving another view.');
-  if (!Number.isSafeInteger(value.record) || value.record < 0 || value.record > 64_541) throw new Error('Saved view contains an invalid record selection. Remove it before saving another view.');
+  if (!Number.isSafeInteger(value.record) || value.record < 0 || value.record > MAX_SAVED_RECORD) throw new Error('Saved view contains an invalid record selection. Remove it before saving another view.');
   return { screen: value.screen, sample: value.sample, record: value.record };
 }
 

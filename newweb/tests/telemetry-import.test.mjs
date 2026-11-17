@@ -96,3 +96,19 @@ test('malformed CSV, out-of-range coordinates and truncated tlog are rejected', 
   assert.equal(nullAltitude.telemetry[0].altitudeM, undefined);
   assert.equal(nullAltitude.telemetry[0].speedMps, undefined);
 });
+
+test('CSV uses only mapped columns: unmapped lat/lon/altitude columns never override them', async () => {
+  const source = new File(['epoch,gps_lat,gps_lon,lat,lon,altitude_m\n100,42.1,-71.2,1,2,999\n'], 'flight.csv');
+  const converted = await convertTelemetryFile(source, { csvMapping: {
+    timestampColumn: 'epoch', timestampUnit: 'microseconds', latitudeColumn: 'gps_lat', latitudeUnit: 'degrees', longitudeColumn: 'gps_lon', longitudeUnit: 'degrees',
+  } });
+  assert.equal(converted.telemetry[0].latitudeDeg, 42.1);
+  assert.equal(converted.telemetry[0].longitudeDeg, -71.2);
+  assert.equal(converted.telemetry[0].altitudeM, undefined);
+});
+
+test('JSON coordinates of only spaces are missing, not 0,0', async () => {
+  const source = new File([JSON.stringify([{ timestamp_us: 1, lat: ' ', lon: ' ' }])], 'flight.json');
+  const converted = await convertTelemetryFile(source);
+  assert.equal(converted.telemetry.length, 0);
+});

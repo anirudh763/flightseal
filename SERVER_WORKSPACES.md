@@ -33,6 +33,19 @@ Cookie identifiers are opaque, HttpOnly, SameSite=Lax, explicitly expiring and d
 
 Build-time prepare_persistence_assets.py marks public HTML and updates its exact offline integrity digest. Browser-only repository assets remain unmarked. Browser persistence requests and saved-artifact downloads have a30second deadline; failed saves retain input for explicit retry. Uploads require explicit Save current run; reconnect only announces pending changes and never starts an upload. Private API routes are network-only and no-store; offline domain editing continues with unsynced work retained, rather than pretending server storage is available.
 
+## Known limits: not ready for public multi-user hosting (review, 2026-11-17)
+
+Use server workspaces for one person or a small trusted team. A code review found these open gaps:
+
+- Rate limits are keyed on the connecting IP. Behind the TLS proxy that HTTPS needs, every user shares one budget.
+- Quotas (records, artifacts, snapshots, guest sessions) are global, so one user can fill them for everyone.
+- Nothing can be deleted: there are no delete routes, no retention or guest cleanup, and session files accumulate.
+- Request bodies are read before origin, session and rate checks; slow uploads can hold the single upload slot.
+- One lock serializes every API call, including `/readyz`; `/metrics` and `/api/system` are public.
+- This repository has no tests for `tools/persistence.py`'s auth, CSRF, ownership, snapshot or quota paths.
+
+Seal & send, Verify and the rest of the console do not use the server and are not affected.
+
 ## Contracts and bounds
 
 POST /api/session/guest automatically creates or resumes an owned guest workspace. GET /api/session returns current session and CSRF; signup/login rotate and safely transfer authorized guest work; logout revokes. No user-supplied workspace ID alone grants access.

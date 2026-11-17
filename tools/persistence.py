@@ -207,6 +207,7 @@ class Persistence:
         self.auth_slots = threading.BoundedSemaphore(2)
         self.auth_enabled = env.get('APP_PASSWORD_AUTH') == '1'
         self.passwords = PasswordHasher(time_cost=2, memory_cost=19456, parallelism=1, type=Type.ID)
+        self.unknown_account_hash = self.passwords.hash(secrets.token_urlsafe(32))  # unknown users cost one verify, like real ones
         try:
             self.ttl = int(env.get('APP_SESSION_TTL_SECONDS', '2592000'))
         except (TypeError, ValueError):
@@ -562,8 +563,8 @@ class Persistence:
                 db.execute('INSERT INTO accounts VALUES (?,?,?,?)', (principal, username, self.passwords.hash(password), now()))
             else:
                 try:
-                    # Unknown users still perform the same bounded password work.
-                    password_hash = account['password_hash'] if account else self.passwords.hash('unavailable-account-password')
+                    # Unknown users run one verify, the same work as a real login (signup still reports taken names).
+                    password_hash = account['password_hash'] if account else self.unknown_account_hash
                     verified = self.passwords.verify(password_hash, password)
                 except VerificationError:
                     verified = False

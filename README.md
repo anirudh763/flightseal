@@ -74,6 +74,33 @@ has not been tried.
 
 C++17 core (OpenSSL SHA-256 and Ed25519), Python tools for PX4 flight logs, tests under AddressSanitizer and UBSan.
 
+## Seal & send: seal a flight log and hand over the receipt
+
+The workspace's first screen, **Seal & send** (`#/app/protect`, or **Seal a flight log** on the landing page), does
+the whole job for two people. Nothing is uploaded.
+
+1. **Pilot or operator:** after downloading a flight, choose the log file (any type up to 45 MiB: PX4 `.ulg`,
+   ArduPilot `.bin`, a DJI flight record, CSV) and press **Seal this log**. The exact bytes are sealed into
+   `<name>.fseal`, checked, and a short receipt message is shown. With a signing key loaded under Settings (held in that
+   tab only), every flight carries the same public key; otherwise a key is made for that file and discarded.
+2. **Send that message to someone else right away** (your company, client or insurer) with Copy, Email or Download.
+3. **Whoever kept the message** later receives the `.fseal` file, pastes the message (email quoting and line
+   wrapping are fine) and presses **Check this log**. If it is intact, they can download the exact original file.
+
+From the command line:
+
+```
+python3 tools/raw_file.py encode flight.ulg | build/fseal append flight.fseal --key drone.pem --receipts flight.receipts --every 1000000
+build/fseal verify flight.fseal --receipts flight.receipts --pubkey <public key>
+python3 tools/raw_file.py extract flight.fseal restored.ulg
+```
+
+This proves the file is unchanged *since sealing*, not what happened before, and only if the receipt really went to
+someone else at sealing time. Whole-file sealing uses ordinary `FLTSEAL1` records (a manifest line, then base64
+chunks; [docs/rawfile.js](docs/rawfile.js)), so every existing verifier checks it. Tested on the public PX4 sample
+flight and, in Node, on a 45 MiB file through the native bridge; in headless Chrome on one Mac a 45 MiB file sealed
+in about 15 s and checked and restored in about 2 s. No pilot or insurer has used it yet.
+
 ## See it work
 
 Output from [`tools/demo.sh`](tools/demo.sh) on a public PX4 flight log (69 s of flight, 64,542 logged samples), with
@@ -163,7 +190,7 @@ collection, or email waitlist is active.
 
 **[Open HashWing](https://anirudh763.github.io/flightseal/)**: choose a sealed log and optionally its receipts and
 an independently trusted public key. The canonical light console runs the C++/OpenSSL verifier locally in a worker;
-files are never uploaded. Samples, Verify, Records, Receipts, Video and Trust each have an address.
+files are not uploaded unless you choose Save in self-hosted server mode. Seal & send, Samples, Verify, Records, Receipts, Video and Trust each have an address.
 After a successful online visit, the console and small examples can reload offline. The full PX4 download is opt-in.
 
 The 800-record example is synthetic. The 2,422-record and 64,542-record examples are selected/converted public PX4

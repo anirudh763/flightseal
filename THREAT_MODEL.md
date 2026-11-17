@@ -35,6 +35,10 @@ The records written after sealing starts: their contents, their order and their 
 
 ## Assumptions
 
+- In Seal & send the verifier's trusted key is the one inside the receipt message they pasted. That is out of band
+  only if they received the message from the sealer at sealing time and kept it; a message that arrives together
+  with the file proves nothing. Without a saved signing key each file has its own key, discarded after sealing, so
+  nothing links two flights to one operator.
 - SHA-256 is collision resistant and Ed25519 signatures cannot be forged.
 - The verifier gets the sealer's public key out of band (for example, registered with the operator's company), not
   from the holder.

@@ -93,3 +93,13 @@ test('logout while a restore waits for its Web Lock cancels before any write', a
     if (oldWindow) Object.defineProperty(globalThis, 'window', oldWindow); else delete globalThis.window;
   }
 });
+
+test('a saved view of the user\'s own file (no bundled sample) on the Seal & send screen backs up and restores', async () => {
+  const source = new MemoryStorage();
+  const profile = await createLocalProfile('own-file@example.test', 'local profile password 123', { storage: source, cryptoObject: webcrypto });
+  await saveWorkspaceContext(profile.id, { screen: 'protect', sample: null, record: 0 }, { storage: source });
+  const backup = await createEncryptedProfileBackup(profile.id, { storage: source, passphrase: 'backup passphrase 123', cryptoObject: webcrypto });
+  const fresh = new MemoryStorage();
+  await commitBackupRestore(await inspectEncryptedProfileBackup(backup, 'backup passphrase 123', { cryptoObject: webcrypto }), fresh);
+  assert.deepEqual(readWorkspaceContext(profile.id, { storage: fresh }), { screen: 'protect', sample: null, record: 0 });
+});

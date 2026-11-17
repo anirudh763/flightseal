@@ -7,13 +7,13 @@
     "src/fseal.h": "25185aa6c274d8d58a3f9201357c78af387630cb9cf35af7fc5edff31474a507",
     "src/import.cpp": "db54461d848b81f0fd28bbda5fb719ebeea842105af67d41b00b026ecf4f73d0",
     "src/import.h": "53ad9658244edade906942774bc8d9e673b3dbfb1a2f3206ef626ca1745dd88f",
-    "wasm/bridge.cpp": "8c141ce69954733901cba21968d793f4d2bde253d1aec3358c302a8ebbd02495",
+    "wasm/bridge.cpp": "5bb2b6ba28d97c89119c43ba33d71cda385be5eb068167e4f6343372cb260e0d",
     "CMakeLists.txt": "62056dae9d8ddbf0acdf4221bac3d2b795a82bb68e1ce9280f308a55a36e2df6",
     "wasm/CMakeLists.txt": "4120f0268a8c378eedf3c210741de5fa1b12574f878ef273890ebe01dd77eb99",
     "scripts/build_wasm.sh": "1b6e416f5202395cad0d6ac76e6d19cc7f846b355baeaff330086fef5a9d008f",
     "scripts/build_wasm_inner.sh": "197117968d658e05f815a87c39cf12a2aa8d1f3fffedea53b073b3ddd468c37f",
     "docs/wasm/flightseal.mjs": "943f0a0642710b5421e6a3c0a3da4c3489e0acbe97e8f9cfd5054c51a9bc5396",
-    "docs/wasm/flightseal.wasm": "3a36f360a098120f4f843311b115df79683924ce0ebf73027115977fc7c99f44"
+    "docs/wasm/flightseal.wasm": "bc6dcb30983159159572f42fac920f7f0afdabab34301355201413b694a12783"
   },
   "telemetry_schema": {
     "basis": "PX4 ULog/uORB field-name, scalar type, and unit conventions",

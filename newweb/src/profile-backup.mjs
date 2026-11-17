@@ -1,7 +1,7 @@
 import {
   APP_ID, PBKDF2_HASH, PBKDF2_ITERATIONS, PROFILE_SCHEMA, WORKSPACE_SCHEMA,
   MAX_PROFILE_REGISTRY_BYTES, MAX_SAVED_CONTEXT_BYTES, localAuthStorageKeys,
-  listLocalProfiles, ensureCurrent,
+  listLocalProfiles, ensureCurrent, allowedScreens, allowedSamples, MAX_SAVED_RECORD, PROFILE_LIMIT,
 } from './local-auth.mjs';
 
 export const BACKUP_FORMAT = 'flightseal-encrypted-profile-backup';
@@ -44,7 +44,7 @@ function readPayload(storage, profileId) {
   if (workspaceRaw != null) {
     if (utf8.encode(workspaceRaw).length > MAX_SAVED_CONTEXT_BYTES) throw new Error('Saved workspace view exceeds its safe size limit.');
     try { workspace = JSON.parse(workspaceRaw); } catch { throw new Error('Saved workspace view is unreadable; backup was not created.'); }
-    if (workspace?.app !== APP_ID || workspace?.schema !== WORKSPACE_SCHEMA || workspace?.userId !== profileId || typeof workspace.screen !== 'string' || typeof workspace.sample !== 'string' || !Number.isSafeInteger(workspace.record)) throw new Error('Saved workspace view has an unsupported format.');
+    if (workspace?.app !== APP_ID || workspace?.schema !== WORKSPACE_SCHEMA || workspace?.userId !== profileId || typeof workspace.screen !== 'string' || (workspace.sample !== null && typeof workspace.sample !== 'string') || !Number.isSafeInteger(workspace.record)) throw new Error('Saved workspace view has an unsupported format.');
   }
   return { app: APP_ID, schema: BACKUP_VERSION, profile, workspace };
 }
@@ -60,9 +60,8 @@ function validatePayload(payload) {
   if (payload.workspace != null) {
     const workspace = payload.workspace;
     if (workspace.app !== APP_ID || workspace.schema !== WORKSPACE_SCHEMA || workspace.userId !== profile.id ||
-        !['sandbox', 'verify', 'records', 'receipts', 'video', 'help'].includes(workspace.screen) ||
-        !['intact', 'byte-flip', 'tampered', 'rewritten', 'truncated', 'px4', 'px4-tampered', 'px4-full'].includes(workspace.sample) ||
-        !Number.isSafeInteger(workspace.record) || workspace.record < 0) throw new Error('Decrypted backup has an invalid saved view.');
+        !allowedScreens.has(workspace.screen) || (workspace.sample !== null && !allowedSamples.has(workspace.sample)) ||
+        !Number.isSafeInteger(workspace.record) || workspace.record < 0 || workspace.record > MAX_SAVED_RECORD) throw new Error('Decrypted backup has an invalid saved view.');
   }
   return payload;
 }
@@ -118,13 +117,13 @@ export function previewBackupRestore(payload, storage = globalThis.localStorage)
   if (raw != null) {
     if (utf8.encode(raw).length > MAX_PROFILE_REGISTRY_BYTES) throw new Error('Current profile registry exceeds its safe size limit.');
     try { registry = JSON.parse(raw); } catch { throw new Error('Current profile registry is unreadable; restore preview stopped without changes.'); }
-    if (registry?.app !== APP_ID || registry?.schema !== PROFILE_SCHEMA || !Array.isArray(registry.profiles) || registry.profiles.length > 24) throw new Error('Current profile registry has an unsupported format.');
+    if (registry?.app !== APP_ID || registry?.schema !== PROFILE_SCHEMA || !Array.isArray(registry.profiles) || registry.profiles.length > PROFILE_LIMIT) throw new Error('Current profile registry has an unsupported format.');
     listLocalProfiles({ storage }); // validates all existing cryptographic and identity fields before merge
   }
   const sameId = registry.profiles.some((entry) => entry.id === payload.profile.id);
   const sameEmail = registry.profiles.some((entry) => entry.email === payload.profile.email);
   if (sameId || sameEmail) throw new Error('A profile with this ID or email already exists on this device. Choose merge only after signing in to that profile.');
-  if (registry.profiles.length >= 24) throw new Error('This device has reached its local profile limit. Remove a profile before restoring.');
+  if (registry.profiles.length >= PROFILE_LIMIT) throw new Error('This device has reached its local profile limit. Remove a profile before restoring.');
   return { email: payload.profile.email, hasSavedView: !!payload.workspace, action: 'add-profile', mergeTarget: null };
 }
 

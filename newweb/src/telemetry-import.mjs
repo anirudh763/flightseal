@@ -164,7 +164,8 @@ function validateCoordinates(records) {
     const fields = record.fields;
     const latRaw = fields.latitude_deg ?? fields.lat;
     const lonRaw = fields.longitude_deg ?? fields.lon;
-    if (latRaw == null || lonRaw == null || latRaw === '' || lonRaw === '') return record;
+    const blank = (value) => value == null || (typeof value === 'string' && value.trim() === '');
+    if (blank(latRaw) || blank(lonRaw)) return record;
     const lat = Number(latRaw), lon = Number(lonRaw);
     if (!Number.isFinite(lat) || Math.abs(lat) > 90 || !Number.isFinite(lon) || Math.abs(lon) > 180) throw new Error(`Record ${record.record + 1}: coordinates are outside valid latitude/longitude ranges.`);
     return { ...record, latitudeDeg: lat, longitudeDeg: lon };
@@ -196,19 +197,27 @@ export async function convertTelemetryFile(file, { signal, csvMapping } = {}) {
       ? ['CSV values were parsed as UTF-8 text; selected timestamps are retained as unsigned decimal strings.', 'Every source column is retained in each payload; mapped fields and declared units are recorded in provenance.', 'Records were re-encoded as compact JSON payloads in input row order.']
       : ['JSON object keys were sorted for deterministic compact payload encoding; timestamp_us is retained as an unsigned decimal string.', 'Record order is preserved.'];
   }
-  records = validateCoordinates(records);
+  if (format !== 'CSV') records = validateCoordinates(records); // CSV uses only the columns the user mapped
   if (signal?.aborted) throw new DOMException('Telemetry import canceled.', 'AbortError');
   const sourceSha256 = await digest(bytes);
   const lines = records.map((record) => `${record.timestamp}\t${JSON.stringify(record.fields)}`).join('\n') + '\n';
   const converted = new File([lines], `${file.name}.flightseal.tsv`, { type: 'text/tab-separated-values;charset=utf-8' });
   if (converted.size > TELEMETRY_IMPORT_MAX_BYTES) throw new RangeError('Converted telemetry exceeds the 16 MiB sealer input limit.');
   const coordinateRecords = records.filter((record) => record.latitudeDeg !== undefined && record.longitudeDeg !== undefined).length;
-  const telemetry = records.filter((record) => (record.latitudeDeg !== undefined && record.longitudeDeg !== undefined) || record.altitudeM !== undefined || record.speedMps !== undefined || (record.fields.altitude_m ?? record.fields.altitudeM) != null || (record.fields.speed_mps ?? record.fields.speedMps) != null).map((record) => ({
+  // JSON and Tlog may name these fields directly; CSV values count only when the user mapped the column.
+  const named = (record, a, b) => {
+    if (format === 'CSV') return undefined;
+    const raw = record.fields[a] ?? record.fields[b];
+    if (typeof raw !== 'number' && !(typeof raw === 'string' && raw.trim() !== '')) return undefined;
+    const value = Number(raw);
+    return Number.isFinite(value) ? value : undefined;
+  };
+  const telemetry = records.map((record) => ({
     record: record.record, timestampUs: record.timestampUs ?? record.timestamp,
     latitudeDeg: record.latitudeDeg, longitudeDeg: record.longitudeDeg,
-    altitudeM: record.altitudeM ?? ((record.fields.altitude_m ?? record.fields.altitudeM) != null && (record.fields.altitude_m ?? record.fields.altitudeM) !== '' && Number.isFinite(Number(record.fields.altitude_m ?? record.fields.altitudeM)) ? Number(record.fields.altitude_m ?? record.fields.altitudeM) : undefined),
-    speedMps: record.speedMps ?? ((record.fields.speed_mps ?? record.fields.speedMps) != null && (record.fields.speed_mps ?? record.fields.speedMps) !== '' && Number.isFinite(Number(record.fields.speed_mps ?? record.fields.speedMps)) ? Number(record.fields.speed_mps ?? record.fields.speedMps) : undefined),
-  }));
+    altitudeM: record.altitudeM ?? named(record, 'altitude_m', 'altitudeM'),
+    speedMps: record.speedMps ?? named(record, 'speed_mps', 'speedMps'),
+  })).filter((point) => (point.latitudeDeg !== undefined && point.longitudeDeg !== undefined) || point.altitudeM !== undefined || point.speedMps !== undefined);
   return {
     file: converted, telemetry, records: records.length,
     source: {

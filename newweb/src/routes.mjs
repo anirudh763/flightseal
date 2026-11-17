@@ -1,4 +1,4 @@
-const screens = new Set(['sandbox', 'verify', 'records', 'receipts', 'video', 'help', 'benchmarks', 'system', 'overview', 'workbench', 'reports', 'settings']);
+const screens = new Set(['protect', 'sandbox', 'verify', 'records', 'receipts', 'video', 'help', 'benchmarks', 'system', 'overview', 'workbench', 'reports', 'settings']);
 const aliases = new Map([['findings', 'sandbox'], ['examples', 'sandbox'], ['telemetry', 'sandbox']]);
 const samples = new Set(['intact', 'byte-flip', 'tampered', 'rewritten', 'truncated', 'px4', 'px4-tampered', 'px4-full']);
 

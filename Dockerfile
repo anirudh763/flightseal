@@ -14,7 +14,7 @@ FROM build AS verification
 ENV FSEAL_BIN=/tmp/fseal-build/fseal
 RUN ctest --test-dir /tmp/fseal-build --output-on-failure \
     && python -m pytest -q \
-    && node --test tests/web/verifier.test.mjs tests/web/copy.test.mjs tests/web/workbench.test.mjs tests/web/redirect.test.mjs \
+    && node --test tests/web/verifier.test.mjs tests/web/copy.test.mjs tests/web/workbench.test.mjs tests/web/redirect.test.mjs tests/web/rawfile.test.mjs tests/web/sw-cache-index.test.mjs \
     && node --test tests/wasm/bridge.test.mjs tests/wasm/enterprise-edge.test.mjs tests/wasm/import.test.mjs tests/wasm/output-storage.test.mjs \
     && python tools/verify_wasm_provenance.py \
     && npm --prefix newweb ci \

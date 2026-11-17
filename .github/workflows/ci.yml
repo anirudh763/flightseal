@@ -32,7 +32,7 @@ jobs:
       - name: Python tests (CLI, independent reader, real PX4 flight)
         run: python -m pytest -q
       - name: JS verifier agrees with the CLI and the Python reader (every attack, hostile files, PX4 flight)
-        run: node --test tests/web/verifier.test.mjs tests/web/copy.test.mjs tests/web/workbench.test.mjs tests/web/redirect.test.mjs
+        run: node --test tests/web/verifier.test.mjs tests/web/copy.test.mjs tests/web/workbench.test.mjs tests/web/redirect.test.mjs tests/web/rawfile.test.mjs tests/web/sw-cache-index.test.mjs
       - name: Demo on a real PX4 flight
         run: tools/demo.sh
 
@@ -63,6 +63,8 @@ jobs:
         run: node tests/web/e2e.mjs
       - name: Verifier screens (routes, focus, Menu sheet, Back/Forward, deep and old links, light default, axe-core)
         run: node tests/web/routes.mjs
+      - name: Download the public PX4 sample flight the Seal & send test uses
+        run: python3 tools/fetch_sample.py tests/.data
       - name: File failure, retry, stale selection and report download regressions
         run: node tests/web/hardening.mjs
 
@@ -109,6 +111,8 @@ jobs:
           npm ci
           node --test tests/report-pdf.test.mjs
           npm run build
+      - name: Download the public PX4 sample flight the Seal & send test uses
+        run: python3 tools/fetch_sample.py tests/.data
       - name: Console flows, mobile layouts and accessibility
         working-directory: newweb
         run: npm run test:browser
