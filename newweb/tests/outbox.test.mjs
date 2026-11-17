@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
 import { createRegistryClient } from '../src/registry-client.mjs';
 import {
-  openOutbox, createMemoryStore, ROW_FIELDS, STATES, backoffDelay, registrationLabel, stateLabel, MAX_ATTEMPTS, MAX_ACKS, MAX_QUEUE,
+  openOutbox, createMemoryStore, ROW_FIELDS, STATES, backoffDelay, registrationLabel, stateLabel, attentionMessage, MAX_ATTEMPTS, MAX_ACKS, MAX_QUEUE,
 } from '../src/outbox.mjs';
 
 const b64 = (o) => Buffer.from(JSON.stringify(o)).toString('base64url');
@@ -238,7 +238,7 @@ test('owner mismatch: a token for another owner sends nothing and rows stay queu
 
 test('transient failures back off and give up after MAX_ATTEMPTS', async () => {
   const h = harness();
-  const kinds = [[503, { error: 'unavailable' }], [429, { error: 'quota_exceeded' }], ['throw'],
+  const kinds = [[503, { error: 'unavailable' }], [429, { message: 'Too Many Requests' }], ['throw'],
     (init) => new Promise((_, rej) => init.signal.addEventListener('abort', () => rej(new DOMException('t', 'AbortError'))))];
   for (let i = 0; i < MAX_ATTEMPTS; i += 1) h.replies.push(kinds[i % kinds.length]);
   const ob = await h.open({ client: createRegistryClient({ baseUrl: 'http://reg', fetch: h.fetch, timeoutMs: 10 }) });
@@ -541,4 +541,39 @@ test('close() also aborts an in-flight epoch read', async () => {
   await settle();
   ob.close();
   assert.equal(aborted, true);
+});
+
+test('429 quota_exceeded is terminal for the month: needs attention with a plain message, no automatic retry', async () => {
+  const h = harness();
+  h.replies.push([429, { error: 'quota_exceeded' }]);
+  const ob = await h.open();
+  const row = await ob.enqueue({ receipt: receipt(1) });
+  await settle();
+  let [r] = await ob.list();
+  assert.equal(r.state, 'needs_attention');
+  assert.equal(r.reason, 'quota_exceeded');
+  assert.equal(r.next_attempt_at, undefined, 'no backoff timer for it');
+  assert.equal(r.message, "Your company's monthly registration limit is reached; this proof is saved and can be exported");
+  assert.equal(attentionMessage(r), r.message);
+  assert.equal((await ob.exportPending()).ok, true, 'the proof can be exported');
+  await ob.retryNow(); // a plain retry does not resend it
+  await settle();
+  assert.equal(h.regs().length, 1);
+  await ob.retryNow(row.id); // an explicit retry (for example next month) may
+  assert.equal(h.regs().length, 2);
+  [r] = await ob.list();
+  assert.equal(r.state, 'registered');
+  ob.close();
+});
+
+test('a gateway throttle 429 (no registry error code) is retried later with the same key', async () => {
+  const h = harness();
+  h.replies.push([429, { message: 'Too Many Requests' }]);
+  const ob = await h.open();
+  await ob.enqueue({ receipt: receipt(1) });
+  await settle();
+  const [r] = await ob.list();
+  assert.equal(r.state, 'waiting_for_connection');
+  assert.ok(r.next_attempt_at > h.t);
+  ob.close();
 });

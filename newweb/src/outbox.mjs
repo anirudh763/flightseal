@@ -21,7 +21,8 @@ export const STATES = Object.freeze(['sealed_local', 'registering', 'waiting_for
 // needs_attention reasons that retryNow(id) may act on; every other reason is terminal.
 // The three envelope refusals: each needs a new envelope (and so a new key), bound only by an explicit retryNow(id).
 const ENVELOPE_REASONS = new Set(['envelope_expired', 'epoch_mismatch', 'sub_mismatch']);
-const RETRYABLE = new Set([...ENVELOPE_REASONS, 'key_not_enrolled', 'key_not_active', 'attempts_exhausted']);
+// quota_exceeded is never retried automatically; an explicit retryNow(id) (for example next month) may try again.
+const RETRYABLE = new Set([...ENVELOPE_REASONS, 'key_not_enrolled', 'key_not_active', 'attempts_exhausted', 'quota_exceeded']);
 const REASONS = { idempotency_conflict: 'conflict' };
 
 // Same shape as registry/registry/receipt.py parse(): six tokens, lowercase hex, 0 < count < 2^64.
@@ -43,7 +44,17 @@ const STATE_LABELS = { sealed_local: 'Sealed locally', registering: 'Registering
   registered: 'Registered', needs_attention: 'Needs attention' };
 export const stateLabel = (state) => STATE_LABELS[state] ?? 'Unknown';
 export const registrationLabel = (ack) => (ack?.disposition === 'deleted' ? 'Registered, later deleted' : 'Registered');
-const withLabel = (row) => ({ ...row, label: row.state === 'registered' ? registrationLabel(row) : stateLabel(row.state) });
+const ATTENTION_MESSAGES = {
+  quota_exceeded: "Your company's monthly registration limit is reached; this proof is saved and can be exported",
+};
+// Plain text for a needs_attention row whose reason has a dedicated message; undefined otherwise.
+export const attentionMessage = (row) => (row?.state === 'needs_attention' ? ATTENTION_MESSAGES[row.reason] : undefined);
+const withLabel = (row) => {
+  const out = { ...row, label: row.state === 'registered' ? registrationLabel(row) : stateLabel(row.state) };
+  const message = attentionMessage(row);
+  if (message) out.message = message;
+  return out;
+};
 
 function checkRow(row, acked) {
   for (const k of Object.keys(row)) {
@@ -279,7 +290,10 @@ export async function openOutbox({
       if (g === gen) setSignIn(true);
       return STOP;
     }
-    if (res.kind === 'network' || res.kind === 'timeout' || res.code === 'bad_response' || res.status === 429
+    // A 429 with the registry's quota_exceeded code is the monthly limit: final for the month (below). Any other 429
+    // is API Gateway throttling and is retried later.
+    if (res.kind === 'network' || res.kind === 'timeout' || res.code === 'bad_response'
+        || (res.status === 429 && res.code !== 'quota_exceeded')
         || res.status === 408 || res.status >= 500) {
       const attempts = (row.attempts || 0) + 1;
       if (attempts >= MAX_ATTEMPTS) {

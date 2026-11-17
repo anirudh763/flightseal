@@ -160,6 +160,14 @@ deferred:
     - Array context is now accepted in bin/app.ts.
     - The AGENTS infra count is 13.
 
+### 2026-11-17 — Review pass 3 (merge gate before PR #23 merges)
+- verdicts: 4 findings — high 0, medium 2, low 2, false 0, maybe-false 0
+- findings:
+  - `[medium]` `[patch]` A 429 `quota_exceeded` (monthly quota) was retried with backoff for about 9 to 17 minutes and then shown as `attempts_exhausted` — it is now final for the month: `needs_attention`, reason `quota_exceeded`, message "Your company's monthly registration limit is reached; this proof is saved and can be exported". No automatic retry; `retryNow(id)` may try again. Any other 429 (gateway throttling, no registry code) still backs off. Failing-first tests: two new unit tests (they failed on the missing `attentionMessage` export before the fix); the backoff test now uses a gateway 429.
+  - `[medium]` `[patch]` ARCHITECTURE_AWS.md gave the wrong request order (envelope before signature) — corrected to match `app.py`: receipt format → signature → envelope (with the committed-retry lookup) → key state.
+  - `[low]` `[defer]` A backup restore drops registrations and shares created after the backup while the browser may still show "Registered" — documented as a known gap in ARCHITECTURE_AWS.md and COVERAGE.md; not fixed.
+  - `[low]` `[patch]` Merged origin/main (weak-key rejection, trusted keys, `.gitleaks.toml` allowlist); one AGENTS.md conflict resolved by keeping this branch's counts and taking the new counts from fresh runs; docs/console rebuilt with `npm --prefix newweb run build`.
+
 ## Design Notes
 
 The row primary key is the receipt hash, not the idempotency key, because a row can exist before it has an envelope. An envelope can be prefetched while online (`client.envelope()`, cached per owner in the store's `meta`). The server deduplicates by `rid` even across keys, so a new envelope after expiry still returns the original ack.

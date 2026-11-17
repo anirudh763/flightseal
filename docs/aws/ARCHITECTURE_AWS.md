@@ -89,8 +89,11 @@ head and count.
 
 ## Requests
 
-Order: size (413 over 4096 bytes) → identity (401/403) → body schema (400) → idempotency lookup → envelope (422) →
-receipt format (400) → signature (422) → key state (403) → one transaction.
+Order (as in `app.py`): size (413 over 4096 bytes) → identity (401/403) → body schema (400) → idempotency lookup →
+receipt format (400) → signature (422) → envelope (422 `envelope_expired`, `sub_mismatch` or `epoch_mismatch`;
+only here does a lookup of an already committed registration happen, so a retry of a committed one gets its ack) →
+key state (403) → one transaction. The signature is checked before the envelope and before any existence lookup,
+so an unsigned request cannot learn whether a registration exists.
 
 A new registration is one `TransactWriteItems`: put REG if absent, put IDEM if absent or expired, and add one to the
 month's quota if it is under the limit. Either all three happen or none do, so a 429 leaves nothing behind. When the
@@ -185,6 +188,10 @@ The console runs on another origin (GitHub Pages), so the API answers CORS for a
 
   This needs the source table to still be readable. If it is gone, tombstones written after the backup are lost and
   the restored table must stay closed until someone decides what to do (see [RUNBOOK_AWS.md](RUNBOOK_AWS.md)).
+
+  **Known gap (not fixed):** a restore also drops every registration and share created after the backup. The
+  browser outbox keeps its acknowledgement, so it may still show "Registered" for a proof the restored table no
+  longer has. Nothing tells the browser, and the outbox does not resend a proof it already holds an ack for.
 
 ## What TTL does not guarantee
 

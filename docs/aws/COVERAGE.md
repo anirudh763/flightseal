@@ -60,3 +60,4 @@ Columns:
 | `cdklocal deploy` of the real stack + e2e against the HTTP API | — | not run (needs LocalStack Pro; `deploy_cdklocal.sh` exits 2 without a token) | not verified | yes |
 | `cdk destroy` leaves nothing behind | — | — | not verified | runbook only |
 | Cost figures | — | — | not verified | estimate in [COST.md](COST.md) |
+| Known gap: a backup restore drops registrations and shares created after the backup, while the browser outbox may still show "Registered" | no (not fixed) | — | not verified | see [ARCHITECTURE_AWS.md](ARCHITECTURE_AWS.md) Backup restore |

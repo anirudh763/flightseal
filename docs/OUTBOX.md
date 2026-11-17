@@ -54,7 +54,8 @@ idempotency key, which returns the original ack.
 | 422 `bad_signature`, 400, 413 | `needs_attention`, the server's code | terminal |
 | 403 `key_not_enrolled` / `key_not_active` | `needs_attention`, the server's code | `retryNow(id)` retries with the same binding |
 | 401 | stays queued, `needsSignIn: true`, dispatch stops | resumes once a different token for the same owner is available |
-| 503, 429, other 5xx, network error, timeout, a 2xx that is not a readable JSON ack (`bad_response`) | `waiting_for_connection`, `attempts + 1` | backoff: d = min(15 min, 2 s · 2^(n-1)), delay in [d/2, d]; after 10 attempts `needs_attention`, `attempts_exhausted` (retryable) |
+| 429 `quota_exceeded` (the org's monthly quota) | `needs_attention`, `quota_exceeded`, message "Your company's monthly registration limit is reached; this proof is saved and can be exported" | final for the month: no automatic retry; `retryNow(id)` tries again (for example next month) |
+| 503, any other 429 (API Gateway throttling), other 5xx, network error, timeout, a 2xx that is not a readable JSON ack (`bad_response`) | `waiting_for_connection`, `attempts + 1` | backoff: d = min(15 min, 2 s · 2^(n-1)), delay in [d/2, d]; after 10 attempts `needs_attention`, `attempts_exhausted` (retryable) |
 
 `retryNow()` with no id sends every queued row now, ignoring backoff and `navigator.onLine`. The outbox also
 dispatches on open and on the `online` event. It never creates or retries a share. It mints a new envelope only for
@@ -105,8 +106,9 @@ clock, held registrations, dropped registrations or shares, the CORS allowlist, 
    treats both as final.
 4. **Every 401 looks the same.** The server does not say whether a token expired or is invalid, so the outbox can only
    say "sign in again".
-5. **429 means the monthly quota.** The outbox retries 429 with backoff like any transient error. If the quota is
-   still exhausted after 10 attempts (9 backoff waits totalling about 9 to 17 minutes), the row ends in `attempts_exhausted`.
+5. **429 has two meanings.** Fixed: a 429 whose body is `{"error": "quota_exceeded"}` is the monthly quota and is
+   final for the month (`needs_attention` with a plain message; the proof stays saved and can be exported). Any other
+   429 is API Gateway throttling and is retried with backoff.
 6. **`received_at` is rounded to the second** (ISO 8601 UTC), so two commits in the same second have the same
    timestamp.
 7. **`POST /v1/shares` took no idempotency key.** Fixed: the client makes the token and sends its hash with an
