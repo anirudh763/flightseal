@@ -1,7 +1,7 @@
 // One FlightSeal worker serves the namespaced site or the standalone HashWing host.
 // Bump VERSION whenever this policy changes. A waiting revision is activated only after every
 // open console tab confirms that it has no active task or unacknowledged output.
-const VERSION = '0.4.0-flightseal-console-15';
+const VERSION = '0.4.0-flightseal-console-16';
 const ROOT_HOSTING = new URL(self.registration.scope).pathname === '/';
 const ASSET_SCOPE = ROOT_HOSTING ? new URL('flightseal/', self.registration.scope).href : self.registration.scope;
 const PRODUCT_ROUTES = ['/', '/overview', '/workbench', '/reports', '/settings', '/verify', '/benchmarks', '/system'];
@@ -18,7 +18,7 @@ const SHELL_FILES = [
 ];
 importScripts('./sw-paths.js');
 const OPTIONAL_FILES = [
-  'verifier.js', 'records.mjs', 'wasm/client.mjs', 'wasm/worker.mjs', 'wasm/opfs.mjs',
+  'verifier.js', 'records.mjs', 'rawfile.js', 'manifest.mjs', 'wasm/client.mjs', 'wasm/worker.mjs', 'wasm/opfs.mjs', 'wasm/hash-worker.mjs',
   'wasm/flightseal.mjs', 'wasm/flightseal.wasm', 'atkinson-hyperlegible-latin-400-normal.woff2',
   'atkinson-hyperlegible-latin-700-normal.woff2', 'OFL-atkinson-hyperlegible.txt', 'favicon.svg',
   'icon-192.png', 'icon-512.png', 'manifest.webmanifest',

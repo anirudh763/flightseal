@@ -62,6 +62,36 @@ export function sealFile(file, { every = 1000, signal, privateKeyPem = '' } = {}
   return run('seal', file, { every, privateKeyPem }, { signal });
 }
 
+export const HASH_CHUNK = 4 * 1024 * 1024;
+
+// Whole-file SHA-256 for manifest mode. No size cap and no deadline: memory stays at one chunk however large the
+// file. One worker per file; it is terminated on finish or Cancel, so no progress arrives afterwards.
+export function hashFile(file, { signal, onProgress } = {}) {
+  if (!(file instanceof Blob)) return Promise.reject(new TypeError('Choose a file first.'));
+  if (signal?.aborted) return Promise.reject(new DOMException('Cancelled', 'AbortError'));
+  return new Promise((resolve, reject) => {
+    const worker = new Worker(new URL('./hash-worker.mjs', import.meta.url), { type: 'module' });
+    let finished = false;
+    const finish = (callback, value) => {
+      if (finished) return;
+      finished = true;
+      worker.terminate();
+      signal?.removeEventListener('abort', abort);
+      callback(value);
+    };
+    const abort = () => finish(reject, new DOMException('Cancelled', 'AbortError'));
+    signal?.addEventListener('abort', abort, { once: true });
+    worker.onerror = () => finish(reject, new Error('The SHA-256 worker could not run. Reload and retry.'));
+    worker.onmessage = ({ data }) => {
+      if (finished) return;
+      if (data.progress !== undefined) { onProgress?.(data.progress, file.size); return; }
+      if (data.error) finish(reject, new Error(`${file.name || 'File'}: ${data.error}`));
+      else finish(resolve, data);
+    };
+    worker.postMessage({ file, chunk: HASH_CHUNK });
+  });
+}
+
 export function importFile(file, { every = 1000, signal } = {}) {
   if (!Number.isInteger(every) || every < 1 || every > 1000000) return Promise.reject(new RangeError('Receipt interval must be between 1 and 1,000,000.'));
   return run('import', file, { every }, { signal });
