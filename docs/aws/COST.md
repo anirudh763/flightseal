@@ -9,28 +9,28 @@ than $5 (see the abuse scenario).
 
 ## Where the rates come from
 
-The HTML pricing pages below load their rate tables with JavaScript, so the fetched pages contained only free-tier
-text and worked examples. The rates were therefore read from the official AWS Price List files for us-east-1,
-`https://pricing.us-east-1.amazonaws.com/offers/v1.0/aws/<ServiceCode>/current/us-east-1/index.json`, downloaded
-on 2026-11-17. These are AWS's own published price files, but they are not the aws.amazon.com pages the plan named,
-so each rate is marked with its source.
+The plan allows rates only from aws.amazon.com pricing pages. Those pages load their rate tables with JavaScript, so
+the fetched pages contained free-tier text and worked examples but **no us-east-1 rate tables**. Every rate below is
+therefore marked **page: not retrieved**. The figure next to it comes from AWS's official Price List file for
+us-east-1, downloaded on 2026-11-17, and was checked against the downloaded bytes (SKU description and
+`pricePerUnit`). It is shown as a secondary source, and the estimates below use it.
 
-| Service | Item | Rate | Source |
-|---|---|---|---|
-| API Gateway HTTP API | requests, first 300 M a month | $1.00 per million | Price List `AmazonApiGateway` |
-| API Gateway HTTP API | metering unit | 512 KB per request | **not retrieved** as a rule; the [pricing page](https://aws.amazon.com/api-gateway/pricing/) shows it only inside a worked example with no region named. Registry requests are at most 4 KB, so each counts once either way |
-| Lambda arm64 | compute, first 7.5 B GB-s a month | $0.0000133334 per GB-second | Price List `AWSLambda` |
-| Lambda arm64 | requests | $0.20 per million | Price List `AWSLambda` |
-| DynamoDB on demand | write request units | $0.625 per million | Price List `AmazonDynamoDB` |
-| DynamoDB on demand | read request units | $0.125 per million | Price List `AmazonDynamoDB` |
-| DynamoDB | transactional writes | 2 WRU per 1 KB item write | [DynamoDB on-demand pricing page](https://aws.amazon.com/dynamodb/pricing/on-demand/) |
-| DynamoDB | storage, Standard class | first 25 GB-month $0.00, then $0.25 per GB-month | Price List `AmazonDynamoDB` |
-| DynamoDB | PITR (continuous backups) | $0.20 per GB-month | Price List `AmazonDynamoDB` |
-| CloudWatch Logs | ingestion, Standard class | $0.50 per GB | Price List `AmazonCloudWatch` |
-| CloudWatch Logs | storage | $0.03 per GB-month | Price List `AmazonCloudWatch` |
-| Cognito, Lite plan | MAU, first tier | $0.0055 per MAU | Price List `AmazonCognito` (`USE1-CognitoLiteMAU`) |
-| Data transfer out | to the internet, first 10 TB | $0.09 per GB | Price List `AWSDataTransfer` |
-| AWS Budgets | monitoring and notifications | free | [AWS Budgets pricing page](https://aws.amazon.com/aws-cost-management/aws-budgets/pricing/) |
+| Service | Item | aws.amazon.com page | Price List figure | Price List file (publication date) |
+|---|---|---|---|---|
+| API Gateway HTTP API | requests, first 300 M a month | [not retrieved](https://aws.amazon.com/api-gateway/pricing/) | $1.00 per million ("$1/million requests - API Gateway HTTP API (first 300 million)") | [AmazonApiGateway](https://pricing.us-east-1.amazonaws.com/offers/v1.0/aws/AmazonApiGateway/current/us-east-1/index.json) (2026-11-12) |
+| API Gateway HTTP API | 512 KB metering unit | not retrieved: shown only inside a worked example with no region | — | — |
+| Lambda arm64 | compute, first 7.5 B GB-s | [not retrieved](https://aws.amazon.com/lambda/pricing/) | $0.0000133334 per GB-s ("Total Compute for ARM ... Tier-1") | [AWSLambda](https://pricing.us-east-1.amazonaws.com/offers/v1.0/aws/AWSLambda/current/us-east-1/index.json) (2026-11-11) |
+| Lambda arm64 | requests | not retrieved | $0.0000002 per request = $0.20 per million ("Total Requests for ARM") | [AWSLambda](https://pricing.us-east-1.amazonaws.com/offers/v1.0/aws/AWSLambda/current/us-east-1/index.json) |
+| DynamoDB on demand | write request units | [not retrieved](https://aws.amazon.com/dynamodb/pricing/on-demand/) | $0.625 per million ("per million write request units (N. Virginia)") | [AmazonDynamoDB](https://pricing.us-east-1.amazonaws.com/offers/v1.0/aws/AmazonDynamoDB/current/us-east-1/index.json) (2026-11-11) |
+| DynamoDB on demand | read request units | not retrieved | $0.125 per million | [AmazonDynamoDB](https://pricing.us-east-1.amazonaws.com/offers/v1.0/aws/AmazonDynamoDB/current/us-east-1/index.json) |
+| DynamoDB | transactional writes | **seen on the page**: "2 WRUs per 1 KB or part thereof" | — | — |
+| DynamoDB | storage | not retrieved | $0.00 for the first 25 GB-month, then $0.25 per GB-month | [AmazonDynamoDB](https://pricing.us-east-1.amazonaws.com/offers/v1.0/aws/AmazonDynamoDB/current/us-east-1/index.json) |
+| DynamoDB | PITR | not retrieved | $0.20 per GB-month | [AmazonDynamoDB](https://pricing.us-east-1.amazonaws.com/offers/v1.0/aws/AmazonDynamoDB/current/us-east-1/index.json) |
+| CloudWatch Logs | ingestion, Standard class | [not retrieved](https://aws.amazon.com/cloudwatch/pricing/) | $0.50 per GB | [AmazonCloudWatch](https://pricing.us-east-1.amazonaws.com/offers/v1.0/aws/AmazonCloudWatch/current/us-east-1/index.json) (2026-11-16) |
+| CloudWatch Logs | storage | not retrieved | $0.03 per GB-month | [AmazonCloudWatch](https://pricing.us-east-1.amazonaws.com/offers/v1.0/aws/AmazonCloudWatch/current/us-east-1/index.json) |
+| Cognito, Lite plan | MAU, tier 1 | [not retrieved](https://aws.amazon.com/cognito/pricing/) | $0.0055 per MAU ("Cognito Lite us-east-1 tier 1") | [AmazonCognito](https://pricing.us-east-1.amazonaws.com/offers/v1.0/aws/AmazonCognito/current/us-east-1/index.json) (2026-10-20) |
+| Data transfer out | internet, first 10 TB | [not retrieved](https://aws.amazon.com/ec2/pricing/on-demand/) | $0.09 per GB | [AWSDataTransfer](https://pricing.us-east-1.amazonaws.com/offers/v1.0/aws/AWSDataTransfer/current/us-east-1/index.json) (2026-11-17) |
+| AWS Budgets | monitoring and notifications | **seen on the page**: "free of charge" ([AWS Budgets pricing](https://aws.amazon.com/aws-cost-management/aws-budgets/pricing/)) | — | — |
 
 Free tiers seen on the official pages ([API Gateway](https://aws.amazon.com/api-gateway/pricing/),
 [Lambda](https://aws.amazon.com/lambda/pricing/), [CloudWatch](https://aws.amazon.com/cloudwatch/pricing/),

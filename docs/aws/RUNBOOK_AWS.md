@@ -68,8 +68,15 @@ separately if nothing else uses it.
 A restore always creates a new table. The steps keep withdrawn shares and deleted registrations gone.
 
 1. Restore (PITR or an on-demand backup) to a new table, for example `HashWingRegistry-restored`.
-2. Point the function at it and close every route until tombstones are applied: set `TABLE_NAME` to the new table
-   and `RESTORED_FROM` to the **source** table name. The function now answers 503 `restore_pending` everywhere.
+2. Point the function at it and close every route until tombstones are applied:
+
+   ```sh
+   cd infra && npx cdk deploy HashWingRegistry -c restoredTableName=<restored table> -c restoredFrom=<source table>
+   ```
+
+   This sets `TABLE_NAME` to the restored table and `RESTORED_FROM` to the source, and moves the function's IAM grant
+   to the restored table's ARN. The function now answers 503 `restore_pending` everywhere. (The stack's own table
+   stays as the source.)
 3. With credentials that can scan the source and write the target:
 
    ```sh

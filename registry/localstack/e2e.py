@@ -130,6 +130,11 @@ def lambda_zip():
     return buf.getvalue()
 
 
+def lambda_env(dev_secret):
+    return {"TABLE_NAME": TABLE, "IDENTITY_ADAPTER": "dev-hs256", "DEV_TOKEN_SECRET": dev_secret,
+            "DEDUPE_SECONDS": str(DEDUPE_SECONDS)}
+
+
 def deploy(dev_secret):
     ddb = client("dynamodb")
     ddb.create_table(TableName=TABLE, BillingMode="PAY_PER_REQUEST",
@@ -146,8 +151,7 @@ def deploy(dev_secret):
     fn = lam.create_function(
         FunctionName=FUNCTION, Runtime="python3.12", Role=role, Handler="handler.handler", Architectures=[arch],
         Code={"ZipFile": lambda_zip()}, MemorySize=128, Timeout=30,
-        Environment={"Variables": {"TABLE_NAME": TABLE, "IDENTITY_ADAPTER": "dev-hs256", "DEV_TOKEN_SECRET": dev_secret,
-                                   "DEDUPE_SECONDS": str(DEDUPE_SECONDS)}})
+        Environment={"Variables": lambda_env(dev_secret)})
     lam.get_waiter("function_active_v2").wait(FunctionName=FUNCTION)
     apigw = client("apigateway")
     api_id = apigw.create_rest_api(name="hashwing-registry-e2e")["id"]
@@ -284,7 +288,71 @@ def scenarios(url, tok, table, dedupe):
         status, again3 = register(pilot, r3, "e2e-idem-0000000005", env3)
         check(f"replay after dedupe expiry ({dedupe}s)", status == 200 and again3 == ack3 and len(reg_items(ack3["registration_id"])) == 1,
               f"{status}")
-    return {"share_path": share2["path"], "rid": ack1["registration_id"], "pilot": pilot, "ack1": ack1}
+
+    status, page = http("GET", url + "/v1/registrations?limit=1", pilot)
+    status2, rest = http("GET", url + f"/v1/registrations?limit=1&cursor={page.get('next_cursor')}", pilot)
+    check("list registrations, one per page with a cursor (DynamoDB Query)",
+          status == status2 == 200 and len(page.get("registrations", [])) == 1 and bool(page.get("next_cursor"))
+          and len(rest.get("registrations", [])) == 1
+          and rest["registrations"][0]["registration_id"] != page["registrations"][0]["registration_id"],
+          f"{status} {status2}")
+    status, keys = http("GET", url + "/v1/keys", pilot)
+    check("list keys", status == 200 and [k["state"] for k in keys.get("keys", [])] == ["active"], f"{status}")
+    env_old = envelope(pilot)
+    status, ep = http("POST", url + "/v1/epoch", admin, {})
+    status2, out = register(pilot, receipt_line(seed, 400), "e2e-idem-0000000006", env_old)
+    check("epoch bump (UpdateItem ADD) invalidates an outstanding envelope",
+          status == 200 and ep.get("epoch") == 1 and (status2, out.get("error")) == (422, "envelope_expired"),
+          f"epoch {status} {ep}, register {status2} {out}")
+    return {"share_path": share2["path"], "rid": ack1["registration_id"], "pilot": pilot, "ack1": ack1,
+            "withdrawn_paths": [share1["path"], share2["path"]], "rid2": ack2["registration_id"]}
+
+
+def restore_drill(url, state, base_env):
+    """Restore a pre-withdrawal copy into a second table, serve it gated, apply tombstones, check through the API.
+
+    LocalStack community has no PITR restore, so the "backup" is emulated: every item is copied and the withdrawal
+    and deletion done above are undone in the copy (and its tombstones dropped). That emulation is stated in the
+    evidence; the gate, apply_tombstones and the API checks are real.
+    """
+    import hashlib
+
+    from registry.restore import apply_tombstones
+    from registry.store import DynamoTable
+
+    ddb, lam, target = client("dynamodb"), client("lambda"), TABLE + "-restored"
+    _, live_share = http("POST", url + "/v1/shares", state["pilot"], {"registration_id": state["rid"]})
+    ddb.create_table(TableName=target, BillingMode="PAY_PER_REQUEST",
+                     AttributeDefinitions=[{"AttributeName": "PK", "AttributeType": "S"},
+                                           {"AttributeName": "SK", "AttributeType": "S"}],
+                     KeySchema=[{"AttributeName": "PK", "KeyType": "HASH"}, {"AttributeName": "SK", "KeyType": "RANGE"}])
+    ddb.get_waiter("table_exists").wait(TableName=target)
+    for page in ddb.get_paginator("scan").paginate(TableName=TABLE, ConsistentRead=True):
+        for item in page["Items"]:
+            if not item["PK"]["S"].startswith("TOMB#"):
+                ddb.put_item(TableName=target, Item=item)
+    restored = DynamoTable(target, client=ddb)
+    for path in state["withdrawn_paths"]:
+        restored.update("SHARE#" + hashlib.sha256(path.rsplit("/", 1)[1].encode()).hexdigest(), "SHARE",
+                        set={"state": "active"})
+    restored.update("ORG#orgA", "REG#" + state["rid2"], set={"state": "active", "received_at": int(time.time())})
+
+    def serve(env):
+        lam.update_function_configuration(FunctionName=FUNCTION, Environment={"Variables": env})
+        lam.get_waiter("function_updated_v2").wait(FunctionName=FUNCTION)
+
+    serve({**base_env, "TABLE_NAME": target, "RESTORED_FROM": TABLE})
+    gated = [http("GET", url + p)[1].get("error") for p in [live_share["path"], *state["withdrawn_paths"]]]
+    check("restore gate: every route 503 restore_pending before tombstones are applied",
+          gated == ["restore_pending"] * 3, str(gated))
+    n = apply_tombstones(DynamoTable(TABLE, client=ddb), restored, source_name=TABLE)
+    views = [http("GET", url + p)[0] for p in [live_share["path"], *state["withdrawn_paths"]]]
+    marker = restored.get("SYSTEM", "RESTORE") or {}
+    check("restore apply (Scan, Put, Update in DynamoDB): withdrawn and deleted views 404, active one 200",
+          views == [200, 404, 404] and marker.get("source") == TABLE,
+          f"{n} tombstones applied; live/withdrawn/deleted share GET: {views}; backup emulated by copying items and "
+          "undoing the withdrawal and deletion (no PITR in LocalStack community)")
+    serve(base_env)
 
 
 def persistence(url_for, state):
@@ -369,6 +437,7 @@ def main():
         record("deploy table, Lambda (python3.12) and REST v1 {proxy+} stand-in", "pass",
                url.replace(api_id, "<api-id>").replace(ENDPOINT, "<endpoint>"))
         state = scenarios(url, Dev(secret), TABLE, DEDUPE_SECONDS)
+        restore_drill(url, state, lambda_env(secret))
 
         def url_for():
             ids = [i["id"] for i in client("apigateway").get_rest_apis()["items"]]

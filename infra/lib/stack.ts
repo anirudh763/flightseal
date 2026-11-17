@@ -9,6 +9,13 @@ import { Construct } from 'constructs';
 export interface RegistryStackProps extends StackProps {
   /** DynamoDB point-in-time recovery. Off by default: it is billed per GB-month (see docs/aws/COST.md). */
   readonly pitr?: boolean;
+  /**
+   * Serve a table restored from a backup (always a new table, outside this stack) instead of the stack's table.
+   * Requires restoredFrom: the function then answers 503 restore_pending until registry.restore has applied the
+   * source's tombstones. See docs/aws/RUNBOOK_AWS.md.
+   */
+  readonly restoredTableName?: string;
+  readonly restoredFrom?: string;
 }
 
 /** Routes served by the Lambda. Only the public share check has no authorizer. */
@@ -40,6 +47,15 @@ export class RegistryStack extends Stack {
       removalPolicy: RemovalPolicy.DESTROY,
     });
 
+    if (!props.restoredTableName !== !props.restoredFrom) {
+      throw new Error('restoredTableName and restoredFrom must be set together');
+    }
+    const served = props.restoredTableName
+      ? dynamodb.Table.fromTableName(this, 'RestoredTable', props.restoredTableName)
+      : table;
+    const environment: Record<string, string> = { TABLE_NAME: served.tableName, IDENTITY_ADAPTER: 'cognito' };
+    if (props.restoredFrom) environment.RESTORED_FROM = props.restoredFrom;
+
     const logGroup = new logs.LogGroup(this, 'FunctionLogs', {
       retention: logs.RetentionDays.ONE_WEEK,
       removalPolicy: RemovalPolicy.DESTROY,
@@ -53,10 +69,10 @@ export class RegistryStack extends Stack {
       handler: 'handler.handler',
       code: lambda.Code.fromAsset('../registry', { exclude: ['tests', 'localstack', '**/__pycache__'] }),
       logGroup,
-      environment: { TABLE_NAME: table.tableName, IDENTITY_ADAPTER: 'cognito' },
+      environment,
     });
     // Explicit item-level actions only, scoped to this table. TransactWriteItems is authorised through them.
-    table.grant(fn, 'dynamodb:GetItem', 'dynamodb:PutItem', 'dynamodb:UpdateItem', 'dynamodb:DeleteItem',
+    served.grant(fn, 'dynamodb:GetItem', 'dynamodb:PutItem', 'dynamodb:UpdateItem', 'dynamodb:DeleteItem',
       'dynamodb:Query', 'dynamodb:ConditionCheckItem');
 
     const userPool = new cognito.UserPool(this, 'Users', {

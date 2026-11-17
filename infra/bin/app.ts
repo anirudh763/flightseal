@@ -6,4 +6,6 @@ const app = new App();
 // Environment-agnostic on purpose: synth needs no credentials and performs no lookups. Deploy to us-east-1.
 new RegistryStack(app, 'HashWingRegistry', {
   pitr: app.node.tryGetContext('pitr') === true || app.node.tryGetContext('pitr') === 'true',
+  restoredTableName: app.node.tryGetContext('restoredTableName'),
+  restoredFrom: app.node.tryGetContext('restoredFrom'),
 });

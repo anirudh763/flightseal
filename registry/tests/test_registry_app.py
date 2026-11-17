@@ -320,3 +320,24 @@ def test_restore_pending_closes_every_route():
     assert call(app, "GET", "/v1/keys", token(clock))[0] == 503
     table.put({"PK": "SYSTEM", "SK": "RESTORE", "source": "live-table"})
     assert call(app, "GET", "/v1/keys", token(clock))[0] == 200
+
+
+def test_repeated_404s_do_not_accumulate_state():
+    """A shared exception instance would keep every request's traceback (and event) alive in a warm Lambda."""
+    app, _, _ = make_app()
+    errors = []
+    for _ in range(3):
+        try:
+            app.get_share(None, {}, {}, "short")
+        except Exception as err:  # noqa: BLE001
+            errors.append(err)
+    assert len({id(e) for e in errors}) == 3
+    depth, tb = 0, errors[-1].__traceback__
+    while tb:
+        depth, tb = depth + 1, tb.tb_next
+    assert depth == 2  # this test's frame and get_share, nothing from earlier requests
+
+
+def test_deeply_nested_json_is_400():
+    app, _, clock, pilot = setup()
+    assert call(app, "POST", "/v1/registrations", pilot, raw="[" * 2000 + "]" * 2000)[:2] == (400, {"error": "bad_json"})

@@ -34,10 +34,12 @@ Columns:
 | Withdrawn share stays 404 after an identical register retry | yes | pass | not verified | |
 | Deletion withdraws the registration's shares and tombstones it | yes | pass (state read back from DynamoDB) | not verified | |
 | Store read errors fail closed (503) | yes (injected failures) | — | not verified | |
-| Restore gate: 503 `restore_pending` until tombstones are applied | yes | — | not verified | |
-| `apply_tombstones` re-applies withdrawals/deletions; refuses on unreadable source | yes | — | not verified | |
+| Restore gate: 503 `restore_pending` until tombstones are applied | yes | pass (function re-pointed at a second table with `RESTORED_FROM`) | not verified | CDK restore context synthesised and asserted |
+| `apply_tombstones` re-applies withdrawals/deletions; refuses on unreadable source | yes | pass for re-apply, against two DynamoDB tables; the backup was **emulated** (items copied, withdrawal and deletion undone) because community LocalStack has no PITR restore. Refusal not tested there | not verified | |
 | Key enrollment: admin only, single-use 5-minute challenge, `confirm_replace` | yes | pass (enroll) | not verified | |
-| DynamoDB conditions and transactions through the boto3 adapter | — | pass (every scenario above) | not verified | |
+| List registrations with a cursor; list keys | yes | pass | not verified | |
+| Epoch bump invalidates an outstanding envelope | yes | pass | not verified | |
+| boto3 adapter: Get, Put, Update (SET/REMOVE/ADD), conditional Delete, Query with cursor, Scan, TransactWriteItems with cancellation reasons | — | exercised by the LocalStack rows marked pass | not verified | |
 | DynamoDB data after `docker restart` with `PERSISTENCE=1` and a volume | — | survived (item read back directly) | not verified | |
 | Lambda and REST API after `docker restart` | — | **did not survive** (function and API gone) | not verified | |
 | DynamoDB data after `docker rm` and re-create on the same volume | — | survived | not verified | |

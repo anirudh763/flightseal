@@ -3,15 +3,15 @@
   "digest": "sha256:0df3a97da57de03a588c05d9b8f390f15c7033fc7c4512f94619d344bc3cd317",
   "boto3": "1.43.123",
   "host_machine": "arm64",
-  "started_at": "2026-11-17T21:04:46Z",
+  "started_at": "2026-11-17T21:15:59Z",
   "mode": "rest-v1-stand-in",
   "note": "REST API v1 {proxy+} stand-in, not the HTTP API; dev-hs256 identity adapter; LocalStack community",
   "localstack_version": "4.12.0",
   "edition": "community",
   "lambda_architecture": "arm64",
-  "finished_at": "2026-11-17T21:05:44Z",
+  "finished_at": "2026-11-17T21:16:46Z",
   "summary": {
-    "pass": 14,
+    "pass": 19,
     "fail": 2,
     "blocked": 2,
     "skipped": 0
@@ -86,6 +86,31 @@
       "step": "replay after dedupe expiry (8s)",
       "result": "pass",
       "detail": "200"
+    },
+    {
+      "step": "list registrations, one per page with a cursor (DynamoDB Query)",
+      "result": "pass",
+      "detail": "200 200"
+    },
+    {
+      "step": "list keys",
+      "result": "pass",
+      "detail": "200"
+    },
+    {
+      "step": "epoch bump (UpdateItem ADD) invalidates an outstanding envelope",
+      "result": "pass",
+      "detail": "epoch 200 {'epoch': 1}, register 422 {'error': 'envelope_expired'}"
+    },
+    {
+      "step": "restore gate: every route 503 restore_pending before tombstones are applied",
+      "result": "pass",
+      "detail": "['restore_pending', 'restore_pending', 'restore_pending']"
+    },
+    {
+      "step": "restore apply (Scan, Put, Update in DynamoDB): withdrawn and deleted views 404, active one 200",
+      "result": "pass",
+      "detail": "3 tombstones applied; live/withdrawn/deleted share GET: [200, 404, 404]; backup emulated by copying items and undoing the withdrawal and deletion (no PITR in LocalStack community)"
     },
     {
       "step": "persistence: share served before restart",

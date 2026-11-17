@@ -117,6 +117,19 @@ test('budget is optional: conditional on a non-empty BudgetEmail, amount default
   assert.ok(!JSON.stringify(json).match(/[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[a-z]{2,}/), 'no hardcoded email');
 });
 
+test('restore mode serves the restored table, closed by RESTORED_FROM, with the grant on that table only', () => {
+  const r = Template.fromStack(new RegistryStack(new App(), 'Restored', {
+    restoredTableName: 'registry-restored', restoredFrom: 'registry-live' }));
+  r.hasResourceProperties('AWS::Lambda::Function', {
+    Environment: { Variables: { TABLE_NAME: 'registry-restored', RESTORED_FROM: 'registry-live', IDENTITY_ADAPTER: 'cognito' } },
+  });
+  const policy = JSON.stringify(Object.values(r.toJSON().Resources as Record<string, any>)
+    .filter((x) => x.Type === 'AWS::IAM::Policy').map((x) => x.Properties.PolicyDocument));
+  assert.ok(policy.includes(':table/registry-restored'));
+  assert.ok(!policy.includes('"Resource":"*"'));
+  assert.throws(() => new RegistryStack(new App(), 'Half', { restoredTableName: 'x' }));
+});
+
 test('no fixed-fee services', () => {
   for (const type of ['AWS::KMS::Key', 'AWS::WAFv2::WebACL', 'AWS::EC2::NatGateway', 'AWS::EC2::VPC',
     'AWS::Route53::HostedZone', 'AWS::SecretsManager::Secret']) {

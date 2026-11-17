@@ -3,7 +3,7 @@ title: 'Packet D: receipt registry Lambda, CDK IaC, LocalStack integration, AWS 
 type: feature
 ticket: ''
 created: '2026-11-17'
-status: implemented
+status: in-progress
 baseline_revision: '57bbc28e1ab4e34d2d98de9580f616b38a35d7a8'
 route: full
 route_source: auto
@@ -162,14 +162,15 @@ deferred: []
 ## Implementation Notes
 
 - Python counts: the default local `python3` (3.11, no pyulog) cannot collect `tests/test_tools.py`, so the root
-  baseline was re-measured in a Python 3.12 venv with the CI packages: 49 passed / 29 skipped before, 102 passed /
-  29 skipped after (53 new registry tests). `registry/tests` also passes on 3.11 (53 passed).
+  baseline was re-measured in a Python 3.12 venv with the CI packages: 49 passed / 29 skipped before, 104 passed /
+  29 skipped after (55 new registry tests). `registry/tests` also passes on 3.11 (55 passed).
 - No `registry/tests/conftest.py`: `tests/test_tools.py` imports `conftest` by name, so helpers live in
   `registry/tests/registry_helpers.py`.
 - A mutation pass (epoch check, stale-IDEM arm, quota limit, share expiry, challenge sub binding, transaction
   rollback, S >= L, token count, restore withdrawal) was killed by the tests every time.
-- LocalStack run (2026-11-17, arm64 host): 14 pass, 2 fail, 2 blocked. Every API scenario passed through the REST
-  v1 stand-in. Persistence: DynamoDB items survived both `docker restart` and `docker rm` + re-create on the volume;
+- LocalStack run (2026-11-17, arm64 host): 19 pass, 2 fail, 2 blocked. Every API scenario passed through the REST
+  v1 stand-in, including paging, epoch invalidation and a restore drill (gate + apply_tombstones across two tables,
+  with the backup emulated by copying items and undoing the withdrawal and deletion). Persistence: DynamoDB items survived both `docker restart` and `docker rm` + re-create on the volume;
   the Lambda function and REST API survived neither. apigatewayv2 and cognito-idp blocked with the verbatim
   licence message. The script exits 1 because of the two persistence failures.
 - IAM: the AWS developer guide states transactions are authorised by PutItem/UpdateItem/DeleteItem/GetItem and
@@ -192,6 +193,8 @@ deferred: []
 - boto3 pinned to 1.43.123 (released 2026-10-30): the latest, 1.44.5, was released the same day as this run.
 - TypeScript 7.0.2 builds the CDK app; no 5.x fallback was needed. Tests use `node --test` on compiled output (no
   jest).
+- CDK context `restoredTableName` + `restoredFrom` re-points the function (env and IAM grant) at a restored
+  table, so the runbook restore procedure works with the synthesised stack.
 - `deploy_cdklocal.sh` enables ADMIN_USER_PASSWORD_AUTH on the LocalStack client only, so the script can mint ID
   tokens; it uses `localstack/localstack-pro:4.12.0` without a digest (not run, tag unverified).
 

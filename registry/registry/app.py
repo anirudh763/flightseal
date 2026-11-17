@@ -51,7 +51,8 @@ class HttpError(Exception):
         self.status, self.code = status, code
 
 
-NOT_FOUND = HttpError(404, "not_found")
+def not_found():
+    return HttpError(404, "not_found")  # a fresh instance: a shared one would accumulate tracebacks
 
 
 def _iso(t):
@@ -117,7 +118,7 @@ class App:
             method, path, headers, query = _event_parts(event)
             route = self._route(method, path)
             if route is None:
-                raise NOT_FOUND
+                raise not_found()
             name, access, args = route
             ident = None
             if access != PUBLIC:
@@ -156,7 +157,7 @@ class App:
             return {}
         try:
             body = json.loads(raw, object_pairs_hook=_no_duplicates)
-        except (ValueError, UnicodeDecodeError):
+        except (ValueError, UnicodeDecodeError, RecursionError):
             raise HttpError(400, "bad_json") from None
         if not isinstance(body, dict):
             raise HttpError(400, "bad_json")
@@ -296,7 +297,7 @@ class App:
         pk, now = f"ORG#{ident.org_id}", self.now()
         reg = self.t.get(pk, "REG#" + rid)
         if reg is None:
-            raise NOT_FOUND
+            raise not_found()
         if reg["state"] == "deleted":
             return 200, {"registration_id": rid, "disposition": "deleted"}
         ops = [
@@ -386,7 +387,7 @@ class App:
         pk, now = f"ORG#{ident.org_id}", self.now()
         key = self.t.get(pk, "KEY#" + fp)
         if key is None:
-            raise NOT_FOUND
+            raise not_found()
         ops = [{"op": "update", "key": (pk, "KEY#" + fp), "set": {"state": "compromised", "changed_at": now},
                 "cond": [("exists",)]}]
         if (self.t.get(pk, "ACTIVE_KEY") or {}).get("fp") == fp:
@@ -406,7 +407,7 @@ class App:
         pk, now = f"ORG#{ident.org_id}", self.now()
         reg = self.t.get(pk, "REG#" + rid)
         if reg is None or reg["state"] != "active":
-            raise NOT_FOUND
+            raise not_found()
         hashes = reg.get("share_hashes", [])
         if len(hashes) >= MAX_SHARES:
             raise HttpError(409, "share_limit")
@@ -425,24 +426,24 @@ class App:
 
     def get_share(self, _ident, _body, _query, token):
         if not SHARE_TOKEN.fullmatch(token):
-            raise NOT_FOUND
+            raise not_found()
         share = self.t.get("SHARE#" + _sha(token), "SHARE")
         if (not share or share.get("state") != "active" or share.get("expires_at", 0) <= self.now()
                 or "org" not in share):
-            raise NOT_FOUND
+            raise not_found()
         reg = self.t.get(f"ORG#{share['org']}", "REG#" + share["rid"])
         if not reg or reg.get("state") != "active" or "received_at" not in reg:
-            raise NOT_FOUND
+            raise not_found()
         return 200, {"head": reg["head"], "count": reg["count"], "key_fingerprint": reg["fp"],
                      "received_at": _iso(reg["received_at"])}
 
     def withdraw_share(self, ident, _body, _query, token):
         if not SHARE_TOKEN.fullmatch(token):
-            raise NOT_FOUND
+            raise not_found()
         h, now = _sha(token), self.now()
         share = self.t.get("SHARE#" + h, "SHARE")
         if not share or share.get("org") != ident.org_id:
-            raise NOT_FOUND
+            raise not_found()
         if share.get("state") != "withdrawn":
             failed = self._transact([
                 {"op": "update", "key": ("SHARE#" + h, "SHARE"), "set": {"state": "withdrawn", "withdrawn_at": now},
