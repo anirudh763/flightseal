@@ -1,0 +1,39 @@
+<!doctype html>
+<html lang="en">
+<head><meta charset="utf-8"><title>Outbox harness</title></head>
+<body>
+<p id="ready">loading</p>
+<script type="module">
+import { openOutbox } from '/src/outbox.mjs';
+import { createRegistryClient, tokenOwner } from '/src/registry-client.mjs';
+
+let token = null;
+const getToken = async () => token;
+const client = createRegistryClient({ baseUrl: location.origin, getToken });
+// A manual online source, for tests that need "offline" without cutting the page's network.
+const manual = { on: false, cbs: new Set(), isOnline() { return this.on; }, subscribe(cb) { this.cbs.add(cb); return () => this.cbs.delete(cb); } };
+
+window.hw = {
+  client,
+  tokenOwner,
+  outbox: null,
+  setToken(t) { token = t; },
+  async open({ brokenIdb = false, manualOnline = false } = {}) {
+    const opts = { ownerId: tokenOwner(token), client, getToken };
+    if (brokenIdb) opts.indexedDB = { open() { throw new Error('indexedDB disabled for this test'); } };
+    if (manualOnline) opts.online = manual;
+    this.outbox = await openOutbox(opts);
+    return this.outbox.status();
+  },
+  goOnline() { manual.on = true; for (const cb of manual.cbs) cb(true); },
+  close() { this.outbox?.close(); this.outbox = null; },
+  enqueue(receipt) { return this.outbox.enqueue({ receipt }); },
+  list() { return this.outbox.list(); },
+  retryNow(id) { return this.outbox.retryNow(id); },
+  status() { return this.outbox.status(); },
+  exportPending() { return this.outbox.exportPending(); },
+};
+document.getElementById('ready').textContent = 'ready';
+</script>
+</body>
+</html>
