@@ -32,7 +32,7 @@ jobs:
       - name: Python tests (CLI, independent reader, real PX4 flight)
         run: python -m pytest -q
       - name: JS verifier agrees with the CLI and the Python reader (every attack, hostile files, PX4 flight)
-        run: node --test tests/web/verifier.test.mjs tests/web/copy.test.mjs tests/web/workbench.test.mjs tests/web/redirect.test.mjs tests/web/rawfile.test.mjs tests/web/sw-cache-index.test.mjs
+        run: node --test tests/web/verifier.test.mjs tests/web/copy.test.mjs tests/web/workbench.test.mjs tests/web/redirect.test.mjs tests/web/rawfile.test.mjs tests/web/sw-cache-index.test.mjs tests/web/manifest.test.mjs
       - name: Demo on a real PX4 flight
         run: tools/demo.sh
 
@@ -97,14 +97,14 @@ jobs:
           python3 tools/verify_wasm_provenance.py
           scripts/build_wasm.sh
       - name: Test the compiled native bridge
-        run: node --test tests/wasm/bridge.test.mjs tests/wasm/enterprise-edge.test.mjs tests/wasm/import.test.mjs tests/wasm/output-storage.test.mjs
+        run: node --test tests/wasm/bridge.test.mjs tests/wasm/enterprise-edge.test.mjs tests/wasm/import.test.mjs tests/wasm/output-storage.test.mjs tests/wasm/hash.test.mjs
       - name: Install browser dependencies
         working-directory: tests/web
         run: |
           npm ci
           npx playwright install --with-deps chromium
       - name: Native browser worker verification, sealing and cancellation
-        run: node --test tests/wasm/browser.test.mjs
+        run: node --test tests/wasm/browser.test.mjs tests/wasm/hash-browser.test.mjs
       - name: Build React console
         working-directory: newweb
         run: |

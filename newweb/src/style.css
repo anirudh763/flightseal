@@ -970,3 +970,26 @@ textarea.mono-input { width: 100%; min-height: 0; resize: vertical; font-size: .
 .nav-more summary::-webkit-details-marker { display: none; }
 .nav-more summary::after { content: "▸"; margin-left: auto; color: #2355ba; }
 .nav-more[open] summary::after { content: "▾"; }
+
+/* Seal & send: manifest-only mode */
+.mode-choice { display: flex; flex-wrap: wrap; gap: 8px 24px; margin: 0; padding: 0; border: 0; min-width: 0; }
+.mode-choice legend { padding: 0; margin-bottom: 4px; font-size: 13px; font-weight: 700; color: var(--ink); }
+.mode-choice label, .check-row { display: inline-flex; align-items: center; gap: 8px; min-height: 44px; cursor: pointer; }
+.mode-choice input, .check-row input { width: 20px; height: 20px; margin: 0; accent-color: var(--forest); }
+.manifest-body { display: grid; gap: 10px; min-width: 0; }
+.manifest-body > input[type=file], .manifest-options-body input[type=text], #manifest-trusted-key { width: 100%; min-width: 0; }
+.manifest-notice { margin: 0; padding: 10px 12px; border-left: 3px solid var(--warn); background: var(--warn-bg); color: var(--ink); }
+.manifest-file-list { display: grid; gap: 6px; margin: 0; padding-left: 20px; }
+.manifest-file-list li { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 4px 12px; min-width: 0; }
+.manifest-file-name { min-width: 0; overflow-wrap: anywhere; }
+.manifest-options-body { display: grid; gap: 10px; padding-top: 8px; }
+.manifest-progress { display: grid; gap: 6px; }
+.manifest-progress progress { width: 100%; height: 12px; accent-color: var(--forest); }
+.manifest-progress .button { justify-self: start; }
+.mono-values { font-family: "JetBrains Mono", ui-monospace, monospace; font-variant-numeric: tabular-nums; }
+.manifest-outcome { display: grid; gap: 10px; margin-top: 12px; padding-top: 12px; border-top: 1px solid var(--line); }
+.manifest-outcome h3 { margin: 0; font-size: 1rem; display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.manifest-outcome p { margin: 0; }
+table.manifest-table { min-width: 0; }
+.manifest-table td, .manifest-table th { overflow-wrap: anywhere; vertical-align: top; }
+.manifest-note { display: block; margin-top: 4px; color: var(--muted); font-size: .76rem; }
