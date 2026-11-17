@@ -132,7 +132,20 @@ flights); otherwise the key is generated per file and discarded.
 **Rejected:** a new format version (breaks three readers for no gain); trusting a public key that travels with the
 log; storing a generated key silently.
 
-### 22. Refuse weak Ed25519 public keys before any signature check
+### 22. An optional receipt-only registry: pure-Python Ed25519, one table, a REST stand-in in LocalStack
+The witness in decision 1 needs somewhere to live that the holder cannot rewrite. The registry stores only what a
+receipt commits to (fingerprint, head, count) plus the server-received time, keyed by the org in the verified
+token. Ed25519 is verified in about 110 lines of standard-library Python (RFC 8032, cofactorless; stricter than OpenSSL because it also rejects small-order and non-canonical public keys) so
+the Lambda needs no native packages and the tests cannot silently skip signature checks. One DynamoDB table with
+conditional transactions gives idempotent registration, a monthly quota and atomic withdrawal; tombstones plus a
+restore marker keep withdrawals true across backup restores. In LocalStack 4.12.0 community the HTTP API and
+Cognito are not available, so the local run goes through a REST API v1 `{proxy+}` stand-in with a dev-only HS256
+adapter; the CDK stack (HTTP API, Cognito JWT authorizer) is synthesised and asserted but never deployed here.
+**Rejected:** PyNaCl or `cryptography` (native wheels in the Lambda, and a test skip would hide failures);
+storing file names or manifests (more than a witness needs); relying on DynamoDB TTL for expiry (it is background
+cleanup with no deadline); calling the REST stand-in "the HTTP API".
+
+### 23. Refuse weak Ed25519 public keys before any signature check
 OpenSSL's Ed25519 verify (3.5.9 CLI, OpenSSL 4 as linked by `fseal`) and Chromium's WebCrypto accept a small-order
 or non-canonical public key, and under one of them `R` = a small-order point with `S` = 0 verifies for any message.
 A rewritten log with such a receipt and key printed `RESULT: INTACT`. Every verifier (`src/fseal.cpp`

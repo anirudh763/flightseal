@@ -34,3 +34,11 @@ paths = ['''^docs/console/assets/index-[A-Za-z0-9_-]+\.js$''']
 regexTarget = "match"
 # Minified names change every build, so any identifier is allowed in their places; the rest is exact.
 regexes = ['''^[-]{5}BEGIN PRIVATE KEY[-]{5}\\n\$\{[$A-Za-z_][$\w]*\([$A-Za-z_][$\w]*\)\}\\n[-]{5}END PRIVATE KEY[-]{5}\\n`,publicKeyHex:[$A-Za-z_][$\w]*\([$A-Za-z_][$\w]*\),backupFilename:`hashwing-ed25519-private-key\.pem`\}\}async function [$A-Za-z_][$\w]*\([$A-Za-z_][$\w]*,[$A-Za-z_][$\w]*=globalThis\.crypto\)\{if\(typeof [$A-Za-z_][$\w]*!=`string`\|\|[$A-Za-z_][$\w]*\.length>16384\|\|[$A-Za-z_][$\w]*\.includes\(`\\0`\)\)throw Error\(`Private key PEM must be valid text no longer than 16 KiB\.`\);let [$A-Za-z_][$\w]*=[$A-Za-z_][$\w]*\.trim\(\)\.match\(/\^[-]{5}BEGIN PRIVATE KEY[-]{5}$''']
+
+[[allowlists]]
+description = "Public Ed25519 test keys (RFC 8032 section 7.1 vectors and known weak/small-order points); no secret material"
+targetRules = ["generic-api-key"]
+condition = "AND"
+paths = ['''^tests/fixtures/(ed25519-weak-keys\.json|make_ed25519_weak_keys\.py)$''']
+regexTarget = "line"
+regexes = ['''^\s*\{"key": "[0-9a-f]{64}", ("msg"|"small_order")''']
