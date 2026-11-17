@@ -86,7 +86,8 @@ def verify(pub, msg, sig):
     if s >= L:
         return False
     k = _sha512_int(sig[:32], pub, msg) % L
-    # Cofactorless check, as OpenSSL does: encode([S]B - [k]A) and compare it to R byte for byte.
+    # Cofactorless equation, compared byte for byte: encode([S]B - [k]A) == R. Stricter than OpenSSL: small-order
+    # and non-canonical public keys are rejected above, so a key that verifies every message cannot be enrolled.
     neg_a = ((P - a[0]) % P, a[1], a[2], (P - a[3]) % P)
     return _encode(_add(_mul(s, B), _mul(k, neg_a))) == sig[:32]
 

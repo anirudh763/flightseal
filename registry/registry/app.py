@@ -1,6 +1,6 @@
 """Receipt registry routes. Stores commitments only: org, key fingerprint, head, count and server time.
 
-Request order: size -> auth -> schema -> idempotency lookup -> envelope -> receipt/signature -> key state -> transaction.
+Request order: size -> auth -> schema -> idempotency lookup -> receipt/signature -> envelope -> key state -> transaction.
 Any store error while reading state fails closed with 503.
 """
 import base64
@@ -97,6 +97,8 @@ class App:
         self.dedupe = _int_env(env, "DEDUPE_SECONDS", 7 * DAY)
         self.envelope_seconds = _int_env(env, "ENVELOPE_SECONDS", 7 * DAY)
         self.restored_from = env.get("RESTORED_FROM", "")
+        self.restore_id = env.get("RESTORE_ID", "")
+        self.table_name = env.get("TABLE_NAME", "")
         self._restore_ok = False
 
     def now(self):
@@ -144,8 +146,10 @@ class App:
     def _check_restore(self):
         if not self.restored_from or self._restore_ok:
             return
+        # The marker must name this table and this restore: one copied in from a later backup names another target.
         marker = self.t.get("SYSTEM", "RESTORE")
-        if not marker or marker.get("source") != self.restored_from:
+        if (not marker or not self.restore_id or marker.get("source") != self.restored_from
+                or marker.get("target") != self.table_name or marker.get("restore_id") != self.restore_id):
             raise HttpError(503, "restore_pending")
         self._restore_ok = True
 
@@ -234,19 +238,17 @@ class App:
             return self._replay(pk, idem)
 
         r = receipt.parse(text)
-        rid = None
-        if r is not None:
-            fp = receipt.fingerprint(r.key)
-            rid = _sha(f"{ident.org_id}|{fp}|{r.head.hex()}|{r.count}")[:32]
+        if r is None:
+            raise HttpError(400, "bad_receipt")
+        if not receipt.signature_ok(r):  # before anything that could reveal whether a registration exists
+            raise HttpError(422, "bad_signature")
+        fp = receipt.fingerprint(r.key)
+        rid = _sha(f"{ident.org_id}|{fp}|{r.head.hex()}|{r.count}")[:32]
         if not self._envelope_ok(pk, envelope_id, ident, now):
-            committed = self._existing(pk, rid) if rid else None
+            committed = self._existing(pk, rid)
             if committed:
                 return committed
             raise HttpError(422, "envelope_expired")
-        if r is None:
-            raise HttpError(400, "bad_receipt")
-        if not receipt.signature_ok(r):
-            raise HttpError(422, "bad_signature")
         key = self.t.get(pk, "KEY#" + fp)
         if key is None:
             raise HttpError(403, "key_not_enrolled")
@@ -381,9 +383,11 @@ class App:
             {"op": "put", "item": {"PK": pk, "SK": "KEY#" + fp, "state": "active", "enrolled_at": now,
                                    "enrolled_by": ident.sub, "changed_at": now}, "cond": [("not_exists",)]},
         ]
+        ops.append(self._key_tomb(ident.org_id, fp, "active", now, now, ident.sub))
         if old:
             ops.append({"op": "update", "key": (pk, "KEY#" + old), "set": {"state": "rotated", "changed_at": now},
                         "cond": [("eq", "state", "active")]})
+            ops.append(self._key_tomb(ident.org_id, old, "rotated", now))
             ops.append({"op": "put", "item": {"PK": pk, "SK": "ACTIVE_KEY", "fp": fp}, "cond": [("eq", "fp", old)]})
         else:
             ops.append({"op": "put", "item": {"PK": pk, "SK": "ACTIVE_KEY", "fp": fp}, "cond": [("not_exists",)]})
@@ -393,6 +397,15 @@ class App:
                 raise HttpError(400, "bad_challenge")
             raise HttpError(409, "key_exists" if failed[1] else "conflict")
         return 201, {"key_fingerprint": fp, "state": "active", "replaced": old}
+
+    @staticmethod
+    def _key_tomb(org, fp, state, now, enrolled_at=None, enrolled_by=None):
+        """Every key-state change leaves its latest state here, so a backup restore can replay it."""
+        item = {"PK": f"TOMB#{org}#KEY#{fp}", "SK": "TOMB", "kind": "key", "org": org, "ref": fp, "state": state,
+                "at": now}
+        if enrolled_at is not None:
+            item.update(enrolled_at=enrolled_at, enrolled_by=enrolled_by or "unknown")
+        return {"op": "put", "item": item}
 
     def list_keys(self, ident, _body, _query):
         items, _ = self.t.query(f"ORG#{ident.org_id}", "KEY#", PAGE)
@@ -407,8 +420,7 @@ class App:
             raise not_found()
         ops = [{"op": "update", "key": (pk, "KEY#" + fp), "set": {"state": "compromised", "changed_at": now},
                 "cond": [("exists",)]},
-               {"op": "put", "item": {"PK": f"TOMB#{ident.org_id}#KEY#{fp}", "SK": "TOMB", "kind": "key",
-                                      "org": ident.org_id, "ref": fp, "at": now}}]
+               self._key_tomb(ident.org_id, fp, "compromised", now, key.get("enrolled_at"), key.get("enrolled_by"))]
         if (self.t.get(pk, "ACTIVE_KEY") or {}).get("fp") == fp:
             ops.append({"op": "delete", "key": (pk, "ACTIVE_KEY"), "cond": [("eq", "fp", fp)]})
         if self._transact(ops):

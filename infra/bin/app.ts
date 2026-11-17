@@ -8,4 +8,5 @@ new RegistryStack(app, 'HashWingRegistry', {
   pitr: app.node.tryGetContext('pitr') === true || app.node.tryGetContext('pitr') === 'true',
   restoredTableName: app.node.tryGetContext('restoredTableName'),
   restoredFrom: app.node.tryGetContext('restoredFrom'),
+  restoreId: app.node.tryGetContext('restoreId'),
 });

@@ -16,6 +16,8 @@ export interface RegistryStackProps extends StackProps {
    */
   readonly restoredTableName?: string;
   readonly restoredFrom?: string;
+  /** A new random ID per restore. The marker written by registry.restore must name it and the restored table. */
+  readonly restoreId?: string;
 }
 
 /** Routes served by the Lambda. Only the public share check has no authorizer. */
@@ -47,14 +49,15 @@ export class RegistryStack extends Stack {
       removalPolicy: RemovalPolicy.DESTROY,
     });
 
-    if (!props.restoredTableName !== !props.restoredFrom) {
-      throw new Error('restoredTableName and restoredFrom must be set together');
+    if (!props.restoredTableName !== !props.restoredFrom || !props.restoredTableName !== !props.restoreId) {
+      throw new Error('restoredTableName, restoredFrom and restoreId must be set together');
     }
     const served = props.restoredTableName
       ? dynamodb.Table.fromTableName(this, 'RestoredTable', props.restoredTableName)
       : table;
     const environment: Record<string, string> = { TABLE_NAME: served.tableName, IDENTITY_ADAPTER: 'cognito' };
     if (props.restoredFrom) environment.RESTORED_FROM = props.restoredFrom;
+    if (props.restoreId) environment.RESTORE_ID = props.restoreId;
 
     const logGroup = new logs.LogGroup(this, 'FunctionLogs', {
       retention: logs.RetentionDays.ONE_WEEK,
@@ -93,6 +96,10 @@ export class RegistryStack extends Stack {
         .withCustomAttributes('org_id', 'role'),
       // The app client may not write org_id or role: only an administrator (AdminUpdateUserAttributes) can.
       writeAttributes: new cognito.ClientAttributes().withStandardAttributes({ email: true }),
+      // custom:role is read from the ID token as issued: a demoted admin keeps the role until it expires.
+      // Short tokens bound that window; pair a demotion with AdminUserGlobalSignOut (see RUNBOOK_AWS.md).
+      idTokenValidity: Duration.minutes(15),
+      accessTokenValidity: Duration.minutes(15),
     });
 
     const api = new apigw.HttpApi(this, 'Api', { createDefaultStage: false });

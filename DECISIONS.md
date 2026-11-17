@@ -135,7 +135,7 @@ log; storing a generated key silently.
 ### 22. An optional receipt-only registry: pure-Python Ed25519, one table, a REST stand-in in LocalStack
 The witness in decision 1 needs somewhere to live that the holder cannot rewrite. The registry stores only what a
 receipt commits to (fingerprint, head, count) plus the server-received time, keyed by the org in the verified
-token. Ed25519 is verified in about 110 lines of standard-library Python (RFC 8032, cofactorless like OpenSSL) so
+token. Ed25519 is verified in about 110 lines of standard-library Python (RFC 8032, cofactorless; stricter than OpenSSL because it also rejects small-order and non-canonical public keys) so
 the Lambda needs no native packages and the tests cannot silently skip signature checks. One DynamoDB table with
 conditional transactions gives idempotent registration, a monthly quota and atomic withdrawal; tombstones plus a
 restore marker keep withdrawals true across backup restores. In LocalStack 4.12.0 community the HTTP API and

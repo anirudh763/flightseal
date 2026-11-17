@@ -17,6 +17,12 @@ npx cdk deploy HashWingRegistry \
 
 The outputs are `ApiUrl`, `TableName`, `UserPoolId` and `UserPoolClientId`.
 
+Demoting an admin: `custom:role` is read from the ID token as issued, so a demoted admin keeps admin rights until
+that token expires (15 minutes; the app client sets ID and access tokens to 15 minutes). Always pair a demotion or
+removal with `aws cognito-idp admin-user-global-sign-out --user-pool-id <pool> --username <user>`, which revokes
+the refresh token so no new token with the old role can be obtained. Tokens already issued stay valid until they
+expire; nothing in this design revokes them sooner.
+
 Create users as an administrator; there is no self sign-up. `custom:org_id` (immutable) and `custom:role`
 (`admin` or `pilot`) are set here, never by the app:
 
@@ -67,24 +73,33 @@ separately if nothing else uses it.
 
 A restore always creates a new table. The steps keep withdrawn shares and deleted registrations gone.
 
-1. Restore (PITR or an on-demand backup) to a new table, for example `HashWingRegistry-restored`.
-2. Point the function at it and close every route until tombstones are applied:
+The **source** is always the table the function serves right now, read from its configuration:
+`aws lambda get-function-configuration --function-name <function> --query Environment.Variables.TABLE_NAME`.
+After a first restore that is the restored table, not the stack's own table: tombstones written since then exist
+only there. A source that is not the served table is refused, because its tombstones may be stale.
+
+1. Restore (PITR or an on-demand backup) to a new table, for example `HashWingRegistry-restored-2`.
+2. Pick a new random restore ID (for example `uuidgen`). Point the function at the new table and close every route
+   until tombstones are applied:
 
    ```sh
-   cd infra && npx cdk deploy HashWingRegistry -c restoredTableName=<restored table> -c restoredFrom=<source table>
+   cd infra && npx cdk deploy HashWingRegistry -c restoredTableName=<new table> -c restoredFrom=<served table> \
+     -c restoreId=<restore id>
    ```
 
-   This sets `TABLE_NAME` to the restored table and `RESTORED_FROM` to the source, and moves the function's IAM grant
-   to the restored table's ARN. The function now answers 503 `restore_pending` everywhere. (The stack's own table
-   stays as the source.)
+   This sets `TABLE_NAME`, `RESTORED_FROM` and `RESTORE_ID`, and moves the function's IAM grant to the new table's
+   ARN. The function now answers 503 `restore_pending` everywhere. A marker copied in from the backup does not open
+   it: the marker must name this table and this restore ID.
 3. With credentials that can scan the source and write the target:
 
    ```sh
    cd registry
-   python -m registry.restore --source <source table> --target <restored table>
+   python -m registry.restore --source <served table> --served <served table> --target <new table> \
+     --restore-id <restore id>
    ```
 
-   It copies every tombstone, re-applies it, and writes `SYSTEM/RESTORE` last. If it fails (for example the source
+   It copies every tombstone (withdrawals, deletions, key rotations and compromises, epoch bumps), re-applies it,
+   recomputes each org's active key, and writes `SYSTEM/RESTORE` (source, target, restore ID) last. If it fails (for example the source
    cannot be read), no marker is written and the function stays closed. Fix the cause and run it again; it is safe
    to repeat.
 4. Check: a share you know was withdrawn returns 404; an active one returns 200.

@@ -316,12 +316,14 @@ def test_unknown_route_is_404():
 
 def test_restore_pending_closes_every_route():
     table = MemoryTable()
-    app, _, clock = make_app(table=table, RESTORED_FROM="live-table")
+    app, _, clock = make_app(table=table, RESTORED_FROM="live-table", RESTORE_ID="r1", TABLE_NAME="restored")
     for method, path in (("GET", "/v1/shares/" + "A" * 43), ("POST", "/v1/registrations"), ("GET", "/v1/keys")):
         assert call(app, method, path, token(clock))[:2] == (503, {"error": "restore_pending"})
     table.put({"PK": "SYSTEM", "SK": "RESTORE", "source": "other-table"})
     assert call(app, "GET", "/v1/keys", token(clock))[0] == 503
-    table.put({"PK": "SYSTEM", "SK": "RESTORE", "source": "live-table"})
+    table.put({"PK": "SYSTEM", "SK": "RESTORE", "source": "live-table", "target": "other", "restore_id": "r1"})
+    assert call(app, "GET", "/v1/keys", token(clock))[0] == 503
+    table.put({"PK": "SYSTEM", "SK": "RESTORE", "source": "live-table", "target": "restored", "restore_id": "r1"})
     assert call(app, "GET", "/v1/keys", token(clock))[0] == 200
 
 
