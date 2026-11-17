@@ -538,11 +538,16 @@ try {
     assert.equal(await page.locator('tbody tr').count(), 8);
     assert.match(await page.locator('tbody').textContent(), /No trusted key entered/);
     await route(page, 'verify');
-    await page.locator('#trusted-key').fill('0'.repeat(64));
+    await page.locator('#trusted-key').fill('1'.repeat(64));
     await page.getByRole('button', { name: 'Run check' }).click(); await waitResult(page, 'Unverified');
     await route(page, 'receipts');
     assert.match(await page.locator('tbody').textContent(), /different key/);
     await route(page, 'verify');
+    // A weak key (here the identity point, under which any message "verifies") is refused, never shown as a verdict.
+    await page.locator('#trusted-key').fill('01' + '00'.repeat(31));
+    await page.getByRole('button', { name: 'Run check' }).click();
+    await page.getByRole('alert').filter({ hasText: "This public key is weak and can't prove anything" }).waitFor({ timeout: 30000 });
+    assert.equal(await page.locator('#result-heading').count(), 0, 'no verdict is shown for a weak key');
     await page.locator('#trusted-key').fill(readFileSync(resolve(ROOT, '../docs/samples/pubkey.txt'), 'utf8').trim());
     await page.getByRole('button', { name: 'Run check' }).click(); await waitResult(page, 'Intact');
   });

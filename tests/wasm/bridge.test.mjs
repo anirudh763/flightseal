@@ -37,7 +37,19 @@ test('no receipts means chain only and a wrong key means unverified', async () =
   assert.equal(run('', '').verdict, 'intact');
   assert.equal(run('', '').covered, 0);
   assert.equal(run('', '').fileSha256, createHash('sha256').update(await readFile(sample('intact.fseal'))).digest('hex'));
-  assert.equal(run(await readFile(sample('flight.receipts'), 'utf8'), '00'.repeat(32)).verdict, 'unverified');
+  assert.equal(run(await readFile(sample('flight.receipts'), 'utf8'), '11'.repeat(32)).verdict, 'unverified');
+});
+
+test('a weak (small-order or non-canonical) trusted key is refused, never trusted', async () => {
+  assert.equal(typeof factory, 'function');
+  const { weak, error } = JSON.parse(await readFile(new URL('../fixtures/ed25519-weak-keys.json', import.meta.url), 'utf8'));
+  const module = await factory({ wasmBinary: await readFile(new URL('../../docs/wasm/flightseal.wasm', import.meta.url)) });
+  module.FS.writeFile('/input', await readFile(sample('intact.fseal')));
+  for (const e of weak) {
+    const receipt = `fseal-receipt v1 count=${e.count || 1} head=${e.head || 'ab'.repeat(32)} key=${e.key} sig=${e.sig || '00'.repeat(64)}\n`;
+    const result = JSON.parse(module.ccall('fseal_verify', 'string', ['string', 'string', 'string'], ['/input', receipt, e.key]));
+    assert.deepEqual([result.error, result.verdict], [error, undefined], e.key);
+  }
 });
 
 test('native Writer creates a downloadable log and Ed25519 receipts which native verifier accepts', async () => {

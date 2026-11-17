@@ -27,6 +27,7 @@ The records written after sealing starts: their contents, their order and their 
 | Edit, then recompute every link and checksum | detected if a receipt covers the edit | the receipt's head no longer matches |
 | Forge or alter a receipt | detected, reported as UNVERIFIED | Ed25519 signature, checked against the trusted public key only; a forged receipt says nothing about the log |
 | Present a receipt signed by another key | detected, reported as UNVERIFIED | the key must equal the one the verifier trusts |
+| Hand over a weak public key (small-order or non-canonical) with receipts forged under it | refused: "This public key is weak and can't prove anything" (CLI exit 2, no report) | under such a key `R` = small-order point, `S` = 0 verifies for any message in OpenSSL 3.5.9 and 4 and in Chromium 153 WebCrypto; every verifier rejects these keys before checking a signature |
 | Crash in the middle of writing | not tampering | a torn final record; `fseal recover` trims only that |
 | Edit records written **after the last receipt** | **not detected** | the holder can rebuild that part of the chain |
 | Edit or fake data **before** it is sealed (spoofed GPS, altered sensor) | **not detected** | sealing proves what was written, not that it was true |
@@ -39,7 +40,11 @@ The records written after sealing starts: their contents, their order and their 
   only if they received the message from the sealer at sealing time and kept it; a message that arrives together
   with the file proves nothing. Without a saved signing key each file has its own key, discarded after sealing, so
   nothing links two flights to one operator.
-- SHA-256 is collision resistant and Ed25519 signatures cannot be forged.
+- SHA-256 is collision resistant and Ed25519 signatures cannot be forged without the private key of a strong
+  public key. Weak keys (the 8 small-order points and every non-canonical encoding, 48 encodings in
+  `tests/fixtures/ed25519-weak-keys.json`) are refused, because OpenSSL and Chromium accept forgeries under them.
+  Measured 2026-11-17: the OpenSSL 3.5.9 CLI and `fseal` linked to OpenSSL 4 accepted the forgery; headless
+  Chromium 153 WebCrypto accepted all 14 forged fixture receipts; Node 24 (bundled OpenSSL 3.5.9) rejected them.
 - The verifier gets the sealer's public key out of band (for example, registered with the operator's company), not
   from the holder.
 - Receipts reach the witness promptly. The gap between receipts is the window an attacker can rewrite, so a

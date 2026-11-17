@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { webcrypto } from 'node:crypto';
+import { readFileSync } from 'node:fs';
 import { listTrustedKeys, matchingTrustedKey, pinTrustedKey, removeTrustedKey } from '../src/trusted-keys.mjs';
 
 class MemoryStorage { values = new Map(); getItem(k) { return this.values.get(k) ?? null; } setItem(k, v) { this.values.set(k, String(v)); } }
@@ -25,5 +26,12 @@ test('changed key under a name warns and requires explicit rotation confirmation
   const rotated = await pinTrustedKey('Flight unit A', keyB, { storage, cryptoObject: webcrypto, confirmRotation: true });
   assert.equal(rotated.publicKey, keyB);
   assert.equal(removeTrustedKey('Flight unit A', { storage }), true);
+  assert.deepEqual(listTrustedKeys({ storage }), []);
+});
+
+test('a weak (small-order or non-canonical) Ed25519 key cannot be pinned', async () => {
+  const { weak, error } = JSON.parse(readFileSync(new URL('../../tests/fixtures/ed25519-weak-keys.json', import.meta.url), 'utf8'));
+  const storage = new MemoryStorage();
+  for (const { key } of weak) await assert.rejects(pinTrustedKey('Flight unit A', key, { storage, cryptoObject: webcrypto }), { message: error });
   assert.deepEqual(listTrustedKeys({ storage }), []);
 });
