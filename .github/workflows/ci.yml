@@ -63,6 +63,8 @@ jobs:
         run: node tests/web/e2e.mjs
       - name: Verifier screens (routes, focus, Menu sheet, Back/Forward, deep and old links, light default, axe-core)
         run: node tests/web/routes.mjs
+      - name: Download the public PX4 sample flight the Seal & send test uses
+        run: python3 tools/fetch_sample.py tests/.data
       - name: File failure, retry, stale selection and report download regressions
         run: node tests/web/hardening.mjs
 
