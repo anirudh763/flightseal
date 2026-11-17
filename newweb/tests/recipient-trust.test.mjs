@@ -111,3 +111,8 @@ test('manifest report carries trust, source, every time field and bytes-differ i
   assert.equal(json.fileComparison.items[0].note, 'Camera B');
   assert.deepEqual(json.fileComparison.bytesDiffer, BYTES_DIFFER);
 });
+
+test('an edited copy needs a "derived from" value; it is never silently dropped', () => {
+  assert.throws(() => composeNote({ edited: true, derivedFrom: '  ', note: 'x' }), (error) => error.code === 'note-tag' && /Derived from/.test(error.message));
+  assert.equal(composeNote({ edited: true, derivedFrom: 'item 2' }), '[derived-from=item 2]');
+});

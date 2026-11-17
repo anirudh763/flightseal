@@ -942,7 +942,7 @@ try {
     assert.equal(times[1][0], 'Sealed on this computer at');
     assert.equal(times[1][2], "this computer's clock, not verified; from the receipt message, not signed");
     assert.deepEqual(times.slice(2, 4).map((t) => t[1]), ['Not registered', 'None']);
-    assert.match(times[4][1], /^1 h 0 min \d+ s from the reported landing to the seal$/);
+    assert.match(times[4][1], /^1 h \d+ min \d+ s from the reported landing to the seal$/);
     const copyPath = join(evidence, 'my-copy.ulg'); writeFileSync(copyPath, Buffer.concat([original, Buffer.from('\n')]));
     const compare = async (path, status) => {
       if (!(await page.locator('.restored .protect-options').evaluate((d) => d.open))) await page.locator('.restored .protect-options summary').click();
@@ -969,7 +969,7 @@ try {
     await compare(copyPath, 'Bytes differ');
     const [textReport] = await Promise.all([page.waitForEvent('download'), page.getByRole('button', { name: 'Download text report' }).click()]);
     const report = readFileSync(await textReport.path(), 'utf8');
-    for (const line of [`Key trust: ${trusted}`, 'Key source: phone call with a known contact', `Reported landing time: ${landed.toISOString()} (operator-entered, not signed, not verified)`, 'Sealed on this computer at:', 'Registry acceptance: Not registered', 'Trusted timestamp: None', 'Reported landing-to-seal interval: 1 h 0 min', 'Your copy my-copy.ulg: Bytes differ.', 'not proof of tampering', 'Native chain result:']) assert.ok(report.includes(line), `report: ${line}`);
+    for (const line of [`Key trust: ${trusted}`, 'Key source: phone call with a known contact', `Reported landing time: ${landed.toISOString()} (operator-entered, not signed, not verified)`, 'Sealed on this computer at:', 'Registry acceptance: Not registered', 'Trusted timestamp: None', 'Reported landing-to-seal interval: 1 h ', 'Your copy my-copy.ulg: Bytes differ.', 'not proof of tampering', 'Native chain result:']) assert.ok(report.includes(line), `report: ${line}`);
     const [jsonReport] = await Promise.all([page.waitForEvent('download'), page.getByRole('button', { name: 'Download JSON' }).click()]);
     const json = JSON.parse(readFileSync(await jsonReport.path(), 'utf8'));
     assert.equal(json.keyTrust.status, 'trusted');

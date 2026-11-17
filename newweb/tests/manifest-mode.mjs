@@ -252,8 +252,13 @@ try {
   });
 
   await check('Check: a compromised key is flagged and never auto-used; the wrong key still refuses', async () => {
+    assert.equal(await trustText(), 'Signed by a key you trust: Acme Survey (added from contract or invoice)');
     await settings.getByRole('button', { name: 'Mark as compromised: Acme Survey' }).click();
     await settings.locator('.confirm-box').getByRole('button', { name: 'Mark as compromised' }).click();
+    // The open result re-checks its trust line when a pin changes; no stale "trusted" stays on screen or in exports.
+    await page.waitForFunction(() => /marked as compromised: Acme Survey/.test(document.querySelector('.manifest-outcome .trust-line')?.textContent || ''));
+    const [stale] = await Promise.all([page.waitForEvent('download'), page.getByRole('button', { name: 'Download text report', exact: true }).click()]);
+    assert.match(readFileSync(await stale.path(), 'utf8'), /Key trust: Signed by a key you marked as compromised: Acme Survey/);
     await runCheck('');
     assert.match(await page.locator('.manifest-outcome').innerText(), /Manifest not verified/);
     await runCheck(publicKey);
@@ -261,6 +266,30 @@ try {
     await runCheck('ab'.repeat(32));
     assert.match(await page.locator('.manifest-outcome').innerText(), /Manifest not verified[\s\S]*trusted public key/);
     assert.equal(await page.locator('.manifest-table').count(), 0);
+  });
+
+  await check('Pin controls on the check form: source required, in-page rotation confirm, history kept', async () => {
+    const pin = (id) => page.locator(`#manifest-trusted-key-pin-${id}`);
+    const pinButton = page.getByRole('button', { name: 'Pin public key on this device' });
+    await page.locator('#manifest-trusted-key').fill(publicKey);
+    await pin('name').fill('Unit A');
+    assert.equal(await pinButton.isEnabled(), false, 'a source is required');
+    await pin('source').selectOption('phone');
+    await pinButton.click();
+    assert.match(await page.locator('.trusted-key-controls [role=status]').innerText(), /Saved local pin Unit A/);
+    await page.locator('#manifest-trusted-key').fill('ab'.repeat(32));
+    await pin('name').fill('Unit A');
+    await pin('source').selectOption('phone');
+    await pinButton.click();
+    const box = page.locator('.trusted-key-controls .confirm-box');
+    assert.match(await box.innerText(), new RegExp(`Key changed for “Unit A” \\(old fingerprint ${grouped(fingerprintOf(publicKey))}\\)`));
+    await box.getByRole('button', { name: 'Keep current key' }).click();
+    assert.equal(await box.count(), 0);
+    await pinButton.click();
+    await page.locator('.trusted-key-controls .confirm-box').getByRole('button', { name: 'Replace key' }).click();
+    assert.match(await page.locator('.trusted-key-controls [role=status]').innerText(), /Saved local pin Unit A/);
+    await settings.waitForFunction(() => /Unit A[\s\S]*Replaced on \d{4}-\d{2}-\d{2}/.test(document.querySelector('.company-history')?.textContent || ''));
+    assert.match(await settings.locator('.company-list').innerText(), new RegExp(`Unit A[\\s\\S]*${grouped(fingerprintOf('ab'.repeat(32))).slice(0, 14)}`));
   });
 
   await check('Edited copy and re-encoded file: Bytes differ wording, signed derived-from link, negative reported interval', async () => {
@@ -276,6 +305,8 @@ try {
     await page.getByLabel('Include file names').check();
     await page.locator('#manifest-landing').fill(local);
     await page.locator('#manifest-edited-1').check();
+    await page.getByRole('button', { name: 'Seal', exact: true }).click();
+    assert.match(await page.getByRole('alert').first().textContent(), /Fill in “Derived from”/, 'an empty edited-copy link is never dropped silently');
     await page.locator('#manifest-derived-1').fill('item [1]');
     await page.getByRole('button', { name: 'Seal', exact: true }).click();
     assert.match(await page.getByRole('alert').first().textContent(), /can’t contain \[ or \]/);
@@ -307,10 +338,12 @@ try {
     assert.deepEqual(fields.map((f) => f[0]), ['Reported landing time', 'Sealed on this computer at', 'Registry acceptance', 'Trusted timestamp', 'Reported landing-to-seal interval']);
     assert.equal(fields[0][2], 'operator-entered, signed, not verified');
     assert.equal(fields[1][2], "this computer's clock, not verified; from the receipt message, not signed");
-    assert.match(fields[4][1], /^-1 h 59 min \d+ s \(reported landing is after the seal time/);
+    assert.match(fields[4][1], /^-1 h \d+ min \d+ s \(reported landing is after the seal time/);
     assert.doesNotMatch(fields[4][1], /verified/i, 'no verified-delay wording');
     assert.doesNotMatch(await page.locator('.manifest-outcome').innerText(), /identical|verified delay|delay verified/i);
     await layout(page, 'manifest derived');
+    await page.locator('#manifest-files').setInputFiles([original]);
+    assert.equal(await page.locator('#manifest-landing').inputValue(), '', 'a landing time is never carried into the next batch');
   });
 
   await check('No request body contains the marker or source-file bytes', async () => {

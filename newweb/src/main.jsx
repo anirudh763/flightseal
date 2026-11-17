@@ -25,7 +25,7 @@ import { createStoreZip } from './zip-store.mjs';
 import { deliverEarlyAccessRequest } from './early-access.mjs';
 import { createEncryptedProfileBackup, inspectEncryptedProfileBackup, commitBackupRestore, previewBackupRestore } from './profile-backup.mjs';
 import { createSyncProvider } from './sync-provider.mjs';
-import { SOURCES, addTrustedCompany, fingerprintHex, formatFingerprint, listTrustedHistory, listTrustedKeys, markCompromised, pinTrustedKey, removeTrustedKey, trustForKey } from './trusted-keys.mjs';
+import { PINS_CHANGED, SOURCES, addTrustedCompany, fingerprintHex, formatFingerprint, listTrustedHistory, listTrustedKeys, markCompromised, pinTrustedKey, removeTrustedKey, trustForKey } from './trusted-keys.mjs';
 import { BYTES_DIFFER, TRUST_KIND, composeNote, landingLine, manifestReport, parseLandingLine, parseNote, parseSealedLine, timeFields, toIsoFromLocal, trustLine } from './recipient-trust.mjs';
 
 const syncProvider = createSyncProvider({ supabaseUrl: import.meta.env.VITE_SUPABASE_URL, supabaseAnonKey: import.meta.env.VITE_SUPABASE_ANON_KEY });
@@ -152,6 +152,7 @@ function App() {
   const [protectTimes, setProtectTimes] = useState(null); // { for: result, sealedAt, landing } parsed from the pasted message
   const [copyCompare, setCopyCompare] = useState(null); // { for: result, name, bytes, sha256, expected, matches }
   const [keyTrust, setKeyTrust] = useState(null); // { for: result, status, entry? }
+  const pinsVersion = usePinsVersion();
   const [copyStatus, setCopyStatus] = useState('');
   const [sealSourceOriginal, setSealSourceOriginal] = useState(null);
   const [csvDraft, setCsvDraft] = useState(null);
@@ -983,7 +984,7 @@ function App() {
       if (op !== runRef.current) return;
       setProtectTimes(null);
       setProtectResult(verified);
-      setProtectSealed({ name: packed.name, bytes: packed.bytes, sha256: packed.sha256, log, savedKey: !!signingKey?.privateKeyPem, fingerprint, handover: lines.join('\n') });
+      setProtectSealed({ name: packed.name, bytes: packed.bytes, sha256: packed.sha256, log, savedKey: !!signingKey?.privateKeyPem, fingerprint, handover: lines.join('\n') }); setProtectLanding('');
       setOperationStatus('Sealed and checked on this device; nothing was uploaded. Now send the receipt message to someone else.');
     } catch (cause) {
       if (op !== runRef.current || cause?.name === 'AbortError') return;
@@ -1206,7 +1207,7 @@ function App() {
     let live = true;
     trustForKey(result.key).then((trust) => { if (live) setKeyTrust({ ...trust, for: result }); }, () => {});
     return () => { live = false; };
-  }, [result]);
+  }, [result, pinsVersion]);
   const protectView = !!result && result === protectResult;
   const resultTimes = protectView && protectTimes?.for === result ? timeFields({ landing: protectTimes.landing, landingSigned: false, sealedAt: protectTimes.sealedAt }) : null;
   // A just-sealed result is the sender's own key, so the recipient's trust line is not shown for it.
@@ -1474,7 +1475,7 @@ function App() {
         <section className="panel"><div className="panel-body"><h2>Current evidence</h2>{result ? <><button className="button primary" onClick={downloadPdf}>Download PDF</button><ResultPanel result={result} resultTitle={resultTitle} reportText={reportText} onDownloadText={()=>download('verification-report.txt',reportText)} onDownloadMarkdown={()=>download('verification-report.md',reportMarkdown)} onDownloadJson={()=>download('verification-report.json',reportJson,'application/json')} onNavigate={navigate} onShare={()=>setShareDialogOpen(true)} trust={shownTrust} /></> : <p>No checked evidence in this tab. Open Workbench to verify a log, or select a saved run above.</p>}</div></section>
         <details className="report-details"><summary>Benchmarks and recovery evidence</summary><BenchmarkPage /></details>
       </section>}
-      {screen === 'settings' && <section aria-label="Workspace settings"><server-workspace view="settings" /><details className="report-details"><summary>Browser profiles and encrypted backups</summary>{profileControls}</details><details className="report-details trusted-companies-details"><summary>Trusted companies</summary><TrustedCompanies /></details><SystemPage /></section>}
+      {screen === 'settings' && <section aria-label="Workspace settings"><server-workspace view="settings" /><details className="report-details"><summary>Browser profiles and encrypted backups</summary>{profileControls}</details><details className="report-details trusted-companies-details"><summary>Trusted companies <ChevronDown size={17} aria-hidden="true" /></summary><TrustedCompanies /></details><SystemPage /></section>}
       {canonicalPage === 'workbench' && <server-workspace view="workbench" />}
       {screen === 'system' && <SystemPage />}
       {screen === 'benchmarks' && <BenchmarkPage />}
@@ -1490,7 +1491,7 @@ function App() {
           <section className="panel" aria-labelledby="seal-title"><div className="panel-head"><FileLock2 aria-hidden="true" size={18} /><h2 id="seal-title">Seal a flight log</h2></div><div className="panel-body">
             <p>For the pilot or operator. Works with any log file: PX4 <code>.ulg</code>, ArduPilot <code>.bin</code>, DJI flight records, CSV and others. The exact bytes are sealed.</p>
             <label className="field-label" htmlFor="protect-file">Flight log file <span>(up to {RAW_MAX_BYTES / 1024 / 1024} MiB)</span></label>
-            <input id="protect-file" type="file" onChange={(e) => { invalidateCheck(); setProtectFile(e.target.files?.[0] || null); setProtectSealed(null); setProtectResult(null); setRestored(null); setCopyStatus(''); setError(''); }} />
+            <input id="protect-file" type="file" onChange={(e) => { invalidateCheck(); setProtectFile(e.target.files?.[0] || null); setProtectLanding(''); setProtectSealed(null); setProtectResult(null); setRestored(null); setCopyStatus(''); setError(''); }} />
             <p className="field-hint">{signingKey?.privateKeyPem ? 'The signing key loaded under Settings (kept in this tab only) will sign the receipt, so every flight you seal with it carries the same public key.' : 'No signing key loaded: a key is made for this file only and discarded. Load or generate a key under Settings to use one identity across flights.'}</p>
             <details className="report-details protect-options"><summary>More options <ChevronDown size={17} aria-hidden="true" /></summary><div className="manifest-options-body">
               <label className="field-label" htmlFor="protect-landing">Reported landing time <span>(optional, this computer's time zone)</span></label>
@@ -1804,6 +1805,16 @@ function AuthPage({ mode, returnTo, guestCanImport, currentSampleName, outputNee
   </div>;
 }
 
+// Bumps when a trusted-company pin changes here or in another tab, so trust lines never go stale.
+function usePinsVersion() {
+  const [version, setVersion] = useState(0);
+  useEffect(() => {
+    const bump = () => setVersion((value) => value + 1);
+    window.addEventListener(PINS_CHANGED, bump); window.addEventListener('storage', bump);
+    return () => { window.removeEventListener(PINS_CHANGED, bump); window.removeEventListener('storage', bump); };
+  }, []);
+  return version;
+}
 const PICKABLE_SOURCES = Object.entries(SOURCES).filter(([key]) => key !== 'not-recorded');
 const readActivePins = () => { try { return listTrustedKeys().filter((pin) => pin.publicKey); } catch { return []; } };
 function TrustLine({ trust }) {
@@ -1850,10 +1861,12 @@ function TrustedKeyPinControls({ value, onUse, idPrefix = 'trusted-key' }) {
   </div>;
 }
 
-const historyStatus = (entry) => entry.status === 'replaced' ? `Replaced on ${entry.replacedAt.slice(0, 10)}` : entry.status === 'compromised' ? `Marked compromised on ${entry.compromisedAt.slice(0, 10)}` : 'Active';
+const historyStatus = (entry) => entry.status === 'replaced' ? `Replaced on ${String(entry.replacedAt).slice(0, 10)}` : entry.status === 'compromised' ? `Marked compromised on ${String(entry.compromisedAt).slice(0, 10)}` : 'Active';
 function TrustedCompanies() {
   const read = () => { try { return listTrustedHistory(); } catch { return []; } };
   const [entries, setEntries] = useState(read);
+  const pinsVersion = usePinsVersion();
+  useEffect(() => { if (pinsVersion) setEntries(read()); }, [pinsVersion]); // eslint-disable-line react-hooks/exhaustive-deps
   const [name, setName] = useState('');
   const [fingerprint, setFingerprint] = useState('');
   const [source, setSource] = useState('');
@@ -1905,8 +1918,8 @@ function TrustedCompanies() {
         <button className="text-action" type="button" aria-label={`Remove: ${entry.name}`} onClick={() => setPending({ kind: 'remove', entry, text: `Remove ${entry.name} and its key history from this browser?` })}>Remove</button>
       </div>
     </li>)}</ul> : <p className="field-hint">No trusted companies yet.</p>}
-    {entries.length > 0 && <details className="report-details"><summary>Key history</summary><ul className="company-history">{entries.map((entry, index) => <li key={index}><strong className="wrap">{entry.name}</strong> <code className="fingerprint">{formatFingerprint(entry.fingerprint)}</code> <span>{historyStatus(entry)} · from {SOURCES[entry.source] || entry.source}</span></li>)}</ul></details>}
-    <details className="report-details"><summary>What is this?</summary><div className="prose"><p>A trusted company is a name and key fingerprint you got from that company through a channel you already know: its website, a contract or invoice, or a phone call with someone you know there.</p><p>A proof says "Signed by a key you trust" only when its key matches an active entry here. A key that arrives inside a receipt message is never trusted just because it is there. This list stays in this browser.</p></div></details>
+    {entries.length > 0 && <details className="report-details"><summary>Key history <ChevronDown size={17} aria-hidden="true" /></summary><ul className="company-history">{entries.map((entry, index) => <li key={index}><strong className="wrap">{entry.name}</strong> <code className="fingerprint">{formatFingerprint(entry.fingerprint)}</code> <span>{historyStatus(entry)} · from {SOURCES[entry.source] || entry.source}</span>{!active.some((item) => item.name.toLowerCase() === entry.name.toLowerCase()) && entries.findIndex((item) => item.name.toLowerCase() === entry.name.toLowerCase()) === index && <button className="text-action" type="button" aria-label={`Remove: ${entry.name}`} onClick={() => setPending({ kind: 'remove', entry, text: `Remove ${entry.name} and its key history from this browser?` })}>Remove</button>}</li>)}</ul></details>}
+    <details className="report-details"><summary>What is this? <ChevronDown size={17} aria-hidden="true" /></summary><div className="prose"><p>A trusted company is a name and key fingerprint you got from that company through a channel you already know: its website, a contract or invoice, or a phone call with someone you know there.</p><p>A proof says "Signed by a key you trust" only when its key matches an active entry here. A key that arrives inside a receipt message is never trusted just because it is there. This list stays in this browser.</p></div></details>
   </section>;
 }
 
@@ -2179,12 +2192,12 @@ function ManifestSeal({ signingKey, onActiveChange }) {
   useEffect(() => () => onActiveChange(false), [onActiveChange]);
   const reset = () => { controllerRef.current?.abort(); setOutput(null); setMessage(''); setError(''); };
   const choose = (list) => {
-    reset(); setNotes({}); setEdited({}); setDerived({});
+    reset(); setNotes({}); setEdited({}); setDerived({}); setLandingLocal(''); // a landing time belongs to one batch
     const picked = [...(list || [])];
     if (picked.length > MANIFEST_LIMITS.maxItems) { setFiles([]); setError(`You picked ${picked.length} files. Choose up to ${MANIFEST_LIMITS.maxItems} at a time, and seal the rest as a second list.`); return; }
     setFiles(picked);
   };
-  const itemsFor = (digests) => files.map((file, index) => ({ bytes: digests ? digests[index].bytes : file.size, sha256: digests ? digests[index].sha256 : '0'.repeat(64), name: includeNames ? file.name : '', note: composeNote({ landing: toIsoFromLocal(landingLocal), derivedFrom: edited[index] ? derived[index] : '', note: notes[index] }) }));
+  const itemsFor = (digests) => files.map((file, index) => ({ bytes: digests ? digests[index].bytes : file.size, sha256: digests ? digests[index].sha256 : '0'.repeat(64), name: includeNames ? file.name : '', note: composeNote({ landing: toIsoFromLocal(landingLocal), edited: !!edited[index], derivedFrom: edited[index] ? derived[index] : '', note: notes[index] }) }));
   const seal = async () => {
     reset();
     // Same length as the real payload, so a long note or name fails now rather than after hours of hashing.
@@ -2267,9 +2280,9 @@ function ManifestSeal({ signingKey, onActiveChange }) {
   </div></section>;
 }
 
-function ItemNote({ note }) {
-  const { derivedFrom, note: text } = parseNote(note);
-  return <>{derivedFrom && <span className="manifest-note">Edited copy of: {derivedFrom} (operator-entered, signed)</span>}{text && <span className="manifest-note">Operator note: {text}</span>}</>;
+function ItemNote({ note, showLanding }) {
+  const { landing, derivedFrom, note: text } = parseNote(note);
+  return <>{showLanding && landing && <span className="manifest-note">Reported landing time: {landing} (operator-entered, signed)</span>}{derivedFrom && <span className="manifest-note">Edited copy of: {derivedFrom} (operator-entered, signed)</span>}{text && <span className="manifest-note">Operator note: {text}</span>}</>;
 }
 const STATUS_KIND = { match: 'ok', 'bytes-differ': 'warn', missing: 'grey', 'not-in-manifest': 'neutral' };
 function ManifestCheck({ onActiveChange }) {
@@ -2287,6 +2300,16 @@ function ManifestCheck({ onActiveChange }) {
   useEffect(() => { onActiveChange(running); }, [running, onActiveChange]);
   useEffect(() => () => onActiveChange(false), [onActiveChange]);
   const changed = (apply) => { revisionRef.current++; controllerRef.current?.abort(); setOutcome(null); setMessage(''); apply(); };
+  const pinsVersion = usePinsVersion();
+  const reportFor = (trust, o) => manifestReport({ sealedName: o.sealedName, trust, sources: SOURCES, keyFingerprint: o.fingerprint, head: o.head, sealedAt: o.sealedAt, items: o.comparison.items, extras: o.comparison.extras, locals: o.locals });
+  useEffect(() => {
+    if (!pinsVersion || !outcome?.verified) return undefined;
+    let live = true;
+    trustForKey(outcome.publicKey).catch(() => ({ status: 'untrusted' })).then((trust) => {
+      if (live) setOutcome((current) => current === outcome ? { ...current, trust, report: reportFor(trust, current) } : current);
+    });
+    return () => { live = false; };
+  }, [pinsVersion]); // eslint-disable-line react-hooks/exhaustive-deps
   const run = async () => {
     const revision = ++revisionRef.current;
     const controller = new AbortController(); controllerRef.current = controller;
@@ -2307,8 +2330,8 @@ function ManifestCheck({ onActiveChange }) {
       const hashed = await hashAll(locals, controller.signal, setProgress);
       if (revision !== revisionRef.current) return;
       const comparison = compareFiles(verified.manifest, hashed);
-      const report = manifestReport({ sealedName: sealed.name, trust, sources: SOURCES, keyFingerprint: fingerprint, head: verified.head, sealedAt: parseSealedLine(text), items: comparison.items, extras: comparison.extras, locals: hashed });
-      setOutcome({ verified: true, manifest: verified.manifest, comparison, locals: hashed, trust, pinned, report, base: sealed.name.replace(/\.manifest\.fseal$|\.fseal$/, '') || 'hashwing-manifest' });
+      const facts = { sealedName: sealed.name, fingerprint, head: verified.head, sealedAt: parseSealedLine(text), comparison, locals: hashed, publicKey: verified.publicKey };
+      setOutcome({ verified: true, ...facts, manifest: verified.manifest, trust, pinned, report: reportFor(trust, facts), base: sealed.name.replace(/\.manifest\.fseal$|\.fseal$/, '') || 'hashwing-manifest' });
     } catch (cause) {
       if (revision !== revisionRef.current && cause?.name === 'AbortError') return;
       setMessage(cause?.name === 'AbortError' ? 'Cancelled' : cause?.message || 'Something went wrong. Press Check files again.');
@@ -2337,7 +2360,7 @@ function ManifestCheck({ onActiveChange }) {
       {outcome.pinned && <p className="field-hint">Used the key you saved for {outcome.pinned.name}.</p>}
       <TimeFields fields={outcome.report.fields} />
       <div className="table-scroll" role="region" aria-label="Manifest check results" tabIndex={0}><table className="manifest-table"><thead><tr><th scope="col">Item</th><th scope="col">Name in manifest</th><th scope="col">Size</th><th scope="col">Status</th><th scope="col">Local file</th></tr></thead><tbody>
-        {comparison.items.map((item) => <tr key={item.id}><td className="mono-values">{item.id}</td><td className="wrap">{item.name || <span className="muted">Not included</span>}<ItemNote note={item.note} /></td><td className="mono-values">{fmtBytes(item.bytes)}</td><td><span className={`status-label ${STATUS_KIND[item.status]}`}>{MANIFEST_STATUS[item.status]}</span>{item.status === 'bytes-differ' && <span className="manifest-note">{BYTES_DIFFER.text}</span>}</td><td className="wrap">{item.local == null ? '—' : outcome.locals[item.local].name}</td></tr>)}
+        {comparison.items.map((item) => <tr key={item.id}><td className="mono-values">{item.id}</td><td className="wrap">{item.name || <span className="muted">Not included</span>}<ItemNote note={item.note} showLanding={new Set(comparison.items.map((entry) => parseNote(entry.note).landing || '')).size > 1} /></td><td className="mono-values">{fmtBytes(item.bytes)}</td><td><span className={`status-label ${STATUS_KIND[item.status]}`}>{MANIFEST_STATUS[item.status]}</span>{item.status === 'bytes-differ' && <span className="manifest-note">{BYTES_DIFFER.text}</span>}</td><td className="wrap">{item.local == null ? '—' : outcome.locals[item.local].name}</td></tr>)}
         {comparison.extras.map((extra) => <tr key={`extra-${extra.local}`}><td>—</td><td>—</td><td className="mono-values">{fmtBytes(extra.bytes)}</td><td><span className={`status-label ${STATUS_KIND['not-in-manifest']}`}>{MANIFEST_STATUS['not-in-manifest']}</span></td><td className="wrap">{extra.name}</td></tr>)}
       </tbody></table></div>
       {comparison.items.some((item) => item.status === 'missing' && !item.name) && <p className="field-hint">Files sealed without a name can only match or be missing.</p>}

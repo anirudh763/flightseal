@@ -5,9 +5,10 @@ const validIso = (value) => typeof value === 'string' && ISO.test(value) && !Num
 const TAGS = /^(?:\[reported-landing=([^\][]*)\])?(?:\[derived-from=([^\][]*)\])?(?: ([\s\S]*))?$/;
 
 /** `[reported-landing=<ISO>][derived-from=<text>] <note>`; plain note when there are no tags. */
-export function composeNote({ landing = '', derivedFrom = '', note = '' } = {}) {
+export function composeNote({ landing = '', derivedFrom = '', note = '', edited = false } = {}) {
   const from = String(derivedFrom || '').trim();
   const text = String(note || '');
+  if (edited && !from) throw Object.assign(new Error('You ticked “This is an edited copy”. Fill in “Derived from” under More options, or untick it.'), { code: 'note-tag' });
   if (landing && !validIso(landing)) throw Object.assign(new Error('Enter the reported landing time as a full date and time.'), { code: 'note-tag' });
   if (/[[\]]/.test(from)) throw Object.assign(new Error('“Derived from” can’t contain [ or ]. Use the item number or the SHA-256 fingerprint.'), { code: 'note-tag' });
   const tags = `${landing ? `[reported-landing=${landing}]` : ''}${from ? `[derived-from=${from}]` : ''}`;

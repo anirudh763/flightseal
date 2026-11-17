@@ -3,16 +3,16 @@ title: 'Recipient trust: trusted companies, time provenance, bytes differ and ed
 type: feature
 ticket: ''
 created: '2026-11-17'
-status: in-progress
-baseline_revision: '96e7e7430638a8c2f453dd4e0944fbf4a997ef58'
+status: built
+baseline_revision: '5ef8e8d54181b941a9878ed61e5ff3f2f9d24e87' # rebased from 96e7e7430638a8c2f453dd4e0944fbf4a997ef58
 route: full
 route_source: auto
 risk: high
-review: ''
-review_source: ''
-lenses_ran: []
+review: quick
+review_source: pinned
+lenses_ran: [quick]
 review_loop_iteration: 0
-followup_review_recommended: false
+followup_review_recommended: true
 context:
   - '{project-root}/AGENTS.md'
   - '{project-root}/DESIGN.md'
@@ -138,9 +138,46 @@ deferred: []
 
 ## Implementation Notes
 
+- Implemented by a full-route subagent; the parent session finished the work in the foreground after rebasing onto origin/main 5ef8e8d (PR #21). There were no conflicts.
+- Settings route had two problems the Settings test exposed: the title read "Not found", and the profile controls rendered twice, giving duplicate ids. Both were fixed.
+- Fingerprint pins: when the key field is empty, the receipt's key is used only if its SHA-256 equals an active pin.
+- The "edited copy" option exists only in large-file mode, because the embedded format has no signed slot for it.
+
 ## Plan Change Log
 
 ## Review Triage Log
+
+### 2026-11-17 — Review pass
+- verdicts: 11 findings — high 0, medium 4, low 6, false 1, maybe-false 0
+- findings:
+  - `[false]` `[reject]` Rebuilt docs/console assets missing from the diff — the review diff deliberately excluded docs/console, and the rebuilt assets are committed in the finalize commit.
+  - `[medium]` `[patch]` A stale reported landing time could be signed into the next batch, or added to the next embedded handover — `choose()` now clears it, as do a protect-file change and a completed seal; the manifest-mode check asserts it.
+  - `[medium]` `[patch]` "This is an edited copy" with an empty "Derived from" dropped the link silently — `composeNote({edited})` now throws a friendly note-tag error; covered by a unit test and a browser test, both failing first.
+  - `[medium]` `[patch]` The trust line went stale after pins changed (Verify/Reports result and the manifest outcome and its exports) — `write()` dispatches `PINS_CHANGED`; `usePinsVersion` re-runs `trustForKey` and rebuilds the manifest report. A browser test waits for the live change and checks the downloaded text, failing first.
+  - `[low]` `[patch]` "See items" pointed at per-item landing times that weren't shown — `ItemNote` now shows the per-item reported landing time when the items' times differ.
+  - `[low]` `[patch]` Remove was case-sensitive, and companies with no active entry couldn't be removed — remove now ignores case (unit test failed first), and the history list offers Remove for companies with no active entry.
+  - `[low]` `[patch]` `historyStatus` could crash on a malformed store — `read()` now requires a parseable `replacedAt`/`compromisedAt` (unit test failed first), with a `String()` guard in `historyStatus`.
+  - `[low]` `[patch]` The new disclosures had no expand cue — ChevronDown added to the Trusted companies, Key history and What is this? summaries.
+  - `[medium]` `[patch]` TrustedKeyPinControls changes were untested — a new manifest-mode check covers the required source, the in-page Keep/Replace confirm and the history kept in Settings; it failed first.
+  - `[low]` `[patch]` The pinTrustedKey replace message used the raw fingerprint — it now uses the grouped form; unit and browser tests failed first.
+  - `[low]` `[patch]` The interval assertions depended on timing — the regexes now accept any minute count.
+
+## Auto Run Result
+
+- Summary: trusted companies (fingerprint + required source, replace with confirm, history, compromised), a trust line on every check path, labelled time fields with a reported interval that is never clamped, neutral Bytes differ wording, compare-a-copy, a signed edited-copy link in large-file mode, and trust/time/bytes-differ fields in every report. Browser only; formats unchanged.
+- Files:
+  - newweb/src/trusted-keys.mjs — company store with history.
+  - newweb/src/recipient-trust.mjs — pure helpers, new.
+  - newweb/src/main.jsx — UI and reports.
+  - newweb/src/style.css — styles.
+  - newweb/tests/* — unit and browser tests.
+  - .github/workflows/ci.yml — runs the new unit tests.
+  - docs/MANIFEST_MODE.md — note tags and pins.
+  - docs/console/ — rebuilt.
+- Review: 10 patches applied (4 medium, 6 low), 0 deferred, 1 rejected as false (above).
+- Follow-up review recommended: true, since 4 medium were patched. The unverified risk is the same-tab `PINS_CHANGED` event path in a Verify/Reports result: it isn't covered by a browser test (only the manifest outcome is).
+- Verification: newweb unit 23/23; JS gate 139/139; Wasm 29/29 and 8 pass + 3 skipped; test:browser 47 ok (console 33 + manifest-mode 14); edge-matrix 9; e2e 5; routes 6; action-offline 3/3; product-routes 30 passed; pytest (Python 3.12, CI packages) 124 passed, 30 skipped; ctest 5/5 (subagent run).
+- Residual risks: the manifest results table is cramped at 320 px (pre-existing design); fingerprint-pin auto-use is a deliberate extension documented in MANIFEST_MODE.md.
 
 ## Design Notes
 

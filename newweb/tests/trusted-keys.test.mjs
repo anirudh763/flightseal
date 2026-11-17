@@ -115,3 +115,16 @@ test('the store refuses to grow past 64 entries, history included', () => {
   assert.throws(() => addTrustedCompany('C64', 'f'.repeat(64), { storage, source: 'other' }), /maximum of 64/);
   assert.equal(listTrustedHistory({ storage }).length, 64);
 });
+
+test('remove ignores case, history entries need their dates, rotation message shows grouped fingerprint', async () => {
+  const storage = new MemoryStorage();
+  addTrustedCompany('Acme', 'ab'.repeat(32), { source: 'website', storage, now: '2026-11-01T00:00:00.000Z' });
+  addTrustedCompany('acme', 'cd'.repeat(32), { source: 'phone', storage, confirmReplace: true, now: '2026-11-02T00:00:00.000Z' });
+  assert.equal(removeTrustedKey('ACME', { storage }), true);
+  assert.deepEqual(listTrustedHistory({ storage }), []);
+  storage.setItem(STORE, JSON.stringify([{ name: 'X', publicKey: '', fingerprint: 'ab'.repeat(32), source: 'other', addedAt: '', status: 'replaced' }]));
+  assert.throws(() => listTrustedHistory({ storage }), /unsupported format/);
+  const pins = new MemoryStorage();
+  await pinTrustedKey('Unit', keyA, { storage: pins, cryptoObject: webcrypto, source: 'other' });
+  await assert.rejects(pinTrustedKey('Unit', keyB, { storage: pins, cryptoObject: webcrypto, source: 'other' }), (error) => /(?:[0-9a-f]{4} ){15}[0-9a-f]{4}/.test(error.message) && /Confirm rotation/.test(error.message));
+});

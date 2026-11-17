@@ -1,6 +1,7 @@
 // Local trusted-companies list (public keys and fingerprints only; never a private key). History is kept: a
 // replaced or compromised key stays listed with its status, so an old proof can still be explained.
 const STORAGE_KEY = 'flightseal_trusted_keys_v1';
+export const PINS_CHANGED = 'hashwing-trusted-keys-changed';
 const MAX_KEYS = 64; // history entries count
 const HEX64 = /^[a-f0-9]{64}$/;
 const STATUSES = new Set(['active', 'replaced', 'compromised']);
@@ -32,7 +33,9 @@ function read(storage = globalThis.localStorage) {
   return entries.map((entry) => {
     // Legacy pins are { name, publicKey, fingerprint } and read as active with no recorded source.
     const next = { source: 'not-recorded', addedAt: '', status: 'active', ...entry };
-    if (!next || typeof next.name !== 'string' || !next.name || next.name.length > 80 || !(next.publicKey === '' || HEX64.test(next.publicKey)) || !HEX64.test(next.fingerprint)
+    const dated = (key) => typeof next[key] === 'string' && !Number.isNaN(Date.parse(next[key]));
+    if ((next.status === 'replaced' && !dated('replacedAt')) || (next.status === 'compromised' && !dated('compromisedAt'))) throw new Error('Named key pins have an unsupported format.');
+    if (typeof next.name !== 'string' || !next.name || next.name.length > 80 || !(next.publicKey === '' || HEX64.test(next.publicKey)) || !HEX64.test(next.fingerprint)
       || !STATUSES.has(next.status) || !Object.hasOwn(SOURCES, next.source) || typeof next.addedAt !== 'string') throw new Error('Named key pins have an unsupported format.');
     return clean(next);
   });
@@ -42,6 +45,8 @@ function write(storage, entries) {
   const text = JSON.stringify(entries);
   storage.setItem(STORAGE_KEY, text);
   if (storage.getItem(STORAGE_KEY) !== text) throw new Error('Public-key pin could not be verified after storage.');
+  // Lets open results re-check their trust line after a pin changes in this tab.
+  if (typeof globalThis.dispatchEvent === 'function') globalThis.dispatchEvent(new Event(PINS_CHANGED));
 }
 function checkName(input) {
   const name = String(input || '').trim();
@@ -74,7 +79,7 @@ export async function pinTrustedKey(nameInput, publicKey, { storage = globalThis
   const value = String(publicKey || '').trim().toLowerCase();
   const fingerprint = await fingerprintHex(value, cryptoObject);
   const { entries, entry } = upsert(read(storage), { name, publicKey: value, fingerprint, source, now, confirm: confirmRotation,
-    message: (old) => `Key changed for “${old.name}” (old fingerprint ${old.fingerprint}). Confirm rotation after verifying the new key independently.` });
+    message: (old) => `Key changed for “${old.name}” (old fingerprint ${formatFingerprint(old.fingerprint)}). Confirm rotation after verifying the new key independently.` });
   write(storage, entries);
   return clean(entry);
 }
@@ -117,7 +122,7 @@ export async function matchingTrustedKey(publicKey, { storage = globalThis.local
 }
 export function removeTrustedKey(name, { storage = globalThis.localStorage } = {}) {
   const entries = read(storage);
-  const updated = entries.filter((entry) => entry.name !== name);
+  const updated = entries.filter((entry) => !sameName(entry.name, String(name)));
   write(storage, updated);
   return updated.length !== entries.length;
 }
