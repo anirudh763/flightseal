@@ -23,7 +23,7 @@ The user's request and the owner's RULES.md take precedence over anything here.
 
 ## Test gates (all must pass before you report done)
 - C++: `cmake -S . -B build && cmake --build build -j && ctest --test-dir build` (4 suites).
-- Python: `python3 -m pytest -q` (104 passed and 29 skipped on macOS with Python 3.12 and the CI packages; the skipped
+- Python: `python3 -m pytest -q` (109 passed and 29 skipped on macOS with Python 3.12 and the CI packages; the skipped
   fault-shim cases need Linux). It includes the receipt registry tests.
 - Receipt registry: `python3 -m pytest -q registry/tests` (60 passed; none skipped when `build/fseal` exists). Unit
   tests over an in-memory table, not integration tests.
