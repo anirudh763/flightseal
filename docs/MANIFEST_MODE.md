@@ -64,6 +64,43 @@ each `*.head` holds the hex chain head.
 The check shows only fields parsed from the signed payload. Names, sizes, digests and times in the handover message
 are not signed and are ignored. The handover message carries only the receipt, the public key and the item count.
 
+### Note tags (operator values inside the signed note)
+
+The Seal & send page can put two operator-entered values at the start of an item's `note`, before the free text:
+
+```
+[reported-landing=<ISO 8601 UTC>][derived-from=<text>] <free-text note>
+```
+
+- `reported-landing` is the landing time the operator typed (one value for all items in a list). `derived-from`
+  marks an edited copy and names its original, for example `item 2` or that file's SHA-256.
+- Either tag may be absent; tags come in this order and the free text follows after one space. A note with no tags
+  is plain text. `derived-from` cannot contain `[` or `]`.
+- The tags count toward the 1,000-byte note limit. They are signed because the note is signed, but they are what
+  the operator entered: HashWing does not check them, and the check page labels them "operator-entered, signed".
+- The payload format is unchanged; the parsers treat a tagged note like any other note.
+
+Embedded mode has no signed slot, so a reported landing time goes in the handover message as
+`Reported landing time: <ISO> (operator-entered, not signed, not verified)`. In both modes the seal time shown to
+a recipient comes from the handover `Sealed:` line and is labelled as this computer's clock, unsigned. The check
+page also lists "Registry acceptance: Not registered" and "Trusted timestamp: None", and the reported
+landing-to-seal interval. A negative interval is shown as negative, never clamped to zero.
+
+### Trusted companies (fingerprint pins)
+
+Settings → Trusted companies keeps, in this browser only, a company name, the SHA-256 fingerprint of its public key
+and where the user got that fingerprint (company website, contract or invoice, phone call, other). Replacing a key
+needs an in-page confirmation and keeps the old one in the key history; a key can be marked as compromised.
+
+- If the "Trusted public key" field is empty, the check uses the key inside the receipt only when its SHA-256
+  fingerprint equals an **active** pin. Otherwise the check refuses, as before. A replaced or compromised pin is
+  never used this way.
+- After a successful check the page says "Signed by a key you trust: <company> (added from <source>)", or that the
+  key is not in the trusted list, was replaced, or was marked compromised. A wrong key is still "Manifest not
+  verified".
+- Reports (text, Markdown, JSON with `keyTrust`, `timeProvenance` and `fileComparison`, and PDF) carry the same
+  trust line, source, time fields and Bytes differ wording.
+
 ## Pairing rule
 
 `compareFiles` in JavaScript and `compare` in Python follow the same deterministic steps:

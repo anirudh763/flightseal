@@ -25,7 +25,8 @@ import { createStoreZip } from './zip-store.mjs';
 import { deliverEarlyAccessRequest } from './early-access.mjs';
 import { createEncryptedProfileBackup, inspectEncryptedProfileBackup, commitBackupRestore, previewBackupRestore } from './profile-backup.mjs';
 import { createSyncProvider } from './sync-provider.mjs';
-import { listTrustedKeys, pinTrustedKey } from './trusted-keys.mjs';
+import { SOURCES, addTrustedCompany, fingerprintHex, formatFingerprint, listTrustedHistory, listTrustedKeys, markCompromised, pinTrustedKey, removeTrustedKey, trustForKey } from './trusted-keys.mjs';
+import { BYTES_DIFFER, TRUST_KIND, composeNote, landingLine, manifestReport, parseLandingLine, parseNote, parseSealedLine, timeFields, toIsoFromLocal, trustLine } from './recipient-trust.mjs';
 
 const syncProvider = createSyncProvider({ supabaseUrl: import.meta.env.VITE_SUPABASE_URL, supabaseAnonKey: import.meta.env.VITE_SUPABASE_ANON_KEY });
 
@@ -79,7 +80,7 @@ const humanStatus = (status) => ({
   'bad-header': ['Not a supported .fseal log', 'bad'], 'torn-tail': ['Torn final record', 'warn'],
   incomplete: ['Incomplete', 'warn'], tampered: ['Tampered', 'bad'], unverified: ['Unverified', 'warn'],
 }[status] || [String(status || 'Unknown'), 'warn']);
-const titleFor = (screen) => ({ landing: 'HashWing', signup: 'Create account', login: 'Log in', privacy: 'Privacy', terms: 'Terms of Use', security: 'Security & Offline Data', 'not-found': 'Page not found' }[screen] || NAV.find(([key]) => key === screen)?.[1] || 'Not found');
+const titleFor = (screen) => ({ landing: 'HashWing', signup: 'Create account', login: 'Log in', privacy: 'Privacy', terms: 'Terms of Use', security: 'Security & Offline Data', settings: 'Settings', 'not-found': 'Page not found' }[screen] || NAV.find(([key]) => key === screen)?.[1] || 'Not found');
 const loginHash = (returnTo = '') => `#/login${returnTo ? `?returnTo=${encodeURIComponent(safeReturnRoute(returnTo))}` : ''}`;
 function activeLocalSession() {
   try { return getLocalSession(); } catch { return null; }
@@ -147,6 +148,10 @@ function App() {
   const [checkText, setCheckText] = useState('');
   const [protectResult, setProtectResult] = useState(null);
   const [restored, setRestored] = useState(null);
+  const [protectLanding, setProtectLanding] = useState(''); // datetime-local value; goes in the handover as an unsigned line
+  const [protectTimes, setProtectTimes] = useState(null); // { for: result, sealedAt, landing } parsed from the pasted message
+  const [copyCompare, setCopyCompare] = useState(null); // { for: result, name, bytes, sha256, expected, matches }
+  const [keyTrust, setKeyTrust] = useState(null); // { for: result, status, entry? }
   const [copyStatus, setCopyStatus] = useState('');
   const [sealSourceOriginal, setSealSourceOriginal] = useState(null);
   const [csvDraft, setCsvDraft] = useState(null);
@@ -971,11 +976,14 @@ function App() {
       const back = await recordsToFile(log);
       if (op !== runRef.current) return;
       if (verified.overallVerdict !== 'intact' || !back?.matches) { setResult(null); throw new Error('The sealed copy did not check out, so it was discarded. Choose the file again and retry.'); }
+      const landing = toIsoFromLocal(protectLanding);
+      const lines = handoverText({ ...packed, receipts: sealed.receipts, publicKey: sealed.publicKey, sealedAt: new Date().toISOString(), checkUrl: `${location.origin}${location.pathname}#/app/protect` }).split('\n');
+      if (landing) lines.splice(2, 0, landingLine(landing)); // right after "Sealed:"; embedded mode has no signed slot for it
+      const fingerprint = await fingerprintHex(sealed.publicKey);
+      if (op !== runRef.current) return;
+      setProtectTimes(null);
       setProtectResult(verified);
-      setProtectSealed({
-        name: packed.name, bytes: packed.bytes, sha256: packed.sha256, log, savedKey: !!signingKey?.privateKeyPem,
-        handover: handoverText({ ...packed, receipts: sealed.receipts, publicKey: sealed.publicKey, sealedAt: new Date().toISOString(), checkUrl: `${location.origin}${location.pathname}#/app/protect` }),
-      });
+      setProtectSealed({ name: packed.name, bytes: packed.bytes, sha256: packed.sha256, log, savedKey: !!signingKey?.privateKeyPem, fingerprint, handover: lines.join('\n') });
       setOperationStatus('Sealed and checked on this device; nothing was uploaded. Now send the receipt message to someone else.');
     } catch (cause) {
       if (op !== runRef.current || cause?.name === 'AbortError') return;
@@ -992,6 +1000,7 @@ function App() {
     const verified = await runVerify(checkFile, receipts, publicKey, checkFile.name);
     if (!verified) return;
     const op = runRef.current;
+    setProtectTimes({ for: verified, sealedAt: parseSealedLine(checkText), landing: parseLandingLine(checkText) });
     setProtectResult(verified);
     if (verified.overallVerdict !== 'intact' || Number(verified.receiptCoverage.uncovered) !== 0) return;
     setBusy('Rebuilding the original file…');
@@ -1005,6 +1014,17 @@ function App() {
   const copyHandover = async () => {
     try { await navigator.clipboard.writeText(protectSealed.handover); setCopyStatus('Copied. Paste it into an email or message to the person who will keep it.'); }
     catch { setCopyStatus('This browser blocked copying. Select the text in the box and copy it, or download the receipt.'); }
+  };
+
+  // SHA-256 of a copy the recipient already has, against the digest inside the verified sealed file.
+  const compareCopy = async (file) => {
+    const target = result;
+    setCopyCompare(null);
+    if (!file || !restored?.sha256 || target !== protectResult) return;
+    try {
+      const { bytes, sha256 } = await hashFile(file);
+      setCopyCompare({ for: target, name: file.name, bytes, sha256, expected: restored.sha256, matches: sha256 === restored.sha256 });
+    } catch (cause) { setError(cause?.message || 'Could not read this copy. Choose it again.'); }
   };
 
   const clearVideo = () => {
@@ -1176,6 +1196,27 @@ function App() {
       : result.receiptChecks.some((receipt) => receipt.check !== 'ok')
         ? 'One or more receipt checks are unverified or failed.'
         : 'The supplied receipt signatures were checked by the native verifier.') : '';
+  // Key trust: only a signature that checked out can be "trusted" or "not in your list"; the lookup is local.
+  useEffect(() => {
+    if (!result || result.needsTrustedKey || !result.key || !result.receiptChecks.length) return undefined;
+    const checks = result.receiptChecks.map((receipt) => receipt.check);
+    if (checks.includes('bad-signature')) { setKeyTrust({ for: result, status: 'invalid-signature' }); return undefined; }
+    if (checks.includes('wrong-key')) { setKeyTrust({ for: result, status: 'wrong-key' }); return undefined; }
+    if (!checks.every((check) => check === 'ok')) return undefined;
+    let live = true;
+    trustForKey(result.key).then((trust) => { if (live) setKeyTrust({ ...trust, for: result }); }, () => {});
+    return () => { live = false; };
+  }, [result]);
+  const protectView = !!result && result === protectResult;
+  const resultTimes = protectView && protectTimes?.for === result ? timeFields({ landing: protectTimes.landing, landingSigned: false, sealedAt: protectTimes.sealedAt }) : null;
+  // A just-sealed result is the sender's own key, so the recipient's trust line is not shown for it.
+  const shownTrust = keyTrust?.for === result && !(protectView && !resultTimes) ? keyTrust : null;
+  const trustLines = shownTrust ? [`Key trust: ${trustLine(shownTrust, SOURCES)}`, ...(shownTrust.entry ? [`Key source: ${SOURCES[shownTrust.entry.source] || shownTrust.entry.source}`] : [])] : [];
+  const fileComparison = protectView ? [
+    ...(restored && restored !== 'none' ? [{ subject: 'Recovered file', name: restored.name, bytes: restored.bytes, sha256: restored.actualSha256, expected: restored.sha256, matches: restored.matches }] : []),
+    ...(copyCompare?.for === result ? [{ subject: 'Your copy', ...copyCompare }] : []),
+  ] : [];
+  const comparisonLine = (item) => `${item.subject} ${item.name}: ${item.matches ? 'Matches' : `${BYTES_DIFFER.title}. ${BYTES_DIFFER.text}`} (SHA-256 ${item.sha256}; sealed ${item.expected})`;
   const selectedTelemetryPoint = selectedTelemetryIndex == null ? null : telemetry[selectedTelemetryIndex];
   const selectedTimestamp = selectedTelemetryPoint?.timestampUs ?? recordDetail?.ts ?? null;
   const firstTimestamp = telemetry[0]?.timestampUs ?? firstRecord?.ts ?? null;
@@ -1226,6 +1267,9 @@ function App() {
     '', 'Custody events: HashWing records the selected input metadata and local processing result only. It does not establish independent acquisition or custody.',
     `Signature basis: ${result.receiptChecks.length ? (result.needsTrustedKey ? 'receipt signatures were not checked against a trusted public key' : 'receipt signatures were checked against the supplied public key; external trust in that key is user-established') : 'no receipt signatures supplied'}`,
     'User-entered identity: none recorded. Key possession does not establish a pilot or operator identity.',
+    ...trustLines,
+    ...(resultTimes ? ['', 'Times:', ...resultTimes.map((field) => `  ${field.label}: ${field.value} (${field.basis})`)] : []),
+    ...(fileComparison.length ? ['', 'File comparison:', ...fileComparison.map((item) => `  ${comparisonLine(item)}`)] : []),
     `Path evidence: ${selectedTelemetryPoint ? `record ${selectedTelemetryPoint.record}, timestamp ${selectedTelemetryPoint.timestampUs} µs${selectedTelemetryPoint.sourceOffset == null ? '' : `, source byte ${selectedTelemetryPoint.sourceOffset}`}; ${Number.isFinite(selectedTelemetryPoint.latitudeDeg) && Number.isFinite(selectedTelemetryPoint.longitudeDeg) ? 'coordinates are source values, not independently authenticated' : 'location unavailable at this record; no GPS point was fabricated'}` : telemetry.length ? 'telemetry records are available; no point was selected and location may be unavailable' : 'location unavailable; no GPS point was fabricated'}`,
     'Time basis: timestamps are source values; no trusted time source or acquisition-time protection is established.',
     ...(result.indexed.problem ? ['', `First failure: ${problemLabel(result.indexed.problem.token)} (${result.indexed.problem.token}) at record ${result.indexed.problem.record}`, `Byte offset: ${result.indexed.problem.offset}`, ...(result.indexed.problem.expected != null ? [`Expected: ${String(result.indexed.problem.expected)}`] : []), ...(result.indexed.problem.actual != null ? [`Actual: ${String(result.indexed.problem.actual)}`] : []), result.indexed.problem.detail || ''] : []),
@@ -1238,6 +1282,9 @@ function App() {
     receiptChecks: result.receiptChecks.map((r) => ({ ...r, count: String(r.count) })),
     source: result.source || null,
     firstFailure: result.indexed.problem ? { type: problemLabel(result.indexed.problem.token), token: result.indexed.problem.token, record: String(result.indexed.problem.record), offset: String(result.indexed.problem.offset), expected: result.indexed.problem.expected ?? null, actual: result.indexed.problem.actual ?? null } : null,
+    keyTrust: shownTrust ? { status: shownTrust.status, line: trustLine(shownTrust, SOURCES), company: shownTrust.entry?.name ?? null, source: shownTrust.entry?.source ?? null, sourceLabel: shownTrust.entry ? SOURCES[shownTrust.entry.source] || shownTrust.entry.source : null, fingerprint: shownTrust.fingerprint || null, addedAt: shownTrust.entry?.addedAt || null, replacedAt: shownTrust.entry?.replacedAt || null, compromisedAt: shownTrust.entry?.compromisedAt || null } : null,
+    timeProvenance: resultTimes ? { fields: resultTimes } : null,
+    fileComparison: fileComparison.length ? { items: fileComparison.map(({ for: _for, ...item }) => ({ ...item, status: item.matches ? 'Matches' : BYTES_DIFFER.title })), bytesDiffer: fileComparison.some((item) => !item.matches) ? BYTES_DIFFER : null } : null,
     report: reportText,
   }, null, 2) : '';
   const reportMarkdown = result ? `# HashWing integrity evidence report\n\n${reportText.split('\n').filter(Boolean).map((line) => line.startsWith('  ') ? `  - ${line.trim()}` : line.endsWith(':') ? `\n## ${line.slice(0, -1)}\n` : line).join('\n')}\n\n## Reverification\n\nUse the exported .fseal log, receipt file, and public key with FlightSeal's independent verifier. Verify the public key with its holder through a separate channel.\n\nThis report does not establish legal admissibility, sensor truth, capture-time integrity, verified personhood, trusted time, or independent custody.\n` : '';
@@ -1271,6 +1318,9 @@ function App() {
           'Custody events: local selection and processing evidence only; no independent custody is established.',
           `Signature/trust basis: ${result.receiptChecks.length ? result.needsTrustedKey ? 'unchecked against trusted public key' : 'checked against user-supplied public key; external trust is user-established' : 'no signatures supplied'}.`,
           'User-entered operator identity: none recorded. Key possession does not establish pilot identity.',
+          ...trustLines,
+          ...(resultTimes ? ['## Times', ...resultTimes.map((field) => `${field.label}: ${field.value} (${field.basis})`)] : []),
+          ...(fileComparison.length ? ['## File comparison', ...fileComparison.map(comparisonLine)] : []),
           `Path evidence: ${selectedTelemetryPoint ? `record ${selectedTelemetryPoint.record} at ${selectedTelemetryPoint.timestampUs} µs${selectedTelemetryPoint.sourceOffset == null ? '' : `, source byte ${selectedTelemetryPoint.sourceOffset}`}; ${Number.isFinite(selectedTelemetryPoint.latitudeDeg) && Number.isFinite(selectedTelemetryPoint.longitudeDeg) ? 'source coordinates are not independently authenticated' : 'location unavailable at this record; no GPS point was fabricated'}` : telemetry.length ? 'telemetry records available; no point selected and location may be unavailable' : 'location unavailable; no GPS point was fabricated'}.`,
           'Timestamps are source values; no trusted time or capture-time protection is established.',
           ...(issue ? ['## First failure', `Type: ${problemLabel(issue.token)} (${issue.token})`, `Record: ${String(issue.record)}`, `Byte offset: ${String(issue.offset)}`, ...(issue.expected != null ? [`Expected: ${String(issue.expected)}`] : []), ...(issue.actual != null ? [`Actual: ${String(issue.actual)}`] : []), issue.detail || ''] : ['First failure: none reported.']),
@@ -1390,7 +1440,7 @@ function App() {
       <div className="command-actions">
         <nav hidden={!!canonicalPage || activeSession?.kind === 'account'} className="workspace-persistent-actions" aria-label="Account and workspace"><a href="#/login">Log in</a><a href="#/signup">Create account</a></nav>
 
-        {!canonicalPage && profileControls}
+        {!canonicalPage && screen !== 'settings' && profileControls}
 
       </div>
     </header>
@@ -1421,10 +1471,10 @@ function App() {
       </section>}
       {canonicalPage === 'workbench' && <nav className="workbench-tabs" aria-label="Log workflow"><a href={workspaceHref('sandbox',{sample:currentSample,record:selectedRecord})} aria-current={screen==='sandbox'?'page':undefined} onClick={event=>{event.preventDefault();navigate('sandbox');}}>Seal and inspect</a><a href={workspaceHref('verify',{sample:currentSample,record:selectedRecord})} aria-current={screen==='verify'?'page':undefined} onClick={event=>{event.preventDefault();navigate('verify');}}>Verify receipts</a><a href="#/app/records">Records</a><a href="#/app/receipts">Receipts</a><a href="#/app/video">Video alignment</a></nav>}
       {screen === 'reports' && <section aria-label="Evidence and saved reports"><server-workspace view="reports" />
-        <section className="panel"><div className="panel-body"><h2>Current evidence</h2>{result ? <><button className="button primary" onClick={downloadPdf}>Download PDF</button><ResultPanel result={result} resultTitle={resultTitle} reportText={reportText} onDownloadText={()=>download('verification-report.txt',reportText)} onDownloadMarkdown={()=>download('verification-report.md',reportMarkdown)} onDownloadJson={()=>download('verification-report.json',reportJson,'application/json')} onNavigate={navigate} onShare={()=>setShareDialogOpen(true)} /></> : <p>No checked evidence in this tab. Open Workbench to verify a log, or select a saved run above.</p>}</div></section>
+        <section className="panel"><div className="panel-body"><h2>Current evidence</h2>{result ? <><button className="button primary" onClick={downloadPdf}>Download PDF</button><ResultPanel result={result} resultTitle={resultTitle} reportText={reportText} onDownloadText={()=>download('verification-report.txt',reportText)} onDownloadMarkdown={()=>download('verification-report.md',reportMarkdown)} onDownloadJson={()=>download('verification-report.json',reportJson,'application/json')} onNavigate={navigate} onShare={()=>setShareDialogOpen(true)} trust={shownTrust} /></> : <p>No checked evidence in this tab. Open Workbench to verify a log, or select a saved run above.</p>}</div></section>
         <details className="report-details"><summary>Benchmarks and recovery evidence</summary><BenchmarkPage /></details>
       </section>}
-      {screen === 'settings' && <section aria-label="Workspace settings"><server-workspace view="settings" /><details className="report-details"><summary>Browser profiles and encrypted backups</summary>{profileControls}</details><SystemPage /></section>}
+      {screen === 'settings' && <section aria-label="Workspace settings"><server-workspace view="settings" /><details className="report-details"><summary>Browser profiles and encrypted backups</summary>{profileControls}</details><details className="report-details trusted-companies-details"><summary>Trusted companies</summary><TrustedCompanies /></details><SystemPage /></section>}
       {canonicalPage === 'workbench' && <server-workspace view="workbench" />}
       {screen === 'system' && <SystemPage />}
       {screen === 'benchmarks' && <BenchmarkPage />}
@@ -1442,10 +1492,16 @@ function App() {
             <label className="field-label" htmlFor="protect-file">Flight log file <span>(up to {RAW_MAX_BYTES / 1024 / 1024} MiB)</span></label>
             <input id="protect-file" type="file" onChange={(e) => { invalidateCheck(); setProtectFile(e.target.files?.[0] || null); setProtectSealed(null); setProtectResult(null); setRestored(null); setCopyStatus(''); setError(''); }} />
             <p className="field-hint">{signingKey?.privateKeyPem ? 'The signing key loaded under Settings (kept in this tab only) will sign the receipt, so every flight you seal with it carries the same public key.' : 'No signing key loaded: a key is made for this file only and discarded. Load or generate a key under Settings to use one identity across flights.'}</p>
+            <details className="report-details protect-options"><summary>More options <ChevronDown size={17} aria-hidden="true" /></summary><div className="manifest-options-body">
+              <label className="field-label" htmlFor="protect-landing">Reported landing time <span>(optional, this computer's time zone)</span></label>
+              <input id="protect-landing" type="datetime-local" step="1" value={protectLanding} disabled={!!busy} aria-describedby="protect-landing-hint" onChange={(e) => setProtectLanding(e.target.value)} />
+              <p id="protect-landing-hint" className="field-hint">Added to the receipt message as an unsigned line. HashWing doesn't check it.</p>
+            </div></details>
             <button className="button primary" type="button" disabled={!protectFile || !!busy} onClick={runProtectSeal}>Seal this log</button>
             {protectSealed && <div className="handover">
               <h3>Send this receipt to someone else now</h3>
               <p>Protection depends on it. A copy kept only by you could be rewritten together with the file.</p>
+              <SenderFingerprint fingerprint={protectSealed.fingerprint} />
               <label className="field-label" htmlFor="handover-text">Receipt message</label>
               <textarea id="handover-text" className="mono-input" readOnly rows={9} value={protectSealed.handover} />
               <div className="actions-row">
@@ -1469,15 +1525,21 @@ function App() {
             <p id="check-text-hint" className="field-hint">Use the copy you received when the flight was sealed, not one that arrives with the file now.</p>
             <button className="button primary" type="button" disabled={!checkFile || !checkText.trim() || !!busy} onClick={runProtectCheck}>Check this log</button>
             {result && result === protectResult && checkFile && result.file === checkFile && <p className="field-hint" role="note">This result compares the file with the receipt message you pasted. It means something only if you received that message directly from the pilot or operator when the flight was sealed.</p>}
+            {resultTimes && <TimeFields fields={resultTimes} />}
             {restored && restored !== 'none' && result === protectResult && <div className="restored">
-              <h3>{restored.matches ? 'Original file recovered' : 'Recovered file does not match'}</h3>
+              <h3>{restored.matches ? 'Original file recovered' : BYTES_DIFFER.title}</h3>
               <dl className="detail-grid"><dt>Name</dt><dd className="wrap">{restored.name}</dd><dt>Size</dt><dd>{fmtBytes(restored.bytes)}</dd><dt>SHA-256</dt><dd><code>{restored.actualSha256}</code></dd></dl>
-              {restored.matches ? <button className="button secondary" type="button" onClick={() => download(restored.name, restored.data, 'application/octet-stream')}><Download aria-hidden="true" size={16} />Download original file</button> : <p>Do not rely on this file.</p>}
+              {restored.matches ? <button className="button secondary" type="button" onClick={() => download(restored.name, restored.data, 'application/octet-stream')}><Download aria-hidden="true" size={16} />Download original file</button> : <p>{BYTES_DIFFER.text}</p>}
+              <details className="report-details protect-options"><summary>More options <ChevronDown size={17} aria-hidden="true" /></summary><div className="manifest-options-body">
+                <label className="field-label" htmlFor="compare-copy">Compare with a copy you have</label>
+                <input id="compare-copy" type="file" onChange={(e) => compareCopy(e.target.files?.[0] || null)} />
+                {copyCompare?.for === result && <div className="compare-result" role="status"><span className={`status-label ${copyCompare.matches ? 'ok' : 'warn'}`}>{copyCompare.matches ? 'Matches' : BYTES_DIFFER.title}</span> <span className="wrap">{copyCompare.name} · {fmtBytes(copyCompare.bytes)}</span><code className="wrap">{copyCompare.sha256}</code>{!copyCompare.matches && <p>{BYTES_DIFFER.text}</p>}</div>}
+              </div></details>
             </div>}
             {restored === 'none' && result === protectResult && <p className="field-hint">This log holds decoded flight records rather than a whole sealed file, so there is no original file to download.</p>}
           </div></section>
         </div>}
-        {protectMode === 'embedded' && result && result === protectResult && <ResultPanel result={result} resultTitle={resultTitle} reportText={reportText} onDownloadText={() => download('hashwing-verification-report.txt', reportText)} onDownloadMarkdown={() => download('hashwing-evidence-report.md', reportMarkdown, 'text/markdown;charset=utf-8')} onDownloadJson={() => download('hashwing-verification-report.json', reportJson, 'application/json')} onNavigate={navigate} onShare={() => setShareDialogOpen(true)} />}
+        {protectMode === 'embedded' && result && result === protectResult && <ResultPanel result={result} resultTitle={resultTitle} reportText={reportText} onDownloadText={() => download('hashwing-verification-report.txt', reportText)} onDownloadMarkdown={() => download('hashwing-evidence-report.md', reportMarkdown, 'text/markdown;charset=utf-8')} onDownloadJson={() => download('hashwing-verification-report.json', reportJson, 'application/json')} onNavigate={navigate} onShare={() => setShareDialogOpen(true)} trust={shownTrust} />}
       </section>}
       {/* Always mounted (hidden elsewhere), so changing mode or route never drops a running hash or an unsaved sealed list. */}
       <section className="screen protect-screen" aria-label="Large files" hidden={screen !== 'protect' || protectMode !== 'manifest'}>
@@ -1491,7 +1553,7 @@ function App() {
         {demoLabel.includes('PX4') && <p className="sample-note">PX4 samples contain selected decoded records, not every byte of the original ULog. The bundled key authenticates this fixture only.{demoLabel.includes('full') && <> <a href="/flightseal/samples/px4-full-provenance.json">Source and sealing provenance</a>.</>}</p>}
         {result?.source && demoLabel.includes('Synthetic telemetry') && <p className="sample-note">Synthetic telemetry sample; not flight evidence.</p>}
         <QuickStart completed={[!!result, !!result, false]} dismissed={quickStartDismissed} exportReady={!!result} onDismiss={() => { setQuickStartDismissed(true); try { localStorage.setItem(quickStartStorageKey, 'dismissed'); } catch { setOperationStatus('Quick start hidden for this tab only; browser storage is unavailable.'); } }} onRestart={() => { setQuickStartDismissed(false); try { localStorage.removeItem(quickStartStorageKey); } catch {} }} onOpenSample={() => loadDemo(false)} onInspect={() => navigate('records')} onExport={downloadEvidenceBundle} />
-        {result && <ResultPanel result={result} resultTitle={resultTitle} reportText={reportText} onDownloadText={() => download('hashwing-verification-report.txt', reportText)} onDownloadMarkdown={() => download('hashwing-evidence-report.md', reportMarkdown, 'text/markdown;charset=utf-8')} onDownloadJson={() => download('hashwing-verification-report.json', reportJson, 'application/json')} onNavigate={navigate} onShare={() => setShareDialogOpen(true)} />}
+        {result && <ResultPanel result={result} resultTitle={resultTitle} reportText={reportText} onDownloadText={() => download('hashwing-verification-report.txt', reportText)} onDownloadMarkdown={() => download('hashwing-evidence-report.md', reportMarkdown, 'text/markdown;charset=utf-8')} onDownloadJson={() => download('hashwing-verification-report.json', reportJson, 'application/json')} onNavigate={navigate} onShare={() => setShareDialogOpen(true)} trust={shownTrust} />}
         {result?.source && <FlightTelemetry source={result.source} points={telemetry} verificationProblem={result.indexed.problem} selectedPointIndex={selectedTelemetryIndex} onMovePoint={(pointIndex) => { const point = telemetry[pointIndex]; if (!point) return; telemetrySelectionRef.current++; setSelectedTelemetryIndex(pointIndex); setSelectedRecord(Number(point.record)); setPage(Math.floor(Number(point.record) / PAGE_SIZE)); }} onSelectPoint={(pointIndex) => { const point = telemetry[pointIndex]; if (!point) return; telemetrySelectionRef.current++; setSelectedTelemetryIndex(pointIndex); setSelectedRecord(Number(point.record)); setPage(Math.floor(Number(point.record) / PAGE_SIZE)); navigate('records'); }} />}
         <div className="section-grid">
           <section className="panel"><div className="panel-head"><FlaskConical aria-hidden="true" size={18} /><h2>Mutations</h2></div><div className="panel-body"><div className="mutation-list"><button className="mutation" type="button" disabled={!result || !!busy} onClick={(event) => doMutation('flip', event.currentTarget)}><span>Flip one payload byte</span></button><button className="mutation" type="button" disabled={!result || !!busy} onClick={(event) => doMutation('delete', event.currentTarget)}><span>Remove one middle record</span></button><button className="mutation" type="button" disabled={!result || !!busy} onClick={(event) => doMutation('truncate', event.currentTarget)}><span>Trim seven tail bytes</span></button></div></div></section>
@@ -1510,7 +1572,7 @@ function App() {
           {currentSample === 'byte-flip' && result?.native.status === 'bad-link' && <p className="sample-note">The copy changed at record 0 (the first record). Its stored hash no longer matches the payload. The original sample, receipts and public key were retained unchanged. Restore Original runs a new verification.</p>}
           <details className="report-details"><summary>Technical Diagnostics <ChevronDown size={17} aria-hidden="true" /></summary><div className="prose"><p>The copy flips the first payload byte of zero-based record 0 and recomputes CRC-32, while retaining the stored hash link and original Ed25519 receipts. The C++/OpenSSL WebAssembly verifier detects the hash mismatch. No receipt is re-signed.</p><p>A passing result establishes file integrity against the supplied fixture key, not sensor truth, operator identity or independent custody.</p></div></details>
         </div></section>
-        <div className="panel verify-panel"><div className="panel-head"><ShieldCheck aria-hidden="true" size={18} /><h2 id="verify-title">Verification inputs</h2></div><div className="panel-body input-grid"><div><label className="field-label" htmlFor="log-input">HashWing / FlightSeal .fseal log <span>(up to {fmtBytes(MAX_UI_BYTES)})</span></label><input id="log-input" type="file" accept=".fseal,application/octet-stream" onChange={(e) => chooseLog(e.target.files?.[0] || null)} /></div><div><label className="field-label" htmlFor="receipt-input">Witness receipts <span>(optional)</span></label><input id="receipt-input" ref={receiptInputRef} type="file" accept=".receipts,text/plain" aria-invalid={receiptInputError ? 'true' : undefined} aria-describedby={receiptInputError ? 'receipt-input-error' : undefined} onChange={(e) => chooseReceipts(e.target.files?.[0] || null)} />{receiptLoading && <p className="field-hint" role="status">Reading receipts…</p>}{receiptInputError && <p id="receipt-input-error" className="field-hint receipt-error">{receiptInputError}</p>}{receiptSelected && <button className="button secondary remove-receipts" type="button" onClick={removeReceipts}>Remove receipts</button>}</div><div className="field-wide"><label className="field-label" htmlFor="trusted-key">Public key for receipt check <span>(64 lowercase hexadecimal digits)</span></label><input id="trusted-key" className="mono-input" value={keyText} onChange={(e) => { invalidateCheck(); setKeyText(e.target.value); }} autoComplete="off" spellCheck="false" /><TrustedKeyPinControls value={keyText} onUse={(value) => { invalidateCheck(); setKeyText(value); }} /></div><div className="field-wide actions-row"><button className="button primary" type="button" disabled={!logFile || logFile.size > MAX_UI_BYTES || receiptLoading || !!receiptInputError || !!busy} onClick={verifyPicked}>Run check</button><button className="button secondary" type="button" disabled={!!busy} onClick={() => loadDemo(false)}>Load included 800-record demo</button></div></div></div>{result && <ResultPanel result={result} resultTitle={resultTitle} reportText={reportText} onDownloadText={() => download('hashwing-verification-report.txt', reportText)} onDownloadMarkdown={() => download('hashwing-evidence-report.md', reportMarkdown, 'text/markdown;charset=utf-8')} onDownloadJson={() => download('hashwing-verification-report.json', reportJson, 'application/json')} onNavigate={navigate} onShare={() => setShareDialogOpen(true)} />}</section>}
+        <div className="panel verify-panel"><div className="panel-head"><ShieldCheck aria-hidden="true" size={18} /><h2 id="verify-title">Verification inputs</h2></div><div className="panel-body input-grid"><div><label className="field-label" htmlFor="log-input">HashWing / FlightSeal .fseal log <span>(up to {fmtBytes(MAX_UI_BYTES)})</span></label><input id="log-input" type="file" accept=".fseal,application/octet-stream" onChange={(e) => chooseLog(e.target.files?.[0] || null)} /></div><div><label className="field-label" htmlFor="receipt-input">Witness receipts <span>(optional)</span></label><input id="receipt-input" ref={receiptInputRef} type="file" accept=".receipts,text/plain" aria-invalid={receiptInputError ? 'true' : undefined} aria-describedby={receiptInputError ? 'receipt-input-error' : undefined} onChange={(e) => chooseReceipts(e.target.files?.[0] || null)} />{receiptLoading && <p className="field-hint" role="status">Reading receipts…</p>}{receiptInputError && <p id="receipt-input-error" className="field-hint receipt-error">{receiptInputError}</p>}{receiptSelected && <button className="button secondary remove-receipts" type="button" onClick={removeReceipts}>Remove receipts</button>}</div><div className="field-wide"><label className="field-label" htmlFor="trusted-key">Public key for receipt check <span>(64 lowercase hexadecimal digits)</span></label><input id="trusted-key" className="mono-input" value={keyText} onChange={(e) => { invalidateCheck(); setKeyText(e.target.value); }} autoComplete="off" spellCheck="false" /><TrustedKeyPinControls value={keyText} onUse={(value) => { invalidateCheck(); setKeyText(value); }} /></div><div className="field-wide actions-row"><button className="button primary" type="button" disabled={!logFile || logFile.size > MAX_UI_BYTES || receiptLoading || !!receiptInputError || !!busy} onClick={verifyPicked}>Run check</button><button className="button secondary" type="button" disabled={!!busy} onClick={() => loadDemo(false)}>Load included 800-record demo</button></div></div></div>{result && <ResultPanel result={result} resultTitle={resultTitle} reportText={reportText} onDownloadText={() => download('hashwing-verification-report.txt', reportText)} onDownloadMarkdown={() => download('hashwing-evidence-report.md', reportMarkdown, 'text/markdown;charset=utf-8')} onDownloadJson={() => download('hashwing-verification-report.json', reportJson, 'application/json')} onNavigate={navigate} onShare={() => setShareDialogOpen(true)} trust={shownTrust} />}</section>}
 
       {screen === 'records' && <section className="screen">{!result ? <EmptyState onNavigate={navigate} /> : <div className="records-layout"><section className="panel records-panel"><div className="panel-head"><List aria-hidden="true" size={18} /><h2>Records <span className="subcount">{fmtBig(result.native.records)}</span></h2></div><ol className="record-list">{pageRows.map((row, localIndex) => { const index = Number(row.index ?? rowStart + localIndex); const broken = !!result.indexed.problem && index === Number(result.indexed.problem.record); return <li key={index} className={`${broken ? 'record-broken' : 'record-pass'} ${index === selectedRecord ? 'selected' : ''}`}><button type="button" aria-current={index === selectedRecord ? 'true' : undefined} onClick={() => setSelectedRecord(index)}><span className="record-index">{fmtBig(index)}</span><span className="record-status">{broken ? `${problemLabel(result.indexed.problem.token)} (${result.indexed.problem.token})` : 'Checked'}</span><span className="record-bytes">{row.len == null ? 'problem row' : fmtBytes(row.len)}</span></button></li>; })}</ol><div className="pagination"><button className="button secondary" disabled={page === 0} onClick={() => setPage(0)}>First</button><button className="button secondary" disabled={page === 0} onClick={() => setPage((v) => Math.max(0, v - 1))}>Previous</button><span>Page {page + 1} of {pageCount}</span><button className="button secondary" disabled={page >= pageCount - 1} onClick={() => setPage((v) => Math.min(pageCount - 1, v + 1))}>Next</button><button className="button secondary" disabled={page >= pageCount - 1} onClick={() => setPage(pageCount - 1)}>Last</button></div></section><section className="panel detail-panel" aria-labelledby="record-detail-title"><div className="panel-head"><FileCheck2 aria-hidden="true" size={18} /><h2 id="record-detail-title">Record {fmtBig(selectedRecord)}</h2></div><div className="panel-body">{recordError ? <div role="alert" className="alert error-alert"><p>{recordError}</p><button className="button secondary" onClick={() => loadRecord(selectedRecord)}>Retry</button></div> : !recordDetail ? <p className="muted" role="status">Loading record…</p> : <><div className="detail-actions"><button className="button secondary" type="button" onClick={() => navigate('video')}>Video</button></div><RecordDetail record={recordDetail} /></>}</div></section></div>}</section>}
 
@@ -1742,22 +1804,110 @@ function AuthPage({ mode, returnTo, guestCanImport, currentSampleName, outputNee
   </div>;
 }
 
+const PICKABLE_SOURCES = Object.entries(SOURCES).filter(([key]) => key !== 'not-recorded');
+const readActivePins = () => { try { return listTrustedKeys().filter((pin) => pin.publicKey); } catch { return []; } };
+function TrustLine({ trust }) {
+  return <p className={`trust-line ${TRUST_KIND[trust.status] || 'warn'}`}><span className="status-shape" aria-hidden="true" />{trustLine(trust, SOURCES)}</p>;
+}
+function TimeFields({ fields }) {
+  return <dl className="time-fields" aria-label="Times">{fields.map((field) => <div key={field.label}><dt>{field.label}</dt><dd><span className="mono-values">{field.value}</span><small>{field.basis}</small></dd></div>)}</dl>;
+}
+function SenderFingerprint({ fingerprint }) {
+  if (!fingerprint) return null;
+  return <dl className="detail-grid"><dt>Your key fingerprint</dt><dd><code className="fingerprint">{formatFingerprint(fingerprint)}</code><small className="field-hint">Give it to recipients through a channel they already know, so they can add you as a trusted company.</small></dd></dl>;
+}
+function ConfirmBox({ text, confirmLabel, cancelLabel, onConfirm, onCancel }) {
+  return <div className="confirm-box" role="alert"><p>{text}</p><div className="actions-row"><button className="button primary" type="button" onClick={onConfirm}>{confirmLabel}</button><button className="button secondary" type="button" onClick={onCancel}>{cancelLabel}</button></div></div>;
+}
+
 function TrustedKeyPinControls({ value, onUse, idPrefix = 'trusted-key' }) {
   const [name, setName] = useState('');
-  const [pins, setPins] = useState(() => { try { return listTrustedKeys(); } catch { return []; } });
+  const [source, setSource] = useState('');
+  const [pins, setPins] = useState(readActivePins);
   const [message, setMessage] = useState('');
-  const save = async () => {
+  const [confirm, setConfirm] = useState('');
+  const save = async (confirmRotation = false) => {
+    setConfirm('');
     try {
-      let pinned;
-      try { pinned = await pinTrustedKey(name, value); }
-      catch (cause) {
-        if (!/Key changed for/.test(cause?.message || '') || !window.confirm(`${cause.message}\nOnly continue after checking the new fingerprint with the key holder through another channel.`)) throw cause;
-        pinned = await pinTrustedKey(name, value, { confirmRotation: true });
-      }
-      setPins(listTrustedKeys()); setMessage(`Saved local pin ${pinned.name} · SHA-256 ${pinned.fingerprint}. This device decision does not verify pilot identity.`);
-    } catch (cause) { setMessage(cause?.message || 'Could not save this public-key pin.'); }
+      const pinned = await pinTrustedKey(name, value, { source, confirmRotation });
+      setPins(readActivePins()); setMessage(`Saved local pin ${pinned.name} · SHA-256 ${formatFingerprint(pinned.fingerprint)}. This device decision does not verify pilot identity.`);
+    } catch (cause) {
+      if (cause?.code === 'replace-needs-confirm') { setMessage(''); setConfirm(`${cause.message} Only continue after checking the new fingerprint with the key holder through another channel.`); }
+      else setMessage(cause?.message || 'Could not save this public-key pin.');
+    }
   };
-  return <div className="trusted-key-controls"><label className="field-label" htmlFor={`${idPrefix}-profile`}>Named local public-key pin</label><select id={`${idPrefix}-profile`} defaultValue="" onChange={(event) => { const pin = pins.find((item) => item.name === event.target.value); if (pin) onUse(pin.publicKey); }}><option value="">Choose a saved key profile</option>{pins.map((pin) => <option key={pin.name} value={pin.name}>{pin.name} · {pin.fingerprint.slice(0, 16)}</option>)}</select><label className="field-label" htmlFor={`${idPrefix}-name`}>Save or rotate key profile</label><input id={`${idPrefix}-name`} value={name} maxLength={80} onChange={(event) => setName(event.target.value)} placeholder="For example, Flight recorder 1" /><button type="button" disabled={!value || !name.trim()} onClick={save}>Pin public key on this device</button><p>Pinning is your local trust decision. Confirm every key rotation independently; a fingerprint is not a verified pilot identity.</p>{message && <p role="status">{message}</p>}</div>;
+  return <div className="trusted-key-controls">
+    <label className="field-label" htmlFor={`${idPrefix}-profile`}>Named local public-key pin</label>
+    <select id={`${idPrefix}-profile`} defaultValue="" onFocus={() => setPins(readActivePins())} onChange={(event) => { const pin = pins.find((item) => item.name === event.target.value); if (pin) onUse(pin.publicKey); }}><option value="">Choose a saved key profile</option>{pins.map((pin) => <option key={pin.name} value={pin.name}>{pin.name} · {formatFingerprint(pin.fingerprint).slice(0, 19)}</option>)}</select>
+    <label className="field-label" htmlFor={`${idPrefix}-name`}>Save or rotate key profile</label>
+    <input id={`${idPrefix}-name`} value={name} maxLength={80} onChange={(event) => setName(event.target.value)} placeholder="For example, Flight recorder 1" />
+    <label className="field-label" htmlFor={`${idPrefix}-source`}>Where did you get this key?</label>
+    <select id={`${idPrefix}-source`} required value={source} onChange={(event) => setSource(event.target.value)}><option value="">Choose a source</option>{PICKABLE_SOURCES.map(([key, label]) => <option key={key} value={key}>{label}</option>)}</select>
+    <button className="button secondary" type="button" disabled={!value || !name.trim() || !source} onClick={() => save()}>Pin public key on this device</button>
+    {confirm && <ConfirmBox text={confirm} confirmLabel="Replace key" cancelLabel="Keep current key" onConfirm={() => save(true)} onCancel={() => setConfirm('')} />}
+    <p>Pinning is your local trust decision. Confirm every key rotation independently; a fingerprint is not a verified pilot identity.</p>
+    {message && <p role="status">{message}</p>}
+  </div>;
+}
+
+const historyStatus = (entry) => entry.status === 'replaced' ? `Replaced on ${entry.replacedAt.slice(0, 10)}` : entry.status === 'compromised' ? `Marked compromised on ${entry.compromisedAt.slice(0, 10)}` : 'Active';
+function TrustedCompanies() {
+  const read = () => { try { return listTrustedHistory(); } catch { return []; } };
+  const [entries, setEntries] = useState(read);
+  const [name, setName] = useState('');
+  const [fingerprint, setFingerprint] = useState('');
+  const [source, setSource] = useState('');
+  const [pending, setPending] = useState(null); // { kind: replace | compromise | remove, text, entry? }
+  const [message, setMessage] = useState('');
+  const [error, setError] = useState('');
+  const add = (confirmReplace = false) => {
+    setPending(null); setMessage(''); setError('');
+    try {
+      const entry = addTrustedCompany(name, fingerprint, { source, confirmReplace });
+      setEntries(read()); setName(''); setFingerprint(''); setSource('');
+      setMessage(`Added ${entry.name}.`);
+    } catch (cause) {
+      if (cause?.code === 'replace-needs-confirm') setPending({ kind: 'replace', text: cause.message });
+      else setError(cause?.message || 'Could not add this company.');
+    }
+  };
+  const act = () => {
+    const { kind, entry } = pending;
+    setPending(null); setMessage(''); setError('');
+    try {
+      if (kind === 'compromise') { markCompromised(entry.name, entry.fingerprint); setMessage(`${entry.name}'s key is marked as compromised.`); }
+      else { removeTrustedKey(entry.name); setMessage(`Removed ${entry.name} and its key history.`); }
+      setEntries(read());
+    } catch (cause) { setError(cause?.message || 'Could not change this company.'); }
+  };
+  const active = entries.filter((entry) => entry.status === 'active');
+  return <section className="trusted-companies" aria-label="Trusted companies">
+    <form className="trusted-company-form" noValidate onSubmit={(event) => { event.preventDefault(); add(); }}>
+      <label className="field-label" htmlFor="tc-name">Company name</label>
+      <input id="tc-name" type="text" value={name} maxLength={80} autoComplete="organization" onChange={(event) => setName(event.target.value)} />
+      <label className="field-label" htmlFor="tc-fingerprint">Key fingerprint <span>(SHA-256, 64 hexadecimal digits)</span></label>
+      <input id="tc-fingerprint" type="text" className="mono-input" value={fingerprint} autoComplete="off" spellCheck="false" onChange={(event) => setFingerprint(event.target.value)} />
+      <fieldset className="source-choice"><legend>Where did you get this fingerprint?</legend>
+        {PICKABLE_SOURCES.map(([key, label]) => <label key={key} className="check-row"><input type="radio" name="tc-source" value={key} required checked={source === key} onChange={() => setSource(key)} />{label}</label>)}
+      </fieldset>
+      <button className="button primary" type="submit">Add company</button>
+    </form>
+    {pending?.kind === 'replace' && <ConfirmBox text={pending.text} confirmLabel="Replace key" cancelLabel="Keep current key" onConfirm={() => add(true)} onCancel={() => setPending(null)} />}
+    {pending && pending.kind !== 'replace' && <ConfirmBox text={pending.text} confirmLabel={pending.kind === 'compromise' ? 'Mark as compromised' : 'Remove company'} cancelLabel="Cancel" onConfirm={act} onCancel={() => setPending(null)} />}
+    {error && <p className="field-hint receipt-error" role="alert">{error}</p>}
+    {message && <p className="field-hint" role="status">{message}</p>}
+    {active.length ? <ul className="company-list" aria-label="Active trusted companies">{active.map((entry) => <li key={`${entry.name}-${entry.fingerprint}`}>
+      <strong className="wrap">{entry.name}</strong>
+      <code className="fingerprint">{formatFingerprint(entry.fingerprint)}</code>
+      <span className="field-hint">Added from {SOURCES[entry.source] || entry.source}{entry.addedAt ? ` on ${entry.addedAt.slice(0, 10)}` : ''}</span>
+      <div className="actions-row">
+        <button className="button secondary" type="button" aria-label={`Mark as compromised: ${entry.name}`} onClick={() => setPending({ kind: 'compromise', entry, text: `Mark ${entry.name}'s key as compromised? Proofs signed with it will show a warning.` })}>Mark as compromised</button>
+        <button className="text-action" type="button" aria-label={`Remove: ${entry.name}`} onClick={() => setPending({ kind: 'remove', entry, text: `Remove ${entry.name} and its key history from this browser?` })}>Remove</button>
+      </div>
+    </li>)}</ul> : <p className="field-hint">No trusted companies yet.</p>}
+    {entries.length > 0 && <details className="report-details"><summary>Key history</summary><ul className="company-history">{entries.map((entry, index) => <li key={index}><strong className="wrap">{entry.name}</strong> <code className="fingerprint">{formatFingerprint(entry.fingerprint)}</code> <span>{historyStatus(entry)} · from {SOURCES[entry.source] || entry.source}</span></li>)}</ul></details>}
+    <details className="report-details"><summary>What is this?</summary><div className="prose"><p>A trusted company is a name and key fingerprint you got from that company through a channel you already know: its website, a contract or invoice, or a phone call with someone you know there.</p><p>A proof says "Signed by a key you trust" only when its key matches an active entry here. A key that arrives inside a receipt message is never trusted just because it is there. This list stays in this browser.</p></div></details>
+  </section>;
 }
 
 function EncryptedBackupControls({ profileId, isOwnerCurrent }) {
@@ -1953,7 +2103,7 @@ function TelemetrySourcePreview({ source, original }) {
     <p>All {mappings.length.toLocaleString()} mappings and source digest are included in the verification report. Original bytes are retained separately in the evidence ZIP.</p>
   </details>;
 }
-function ResultPanel({ result, resultTitle, reportText, onDownloadText, onDownloadMarkdown, onDownloadJson, onNavigate, onShare }) {
+function ResultPanel({ result, resultTitle, reportText, onDownloadText, onDownloadMarkdown, onDownloadJson, onNavigate, onShare, trust }) {
   const { native, indexed } = result;
   const [label, kind] = resultTitle;
   const problem = indexed.problem;
@@ -1967,7 +2117,7 @@ function ResultPanel({ result, resultTitle, reportText, onDownloadText, onDownlo
     : native.status === 'intact'
       ? `${fmtBig(native.records)} records checked; ${fmtBig(result.receiptCoverage?.covered ?? native.covered)} receipt-covered; ${fmtBig(result.receiptCoverage?.uncovered ?? native.uncovered)} uncovered; ${fmtBig(native.timeReversals)} timestamp reversals. ${applicationEvidence}`
       : native.description || indexed.description || 'The first failure is shown below.';
-  return <section className="result-panel panel" aria-labelledby="result-heading"><div className="result-top"><div><h2 id="result-heading"><span className="result-heading-live" role="status" aria-live="polite" aria-atomic="true"><span className={`status-shape ${kind}`} aria-hidden="true" />{label}</span></h2><p>{summary}</p></div><div className="result-stat"><strong>{fmtBig(native.records)}</strong><span>records checked</span></div></div><div className="stats-grid"><div><span>File</span><strong className="wrap">{result.label}</strong></div><div><span>Size</span><strong>{fmtBytes(result.file.size)}</strong></div><div><span>Good bytes</span><strong>{fmtBytes(native.goodBytes)}</strong></div><div><span>Chain head</span><code title={native.head}>{native.head.slice(0, 10)}…{native.head.slice(-8)}</code></div><div><span>Whole-file SHA-256</span><code title={native.fileSha256}>{native.fileSha256 || 'Unavailable'}</code></div><div><span>Receipt coverage</span><strong>{fmtBig(result.receiptCoverage?.covered ?? native.covered)} covered · {fmtBig(result.receiptCoverage?.uncovered ?? native.uncovered)} uncovered</strong></div><div><span>Time reversals</span><strong>{fmtBig(native.timeReversals)}</strong></div></div>{problem && <div className={`first-failure ${kind}`}><span className="eyebrow">FIRST FAILURE</span><strong>Record {fmtBig(problem.record)} · {problemLabel(problem.token)} <code>({problem.token})</code></strong><span>{problem.detail || problem.description || 'Verification stopped at the first inconsistent record.'}</span>{problem.expected != null && <div className="hash-comparison"><span>Expected</span><code>{String(problem.expected)}</code>{problem.actual != null && <><span>Actual</span><code>{String(problem.actual)}</code></>}</div>}<span>Offset {fmtBig(problem.offset)} bytes</span></div>}<div className="result-actions"><button className="button secondary" onClick={() => onNavigate('records')}>Records</button><button className="button secondary" onClick={() => onNavigate('receipts')}>Receipts</button><button className="button secondary" onClick={onDownloadText}>Download text report</button><button className="button secondary" onClick={onDownloadMarkdown}>Download Markdown report</button><button className="button secondary" onClick={onDownloadJson}>Download JSON</button><button className="button secondary" onClick={onShare}>Share summary</button></div><details className="report-details" aria-label="Text verification report"><summary><span>Text verification report</span><ChevronDown size={17} aria-hidden="true" /></summary><pre className="report-text">{reportText}</pre></details></section>;
+  return <section className="result-panel panel" aria-labelledby="result-heading"><div className="result-top"><div><h2 id="result-heading"><span className="result-heading-live" role="status" aria-live="polite" aria-atomic="true"><span className={`status-shape ${kind}`} aria-hidden="true" />{label}</span></h2><p>{summary}</p>{trust && <TrustLine trust={trust} />}</div><div className="result-stat"><strong>{fmtBig(native.records)}</strong><span>records checked</span></div></div><div className="stats-grid"><div><span>File</span><strong className="wrap">{result.label}</strong></div><div><span>Size</span><strong>{fmtBytes(result.file.size)}</strong></div><div><span>Good bytes</span><strong>{fmtBytes(native.goodBytes)}</strong></div><div><span>Chain head</span><code title={native.head}>{native.head.slice(0, 10)}…{native.head.slice(-8)}</code></div><div><span>Whole-file SHA-256</span><code title={native.fileSha256}>{native.fileSha256 || 'Unavailable'}</code></div><div><span>Receipt coverage</span><strong>{fmtBig(result.receiptCoverage?.covered ?? native.covered)} covered · {fmtBig(result.receiptCoverage?.uncovered ?? native.uncovered)} uncovered</strong></div><div><span>Time reversals</span><strong>{fmtBig(native.timeReversals)}</strong></div></div>{problem && <div className={`first-failure ${kind}`}><span className="eyebrow">FIRST FAILURE</span><strong>Record {fmtBig(problem.record)} · {problemLabel(problem.token)} <code>({problem.token})</code></strong><span>{problem.detail || problem.description || 'Verification stopped at the first inconsistent record.'}</span>{problem.expected != null && <div className="hash-comparison"><span>Expected</span><code>{String(problem.expected)}</code>{problem.actual != null && <><span>Actual</span><code>{String(problem.actual)}</code></>}</div>}<span>Offset {fmtBig(problem.offset)} bytes</span></div>}<div className="result-actions"><button className="button secondary" onClick={() => onNavigate('records')}>Records</button><button className="button secondary" onClick={() => onNavigate('receipts')}>Receipts</button><button className="button secondary" onClick={onDownloadText}>Download text report</button><button className="button secondary" onClick={onDownloadMarkdown}>Download Markdown report</button><button className="button secondary" onClick={onDownloadJson}>Download JSON</button><button className="button secondary" onClick={onShare}>Share summary</button></div><details className="report-details" aria-label="Text verification report"><summary><span>Text verification report</span><ChevronDown size={17} aria-hidden="true" /></summary><pre className="report-text">{reportText}</pre></details></section>;
 }
 
 // Large files (fingerprint only): originals stay on the operator's storage. State here never enters
@@ -2015,6 +2165,9 @@ function ManifestSeal({ signingKey, onActiveChange }) {
   const [files, setFiles] = useState([]);
   const [includeNames, setIncludeNames] = useState(false);
   const [notes, setNotes] = useState({});
+  const [landingLocal, setLandingLocal] = useState('');
+  const [edited, setEdited] = useState({});
+  const [derived, setDerived] = useState({});
   const [progress, setProgress] = useState(null);
   const [phase, setPhase] = useState('');
   const [output, setOutput] = useState(null);
@@ -2026,16 +2179,16 @@ function ManifestSeal({ signingKey, onActiveChange }) {
   useEffect(() => () => onActiveChange(false), [onActiveChange]);
   const reset = () => { controllerRef.current?.abort(); setOutput(null); setMessage(''); setError(''); };
   const choose = (list) => {
-    reset(); setNotes({});
+    reset(); setNotes({}); setEdited({}); setDerived({});
     const picked = [...(list || [])];
     if (picked.length > MANIFEST_LIMITS.maxItems) { setFiles([]); setError(`You picked ${picked.length} files. Choose up to ${MANIFEST_LIMITS.maxItems} at a time, and seal the rest as a second list.`); return; }
     setFiles(picked);
   };
-  const itemsFor = (digests) => files.map((file, index) => ({ bytes: digests ? digests[index].bytes : file.size, sha256: digests ? digests[index].sha256 : '0'.repeat(64), name: includeNames ? file.name : '', note: notes[index] || '' }));
+  const itemsFor = (digests) => files.map((file, index) => ({ bytes: digests ? digests[index].bytes : file.size, sha256: digests ? digests[index].sha256 : '0'.repeat(64), name: includeNames ? file.name : '', note: composeNote({ landing: toIsoFromLocal(landingLocal), derivedFrom: edited[index] ? derived[index] : '', note: notes[index] }) }));
   const seal = async () => {
     reset();
     // Same length as the real payload, so a long note or name fails now rather than after hours of hashing.
-    try { encodeManifest({ salt: '0'.repeat(64), items: itemsFor(null) }); } catch (cause) { setError(friendlyLimit(cause)); return; }
+    try { encodeManifest({ salt: '0'.repeat(64), items: itemsFor(null) }); } catch (cause) { setError(cause?.code === 'note-tag' ? cause.message : friendlyLimit(cause)); return; }
     const controller = new AbortController(); controllerRef.current = controller;
     setPhase('hashing');
     try {
@@ -2053,8 +2206,9 @@ function ManifestSeal({ signingKey, onActiveChange }) {
       }
       if (!check.verified || check.manifest.items.length !== items.length) throw new Error(`The sealed result did not pass its own check, so it was discarded (${check.reason || 'item count differs'}). Press Seal again.`);
       const base = `hashwing-${stamp()}`;
+      const fingerprint = await fingerprintHex(sealed.publicKey);
       setOutput({
-        base, publicKey: sealed.publicKey, items: items.length, total: hashed.reduce((sum, item) => sum + item.bytes, 0), saved: false,
+        base, publicKey: sealed.publicKey, fingerprint, items: items.length, total: hashed.reduce((sum, item) => sum + item.bytes, 0), saved: false,
         log: new File([sealed.log], `${base}.manifest.fseal`, { type: 'application/octet-stream' }),
         handover: manifestHandoverText({ items: items.length, receipts: sealed.receipts, publicKey: sealed.publicKey, sealedAt: new Date().toISOString() }),
       });
@@ -2084,7 +2238,13 @@ function ManifestSeal({ signingKey, onActiveChange }) {
     {phase === 'sealing' && <p role="status">Sealing…</p>}
     <details className="report-details manifest-options"><summary>More options <ChevronDown size={17} aria-hidden="true" /></summary><div className="manifest-options-body">
       <label className="check-row"><input id="manifest-include-names" type="checkbox" checked={includeNames} disabled={busy} onChange={(e) => { reset(); setIncludeNames(e.target.checked); }} />Include file names</label>
-      {files.map((file, index) => <div key={`${index}-${file.name}`}><label className="field-label" htmlFor={`manifest-note-${index}`}>Operator note for <span className="manifest-file-name">{file.name}</span> <span>(optional)</span></label><input id={`manifest-note-${index}`} type="text" value={notes[index] || ''} disabled={busy} onChange={(e) => { reset(); setNotes((current) => ({ ...current, [index]: e.target.value })); }} /></div>)}
+      <label className="field-label" htmlFor="manifest-landing">Reported landing time <span>(optional, for all files, this computer's time zone)</span></label>
+      <input id="manifest-landing" type="datetime-local" step="1" value={landingLocal} disabled={busy} aria-describedby="manifest-landing-hint" onChange={(e) => { reset(); setLandingLocal(e.target.value); }} />
+      <p id="manifest-landing-hint" className="field-hint">Signed into each file's note. HashWing doesn't check it.</p>
+      {files.map((file, index) => <div key={`${index}-${file.name}`} className="manifest-item-options"><label className="field-label" htmlFor={`manifest-note-${index}`}>Operator note for <span className="manifest-file-name">{file.name}</span> <span>(optional)</span></label><input id={`manifest-note-${index}`} type="text" value={notes[index] || ''} disabled={busy} onChange={(e) => { reset(); setNotes((current) => ({ ...current, [index]: e.target.value })); }} />
+        <label className="check-row"><input id={`manifest-edited-${index}`} type="checkbox" checked={!!edited[index]} disabled={busy} onChange={(e) => { reset(); setEdited((current) => ({ ...current, [index]: e.target.checked })); }} />This is an edited copy</label>
+        {edited[index] && <><label className="field-label" htmlFor={`manifest-derived-${index}`}>Derived from <span>(the original's item number or SHA-256 fingerprint)</span></label><input id={`manifest-derived-${index}`} type="text" value={derived[index] || ''} disabled={busy} onChange={(e) => { reset(); setDerived((current) => ({ ...current, [index]: e.target.value })); }} /></>}
+      </div>)}
       <p className="field-hint">Receipt interval: 1 record. {signingKey?.privateKeyPem ? 'Signed with the key loaded under Settings.' : 'No signing key loaded: a one-time key signs this list and is then discarded.'}</p>
     </div></details>
     <button className="button primary" type="button" disabled={!files.length || busy || !!output} onClick={seal}>Seal</button>
@@ -2093,6 +2253,7 @@ function ManifestSeal({ signingKey, onActiveChange }) {
     {output && <div className="handover">
       <h3>Send this receipt to someone else now</h3>
       <dl className="detail-grid"><dt>Files</dt><dd className="mono-values">{output.items} · {fmtBytes(output.total)}</dd><dt>Public key</dt><dd><code className="wrap">{output.publicKey}</code></dd></dl>
+      <SenderFingerprint fingerprint={output.fingerprint} />
       <label className="field-label" htmlFor="manifest-handover-text">Receipt message</label>
       <textarea id="manifest-handover-text" className="mono-input" readOnly rows={8} value={output.handover} />
       <div className="actions-row">
@@ -2106,6 +2267,10 @@ function ManifestSeal({ signingKey, onActiveChange }) {
   </div></section>;
 }
 
+function ItemNote({ note }) {
+  const { derivedFrom, note: text } = parseNote(note);
+  return <>{derivedFrom && <span className="manifest-note">Edited copy of: {derivedFrom} (operator-entered, signed)</span>}{text && <span className="manifest-note">Operator note: {text}</span>}</>;
+}
 const STATUS_KIND = { match: 'ok', 'bytes-differ': 'warn', missing: 'grey', 'not-in-manifest': 'neutral' };
 function ManifestCheck({ onActiveChange }) {
   const [sealed, setSealed] = useState(null);
@@ -2127,12 +2292,23 @@ function ManifestCheck({ onActiveChange }) {
     const controller = new AbortController(); controllerRef.current = controller;
     setOutcome(null); setMessage(''); setRunning(true);
     try {
-      const verified = await verifySealedManifest(sealed, text, key);
+      // An empty key field may use the receipt's key only when its fingerprint equals an active pin the user added.
+      let useKey = key, pinned = null;
+      if (!key.trim()) {
+        const stated = parseHandover(text);
+        const trust = stated.publicKey && !stated.keyConflict ? await trustForKey(stated.publicKey).catch(() => null) : null;
+        if (trust?.status === 'trusted') { useKey = stated.publicKey; pinned = trust.entry; }
+      }
+      const verified = await verifySealedManifest(sealed, text, useKey);
       if (revision !== revisionRef.current) return;
       if (!verified.verified) { setOutcome({ verified: false, reason: verified.reason }); return; }
+      const trust = await trustForKey(verified.publicKey).catch(() => ({ status: 'untrusted' }));
+      const fingerprint = await fingerprintHex(verified.publicKey);
       const hashed = await hashAll(locals, controller.signal, setProgress);
       if (revision !== revisionRef.current) return;
-      setOutcome({ verified: true, manifest: verified.manifest, comparison: compareFiles(verified.manifest, hashed), locals: hashed });
+      const comparison = compareFiles(verified.manifest, hashed);
+      const report = manifestReport({ sealedName: sealed.name, trust, sources: SOURCES, keyFingerprint: fingerprint, head: verified.head, sealedAt: parseSealedLine(text), items: comparison.items, extras: comparison.extras, locals: hashed });
+      setOutcome({ verified: true, manifest: verified.manifest, comparison, locals: hashed, trust, pinned, report, base: sealed.name.replace(/\.manifest\.fseal$|\.fseal$/, '') || 'hashwing-manifest' });
     } catch (cause) {
       if (revision !== revisionRef.current && cause?.name === 'AbortError') return;
       setMessage(cause?.name === 'AbortError' ? 'Cancelled' : cause?.message || 'Something went wrong. Press Check files again.');
@@ -2157,11 +2333,20 @@ function ManifestCheck({ onActiveChange }) {
     {outcome && !outcome.verified && <div className="manifest-outcome" role="alert"><h3><span className="status-label bad">Manifest not verified</span></h3><p>{outcome.reason}</p><p>Check that you chose the right sealed file, pasted the whole receipt message, and entered the key the sender gave you separately.</p></div>}
     {comparison && <div className="manifest-outcome">
       <h3><span role="status" className="manifest-summary"><span className="status-label ok">Manifest verified</span> {comparison.items.filter((item) => item.status === 'match').length} of {comparison.items.length} files match</span></h3>
+      <TrustLine trust={outcome.trust} />
+      {outcome.pinned && <p className="field-hint">Used the key you saved for {outcome.pinned.name}.</p>}
+      <TimeFields fields={outcome.report.fields} />
       <div className="table-scroll" role="region" aria-label="Manifest check results" tabIndex={0}><table className="manifest-table"><thead><tr><th scope="col">Item</th><th scope="col">Name in manifest</th><th scope="col">Size</th><th scope="col">Status</th><th scope="col">Local file</th></tr></thead><tbody>
-        {comparison.items.map((item) => <tr key={item.id}><td className="mono-values">{item.id}</td><td className="wrap">{item.name || <span className="muted">Not included</span>}{item.note && <span className="manifest-note">Operator note: {item.note}</span>}</td><td className="mono-values">{fmtBytes(item.bytes)}</td><td><span className={`status-label ${STATUS_KIND[item.status]}`}>{MANIFEST_STATUS[item.status]}</span>{item.status === 'bytes-differ' && <span className="manifest-note">This can happen from editing, re-saving, metadata changes, recompression, truncation or corruption — it isn't proof of tampering.</span>}</td><td className="wrap">{item.local == null ? '—' : outcome.locals[item.local].name}</td></tr>)}
+        {comparison.items.map((item) => <tr key={item.id}><td className="mono-values">{item.id}</td><td className="wrap">{item.name || <span className="muted">Not included</span>}<ItemNote note={item.note} /></td><td className="mono-values">{fmtBytes(item.bytes)}</td><td><span className={`status-label ${STATUS_KIND[item.status]}`}>{MANIFEST_STATUS[item.status]}</span>{item.status === 'bytes-differ' && <span className="manifest-note">{BYTES_DIFFER.text}</span>}</td><td className="wrap">{item.local == null ? '—' : outcome.locals[item.local].name}</td></tr>)}
         {comparison.extras.map((extra) => <tr key={`extra-${extra.local}`}><td>—</td><td>—</td><td className="mono-values">{fmtBytes(extra.bytes)}</td><td><span className={`status-label ${STATUS_KIND['not-in-manifest']}`}>{MANIFEST_STATUS['not-in-manifest']}</span></td><td className="wrap">{extra.name}</td></tr>)}
       </tbody></table></div>
       {comparison.items.some((item) => item.status === 'missing' && !item.name) && <p className="field-hint">Files sealed without a name can only match or be missing.</p>}
+      <div className="actions-row">
+        <button className="button secondary" type="button" onClick={() => download(`${outcome.base}.check-report.txt`, outcome.report.text)}><Download aria-hidden="true" size={16} />Download text report</button>
+        <button className="button secondary" type="button" onClick={() => download(`${outcome.base}.check-report.md`, outcome.report.markdown, 'text/markdown;charset=utf-8')}><Download aria-hidden="true" size={16} />Download Markdown report</button>
+        <button className="button secondary" type="button" onClick={() => download(`${outcome.base}.check-report.json`, outcome.report.json, 'application/json')}><Download aria-hidden="true" size={16} />Download JSON</button>
+        <button className="button secondary" type="button" onClick={async () => { try { const { createIntegrityPdf } = await import('./report-pdf.mjs'); download(`${outcome.base}.check-report.pdf`, await createIntegrityPdf({ title: 'HashWing manifest check report', lines: outcome.report.pdfLines }), 'application/pdf'); } catch (cause) { setMessage(cause?.message || 'Could not create the PDF. Download the text report instead.'); } }}><Download aria-hidden="true" size={16} />Download PDF</button>
+      </div>
     </div>}
   </div></section>;
 }
