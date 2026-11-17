@@ -119,15 +119,24 @@ test('budget is optional: conditional on a non-empty BudgetEmail, amount default
 
 test('restore mode serves the restored table, closed by RESTORED_FROM, with the grant on that table only', () => {
   const r = Template.fromStack(new RegistryStack(new App(), 'Restored', {
-    restoredTableName: 'registry-restored', restoredFrom: 'registry-live' }));
+    restoredTableName: 'registry-restored', restoredFrom: 'registry-live', restoreId: 'r-2026-11-17' }));
   r.hasResourceProperties('AWS::Lambda::Function', {
-    Environment: { Variables: { TABLE_NAME: 'registry-restored', RESTORED_FROM: 'registry-live', IDENTITY_ADAPTER: 'cognito' } },
+    Environment: { Variables: { TABLE_NAME: 'registry-restored', RESTORED_FROM: 'registry-live',
+      RESTORE_ID: 'r-2026-11-17', IDENTITY_ADAPTER: 'cognito' } },
   });
   const policy = JSON.stringify(Object.values(r.toJSON().Resources as Record<string, any>)
     .filter((x) => x.Type === 'AWS::IAM::Policy').map((x) => x.Properties.PolicyDocument));
   assert.ok(policy.includes(':table/registry-restored'));
   assert.ok(!policy.includes('"Resource":"*"'));
   assert.throws(() => new RegistryStack(new App(), 'Half', { restoredTableName: 'x' }));
+  assert.throws(() => new RegistryStack(new App(), 'NoId', { restoredTableName: 'x', restoredFrom: 'y' }));
+});
+
+test('ID and access tokens live 15 minutes, so a demoted admin loses the role quickly', () => {
+  t.hasResourceProperties('AWS::Cognito::UserPoolClient', {
+    IdTokenValidity: 15, AccessTokenValidity: 15,
+    TokenValidityUnits: { IdToken: 'minutes', AccessToken: 'minutes' },
+  });
 });
 
 test('no fixed-fee services', () => {

@@ -341,13 +341,15 @@ def restore_drill(url, state, base_env):
         lam.update_function_configuration(FunctionName=FUNCTION, Environment={"Variables": env})
         lam.get_waiter("function_updated_v2").wait(FunctionName=FUNCTION)
 
-    serve({**base_env, "TABLE_NAME": target, "RESTORED_FROM": TABLE})
+    restore_id = secrets.token_hex(8)
+    serve({**base_env, "TABLE_NAME": target, "RESTORED_FROM": TABLE, "RESTORE_ID": restore_id})
     gated = [http("GET", url + p)[1].get("error") for p in [live_share["path"], *state["withdrawn_paths"]]]
     gated.append(http("POST", url + "/v1/envelopes", state["pilot"], {})[1].get("error"))  # an authenticated route
     gated.append(http("GET", url + "/v1/registrations", state["pilot"])[1].get("error"))
     check("restore gate: public and authenticated routes 503 restore_pending before tombstones are applied",
           gated == ["restore_pending"] * 5, "GET share x3, POST /v1/envelopes, GET /v1/registrations: " + str(gated))
-    n = apply_tombstones(DynamoTable(TABLE, client=ddb), restored, source_name=TABLE)
+    n = apply_tombstones(DynamoTable(TABLE, client=ddb), restored, source_name=TABLE, target_name=target,
+                         restore_id=restore_id, served=TABLE)
     views = [http("GET", url + p)[0] for p in [live_share["path"], *state["withdrawn_paths"]]]
     marker = restored.get("SYSTEM", "RESTORE") or {}
     check("restore apply (Scan, Put, Update in DynamoDB): withdrawn and deleted views 404, active one 200",

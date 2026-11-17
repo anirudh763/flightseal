@@ -119,10 +119,13 @@ different payload), an existing REG returns the original ack (or 410 if deleted)
   stays as a tombstone (fingerprint, head, count, state) so that a replay is answered 410 instead of re-registering.
 - **Backup restore:** a restored table (from PITR or an on-demand backup) brings back whatever was live at backup
   time, including shares withdrawn afterwards. So:
-  1. Restore to a new table and deploy the function against it with `RESTORED_FROM=<source table>`. While the
-     marker is missing, every route answers 503 `restore_pending`.
-  2. Run `python -m registry.restore --source <source> --target <restored>`. It copies every TOMB item, re-applies
-     it (registrations deleted, shares withdrawn, compromised keys stay compromised, the org epoch moves forward), and writes the `SYSTEM/RESTORE` marker last. If the source's
+  1. Restore to a new table and deploy the function against it with `RESTORED_FROM=<served table>` and a new
+     `RESTORE_ID`. Until a marker names this table and this restore ID, every route answers 503 `restore_pending`
+     (a marker copied in from the backup names an older table, so it does not count).
+  2. Run `python -m registry.restore` with the served table as source. It refuses any other source, copies every
+     TOMB item, re-applies it (registrations deleted, shares withdrawn, rotated and compromised keys keep their
+     state and the active key is recomputed, the org epoch moves forward), and writes the `SYSTEM/RESTORE` marker
+     last. If the source's
      tombstones cannot be read, it stops with an error and writes no marker, so the function stays closed.
   3. After that, withdrawn and deleted views are 404 again and active ones are served.
 

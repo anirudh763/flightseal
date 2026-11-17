@@ -23,10 +23,10 @@ def _world():
 
 def test_restore_reapplies_tombstones_then_opens():
     live, restored, paths, clock = _world()
-    app, _, _ = make_app(table=restored, RESTORED_FROM="live")
+    app, _, _ = make_app(table=restored, RESTORED_FROM="live", RESTORE_ID="r1", TABLE_NAME="restored")
     app.clock = clock
     assert call(app, "GET", paths[0])[:2] == (503, {"error": "restore_pending"})
-    assert apply_tombstones(live, restored, source_name="live") == 3  # 1 share + 1 registration + its 1 share
+    assert apply_tombstones(live, restored, source_name="live", target_name="restored", restore_id="r1", served="live") == 4  # enrolled key + 1 share + 1 registration + its share
     assert [call(app, "GET", p)[0] for p in paths] == [404, 404, 200]
     rows = call(app, "GET", "/v1/registrations", token(clock))[1]["registrations"]
     assert sorted(r["disposition"] for r in rows) == ["active", "active", "deleted"]
@@ -36,7 +36,7 @@ def test_restore_refuses_when_source_tombstones_are_unreadable():
     live, restored, paths, _ = _world()
     live.fail = lambda op, pk, sk: op == "scan"
     with pytest.raises(StoreUnavailable):
-        apply_tombstones(live, restored, source_name="live")
+        apply_tombstones(live, restored, source_name="live", target_name="restored", restore_id="r1", served="live")
     assert ("SYSTEM", "RESTORE") not in restored.items
 
 
@@ -63,9 +63,9 @@ def test_restore_reapplies_compromised_keys_and_the_epoch():
     assert call(app, "POST", "/v1/epoch", admin, {})[1] == {"epoch": 1}
     assert call(app, "POST", "/v1/epoch", admin, {})[1] == {"epoch": 2}
 
-    restored, _, _ = make_app(table=backup, RESTORED_FROM="live")
+    restored, _, _ = make_app(table=backup, RESTORED_FROM="live", RESTORE_ID="r1", TABLE_NAME="restored")
     restored.clock = clock
-    apply_tombstones(live, backup, source_name="live")
+    apply_tombstones(live, backup, source_name="live", target_name="restored", restore_id="r1", served="live")
     keys = call(restored, "GET", "/v1/keys", pilot)[1]["keys"]
     assert [k["state"] for k in keys] == ["compromised"]
     assert ("ORG#orgA", "ACTIVE_KEY") not in backup.items
