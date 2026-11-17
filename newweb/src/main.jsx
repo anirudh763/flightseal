@@ -31,15 +31,13 @@ const syncProvider = createSyncProvider({ supabaseUrl: import.meta.env.VITE_SUPA
 const MAX_UI_BYTES = VERIFY_MAX_BYTES;
 const PAGE_SIZE = 50;
 function closeDisclosure(event) {
-  if (event.key !== 'Escape') return;
+  if (event.key !== 'Escape' || !event.currentTarget.open) return; // a closed disclosure lets Escape reach the mobile menu
   event.preventDefault(); event.stopPropagation();
   event.currentTarget.open = false; event.currentTarget.querySelector('summary')?.focus();
 }
-const NAV = [
-  ['protect', 'Seal & send', FileLock2], ['sandbox', 'Samples', FlaskConical], ['verify', 'Verify', ShieldCheck], ['records', 'Records', List],
-  ['benchmarks', 'Benchmarks', Gauge], ['system', 'System', Activity],
-  ['receipts', 'Receipts', Stamp], ['video', 'Video', Video], ['help', 'Trust', CircleHelp],
-];
+const PRIMARY_NAV = [['protect', 'Seal & send', FileLock2], ['verify', 'Verify', ShieldCheck], ['records', 'Records', List], ['receipts', 'Receipts', Stamp], ['help', 'Trust', CircleHelp]];
+const MORE_NAV = [['sandbox', 'Samples', FlaskConical], ['video', 'Video', Video], ['benchmarks', 'Benchmarks', Gauge], ['system', 'System', Activity]];
+const NAV = [...PRIMARY_NAV, ...MORE_NAV];
 const CANONICAL_NAV = [['overview','Overview',Gauge],['workbench','Workbench',FlaskConical],['reports','Reports',List],['settings','Settings',Activity]];
 const asBig = (value) => typeof value === 'bigint' ? value : BigInt(value ?? 0);
 const csvMappingSummary = (mapping) => Object.entries(mapping || {}).filter(([key, value]) => key.endsWith('Column') && value).map(([key, value]) => {
@@ -116,6 +114,9 @@ function App() {
   const [activeSession, setActiveSession] = useState(activeLocalSession);
   const [localProfile, setLocalProfile] = useState(() => localProfileFor(activeLocalSession()));
   const [menuOpen, setMenuOpen] = useState(false);
+  const moreRef = useRef(null);
+  // Set the DOM directly: a <details> toggle event arrives late, so a mirrored state value can be stale.
+  useLayoutEffect(() => { if (moreRef.current) moreRef.current.open = MORE_NAV.some(([key]) => key === screen); }, [screen]); // opens on a secondary page, tidies away on a primary one
   const [result, setResult] = useState(null);
   const [busy, setBusy] = useState('');
   const [error, setError] = useState('');
@@ -1366,13 +1367,15 @@ function App() {
           syncStatus={syncProvider.status}
         />);
 
+  const navLink = ([key, label, Icon]) => <a key={key} href={workspaceHref(key, { sample: currentSample, record: selectedRecord })} aria-current={(productMode ? canonicalPage : screen) === key ? 'page' : undefined} onClick={(e) => { if (e.button !== 0 || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return; e.preventDefault(); navigate(key); }}><Icon size={16} strokeWidth={1.8} aria-hidden="true" />{productMode && key === 'sandbox' ? 'Upload and seal' : label}</a>;
   return <div className={`app-shell${canonicalPage ? ` canonical-page canonical-${canonicalPage}` : ''}`}>
     <a className="skip-link" href="#main" onClick={(event) => { event.preventDefault(); document.getElementById('main')?.focus(); }}>Skip to content</a>
     <aside className="workbench-rail" aria-label="HashWing">
       <a className="brand" href={productMode ? '/overview' : '#/'} onClick={(e) => { e.preventDefault(); if(productMode)navigate('overview');else setHashRoute('#/'); }}><span className="brand-mark" aria-hidden="true">H</span><span>HashWing</span></a>
       <button type="button" className="rail-menu" aria-expanded={menuOpen} aria-controls="primary-nav" onClick={() => setMenuOpen((open) => !open)}><Menu size={16} aria-hidden="true" />Menu</button>
       <nav id="primary-nav" className={`nav${menuOpen ? ' open' : ''}`} aria-label="Primary navigation">
-        {(productMode ? CANONICAL_NAV : NAV).map(([key, label, Icon]) => <a key={key} href={workspaceHref(key, { sample: currentSample, record: selectedRecord })} aria-current={(productMode ? canonicalPage : screen) === key ? 'page' : undefined} onClick={(e) => { if (e.button !== 0 || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return; e.preventDefault(); navigate(key); }}><Icon size={16} strokeWidth={1.8} aria-hidden="true" />{productMode && key === 'sandbox' ? 'Upload and seal' : label}</a>)}
+        {(productMode ? CANONICAL_NAV : PRIMARY_NAV).map(navLink)}
+        {!productMode && <details ref={moreRef} className="nav-more" onKeyDown={closeDisclosure}><summary>More tools</summary>{MORE_NAV.map(navLink)}</details>}
       </nav>
       <div className="rail-foot"><span className="local-dot" aria-hidden="true" />Local files</div>
         <details className="workspace-tools-menu" onKeyDown={closeDisclosure}><summary>Other apps</summary><div>{SUITE_LINKS.map((tool) => tool.state === 'unavailable' ? <span key={tool.name} aria-disabled="true">{tool.name} · unavailable (HTTP 404)</span> : <a key={tool.name} href={tool.href} target="_blank" rel="noreferrer">{tool.name}</a>)}</div></details>
@@ -1381,20 +1384,20 @@ function App() {
     <header className="topbar commandbar">
       <h1 id={`page-${screen}`} tabIndex="-1">{pageTitle}</h1>
       <div className="command-actions">
-        <nav hidden={!!canonicalPage} className="workspace-persistent-actions" aria-label="Account and workspace"><a href="#/login">Log in</a><a href="#/signup">Create account</a></nav>
+        <nav hidden={!!canonicalPage || activeSession?.kind === 'account'} className="workspace-persistent-actions" aria-label="Account and workspace"><a href="#/login">Log in</a><a href="#/signup">Create account</a></nav>
 
         {!canonicalPage && profileControls}
 
       </div>
     </header>
-    <section hidden={!!canonicalPage && canonicalPage!=='workbench'} className="session-strip" aria-label="Current session">
+    <section hidden={(!!canonicalPage && canonicalPage!=='workbench') || screen === 'protect'} className="session-strip" aria-label="Current session">
       <span id="session-file-name" className="session-name" title={selectedFileName || 'Choose a source or sealed log'}>{selectedFileName ? `Selected: ${selectedFileName}` : 'Choose a source or sealed log'}</span>
       {result && <span className="session-result-name">Checked: {result.label}</span>}
       {result && <button type="button" className="hash-copy" title={`Copy full chain head ${result.native.head}`} onClick={async () => { try { await navigator.clipboard.writeText(result.native.head); setOperationStatus('Chain head copied.'); } catch { setError('Clipboard access is unavailable. Select the full hash in the report.'); } }}><span>Copy hash</span><code>{`${result.native.head.slice(0, 10)}…${result.native.head.slice(-8)}`}</code></button>}
       {hasImportedOutput && <button type="button" className="clear-session" onClick={clearImportedSession}>Clear imported session</button>}
     </section>
     <main id="main" className="page-wrap" tabIndex="-1">
-    <details hidden={!!canonicalPage && canonicalPage!=='workbench'} className="source-actions" open={screen === 'sandbox'} onKeyDown={closeDisclosure}><summary>Source and report actions</summary><div className="source-action-items">
+    <details hidden={(!!canonicalPage && canonicalPage!=='workbench') || screen === 'protect'} className="source-actions" open={screen === 'sandbox'} onKeyDown={closeDisclosure}><summary>Source and report actions</summary><div className="source-action-items">
         <label className="command-file-wrap" htmlFor="workbench-file"><span className="visually-hidden">Choose source or sealed log</span><input id="workbench-file" ref={workbenchFileRef} className="command-file-input" type="file" accept=".fseal,.ulg,.tsv,.txt,.tlog,.csv,.json,application/octet-stream,text/plain,application/json,text/csv" disabled={!!busy} aria-label="Choose source or sealed log" aria-describedby="session-file-name" onChange={(e) => chooseWorkbenchFile(e.target.files?.[0] || null)} /></label>
         <button className="button secondary command-seal" type="button" onClick={() => { if (sealFileInput) runSeal(); else { sealPickerRef.current = true; workbenchFileRef.current?.click(); } }} disabled={!!busy}><FileCheck2 size={16} aria-hidden="true" />Seal new log</button>
         {result && <button className="button primary command-export" type="button" onClick={downloadPdf} disabled={!!busy}>Export PDF</button>}

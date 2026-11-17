@@ -959,3 +959,14 @@ button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible
 .handover p, .restored p { margin: 0; }
 textarea.mono-input { width: 100%; min-height: 0; resize: vertical; font-size: .8rem; line-height: 1.45; overflow-wrap: anywhere; padding: 8px 10px; border: 1px solid var(--field-border, #71829a); border-radius: 6px; background: var(--surface, #fff); color: var(--ink); }
 @media (max-width: 860px) { .protect-screen .section-grid { grid-template-columns: minmax(0, 1fr); } }
+
+/* Secondary tools: demo and diagnostic pages live behind one disclosure in the rail. */
+.nav-more { grid-column: 1 / -1; flex-basis: 100%; margin-top: 6px; padding-top: 6px; border-top: 1px solid var(--line); }
+.nav-more summary { display: flex; align-items: center; min-height: 44px; padding: 8px 10px; border-radius: 4px; color: #25364b; font-size: 13px; cursor: pointer; } /* same colours as .nav a */
+.nav-more summary:hover { color: #173f92; background: #dce7fa; }
+.nav-more[open] { display: grid; gap: 2px; }
+.workbench-rail .nav.open .nav-more[open] { grid-template-columns: inherit; }
+.nav-more summary { grid-column: 1 / -1; list-style: none; }
+.nav-more summary::-webkit-details-marker { display: none; }
+.nav-more summary::after { content: "▸"; margin-left: auto; color: #2355ba; }
+.nav-more[open] summary::after { content: "▾"; }
