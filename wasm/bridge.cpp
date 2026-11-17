@@ -69,6 +69,28 @@ const char* check_token(fseal::ReceiptCheck check) {
 
 extern "C" {
 EMSCRIPTEN_KEEPALIVE size_t fseal_heap_bytes() { return emscripten_get_heap_size(); }
+// Streaming whole-file SHA-256 for manifest mode: one context, fed the original bytes in order.
+static EVP_MD_CTX* stream_digest = nullptr;
+EMSCRIPTEN_KEEPALIVE int fseal_sha256_begin() {
+  EVP_MD_CTX_free(stream_digest);
+  stream_digest = EVP_MD_CTX_new();
+  if (stream_digest && EVP_DigestInit_ex(stream_digest, EVP_sha256(), nullptr) == 1) return 1;
+  EVP_MD_CTX_free(stream_digest);
+  stream_digest = nullptr;
+  return 0;
+}
+EMSCRIPTEN_KEEPALIVE int fseal_sha256_update(const unsigned char* data, size_t size) {
+  return stream_digest && EVP_DigestUpdate(stream_digest, data, size) == 1 ? 1 : 0;
+}
+EMSCRIPTEN_KEEPALIVE const char* fseal_sha256_final() {
+  fseal::Hash digest{};
+  unsigned int length = 0;
+  const bool ok = stream_digest && EVP_DigestFinal_ex(stream_digest, digest.data(), &length) == 1 && length == digest.size();
+  EVP_MD_CTX_free(stream_digest);
+  stream_digest = nullptr;
+  response = ok ? fseal::hex(digest.data(), digest.size()) : std::string();
+  return response.c_str();
+}
 EMSCRIPTEN_KEEPALIVE const char* fseal_verify(const char* path, const char* receipt_text, const char* public_hex) {
   try {
     std::string receipts_text(receipt_text), key(public_hex);

@@ -10,6 +10,6 @@ target_link_options(fseal-wasm PRIVATE
   --no-entry -fexceptions -O2
   "-sMODULARIZE=1" "-sEXPORT_ES6=1" "-sENVIRONMENT=web,worker,node"
   "-sALLOW_MEMORY_GROWTH=1" "-sINITIAL_MEMORY=33554432" "-sSTACK_SIZE=8388608" "-sMAXIMUM_MEMORY=268435456"
-  "-sEXPORTED_FUNCTIONS=['_fseal_verify','_fseal_seal','_fseal_seal_with_key','_fseal_import','_fseal_heap_bytes']"
-  "-sEXPORTED_RUNTIME_METHODS=['ccall','FS','WORKERFS','NODEFS']"
+  "-sEXPORTED_FUNCTIONS=['_fseal_verify','_fseal_seal','_fseal_seal_with_key','_fseal_import','_fseal_heap_bytes','_fseal_sha256_begin','_fseal_sha256_update','_fseal_sha256_final','_malloc','_free']"
+  "-sEXPORTED_RUNTIME_METHODS=['ccall','FS','WORKERFS','NODEFS','HEAPU8']"
   "-sFORCE_FILESYSTEM=1" "-sFILESYSTEM=1" -lworkerfs.js -lnodefs.js)
