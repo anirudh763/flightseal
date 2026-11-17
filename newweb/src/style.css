@@ -953,3 +953,9 @@ button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible
 .workbench-tabs{display:flex;gap:8px;flex-wrap:wrap;margin:12px 0}.workbench-tabs a{display:inline-flex;align-items:center;min-height:44px;padding:8px 12px;border:1px solid var(--line);color:var(--ink)}.workbench-tabs a[aria-current=page]{color:var(--accent);background:var(--surface);font-weight:700}
 .canonical-workbench .result-actions,.canonical-workbench .command-export{display:none}.canonical-reports .result-panel{margin-top:16px}.canonical-settings .profile-menu-panel{position:static;max-height:none}.canonical-settings .profile-menu{max-width:700px}
 @media(max-width:768px){.overview-facts{grid-template-columns:1fr}.canonical-page .command-actions .button{min-height:44px}.canonical-page .workbench-rail .nav.open{grid-template-columns:1fr 1fr}}
+.protect-screen .lede { margin: 0 0 4px; max-width: 74ch; color: var(--muted); }
+.handover, .restored { display: grid; gap: 10px; margin-top: 18px; padding-top: 16px; border-top: 1px solid var(--line); }
+.handover h3, .restored h3 { margin: 6px 0 0; font-size: 1rem; }
+.handover p, .restored p { margin: 0; }
+textarea.mono-input { width: 100%; min-height: 0; resize: vertical; font-size: .8rem; line-height: 1.45; overflow-wrap: anywhere; padding: 8px 10px; border: 1px solid var(--field-border, #71829a); border-radius: 6px; background: var(--surface, #fff); color: var(--ink); }
+@media (max-width: 860px) { .protect-screen .section-grid { grid-template-columns: minmax(0, 1fr); } }

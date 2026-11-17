@@ -4,6 +4,7 @@ import { serve } from '../../tests/web/serve.mjs';
 import { join, resolve, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import assert from 'node:assert/strict';
+import { createHash } from 'node:crypto';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const ROOT = resolve(HERE, '..');
@@ -846,6 +847,92 @@ try {
     await restorePage.getByRole('button', { name: 'Log in' }).click();
     await restorePage.waitForFunction(() => document.querySelector('.profile-menu > summary')?.textContent.includes('backup-'));
     await restoreContext.close();
+  });
+
+  await check('a sample\'s bundled receipts and key are cleared when the user opens their own log', async () => {
+    await page.setViewportSize({ width: 1440, height: 900 });
+    await loadFreshDemo(page);
+    await route(page, 'verify');
+    assert.notEqual(await page.locator('#trusted-key').inputValue(), '', 'the demo attaches its key');
+    await page.locator('#log-input').setInputFiles({ name: 'my-flight.fseal', mimeType: 'application/octet-stream', buffer: readFileSync(resolve(ROOT, '../docs/samples/intact.fseal')) });
+    await page.waitForFunction(() => document.querySelector('#trusted-key')?.value === '');
+  });
+
+  await check('Seal & send: a pilot seals a real PX4 .ulg, a witness checks it with the emailed receipt and gets the exact original back; edits and re-seals are caught', async () => {
+    const ulg = resolve(ROOT, '../tests/.data/px4-sample.ulg');
+    const original = readFileSync(ulg);
+    const sha = (bytes) => createHash('sha256').update(bytes).digest('hex');
+    const evidence = join(EVIDENCE, 'seal-send'); mkdirSync(evidence, { recursive: true });
+    await page.setViewportSize({ width: 1440, height: 900 });
+    await page.goto(url); await page.reload();
+    await page.getByRole('button', { name: /Seal a flight log/ }).click();
+    await page.waitForFunction(() => location.hash === '#/app/protect' && document.querySelector('.commandbar h1')?.textContent === 'Seal & send');
+    await page.locator('#protect-file').setInputFiles(ulg);
+    await page.getByRole('button', { name: 'Seal this log' }).click();
+    await page.waitForSelector('#handover-text', { timeout: 60000 });
+    const handover = await page.locator('#handover-text').inputValue();
+    assert.match(handover, new RegExp(`Original file: ${original.length} bytes, SHA-256 ${sha(original)}`));
+    assert.equal(handover.split('\n').filter((line) => line.startsWith('fseal-receipt v1 ')).length, 1);
+    assert.match(await page.getByRole('link', { name: 'Email it' }).getAttribute('href'), /^mailto:\?subject=HashWing%20receipt/);
+    await waitResult(page, 'Intact');
+    const [sealedDownload] = await Promise.all([page.waitForEvent('download'), page.getByRole('button', { name: 'Download sealed file' }).click()]);
+    assert.equal(sealedDownload.suggestedFilename(), 'px4-sample.ulg.fseal');
+    const sealedPath = join(evidence, 'sealed.fseal');
+    await sealedDownload.saveAs(sealedPath);
+    await auditAxe(page, '1440px seal handover');
+    await page.screenshot({ path: join(evidence, 'sealed-1440.png'), fullPage: true });
+
+    // The witness, in a fresh page load, with the message quoted and wrapped as an email reply would.
+    await page.reload();
+    await page.locator('#check-file').setInputFiles(sealedPath);
+    await page.locator('#check-text').fill(handover.split('\n').flatMap((line) => line.match(/.{1,72}/g) || ['']).map((line) => `> ${line}`).join('\n'));
+    await page.getByRole('button', { name: 'Check this log' }).click();
+    await waitResult(page, 'Intact');
+    await page.waitForSelector('.restored', { timeout: 30000 });
+    assert.match(await page.locator('.restored h3').textContent(), /Original file recovered/);
+    const [originalDownload] = await Promise.all([page.waitForEvent('download'), page.getByRole('button', { name: 'Download original file' }).click()]);
+    assert.equal(originalDownload.suggestedFilename(), 'px4-sample.ulg');
+    const restoredPath = join(evidence, 'restored.ulg');
+    await originalDownload.saveAs(restoredPath);
+    assert.equal(sha(readFileSync(restoredPath)), sha(original));
+    for (const width of [320, 768]) {
+      await page.setViewportSize({ width, height: 900 });
+      const dimensions = await page.evaluate(() => ({ doc: document.documentElement.scrollWidth, client: document.documentElement.clientWidth }));
+      assert.ok(dimensions.doc <= dimensions.client + 1, `${width}px overflow: ${JSON.stringify(dimensions)}`);
+      await auditAxe(page, `${width}px check result`);
+      await page.screenshot({ path: join(evidence, `checked-${width}.png`), fullPage: true });
+    }
+    await page.setViewportSize({ width: 1440, height: 900 });
+
+    // One changed byte inside a sealed chunk: Tampered, and no original is offered.
+    const sealedBytes = readFileSync(sealedPath);
+    const edited = Buffer.from(sealedBytes);
+    edited[8 + 20 + sealedBytes.readUInt32LE(8) + 36 + 20 + 1000] ^= 1;
+    const editedPath = join(evidence, 'edited.fseal'); writeFileSync(editedPath, edited);
+    await page.locator('#check-file').setInputFiles(editedPath);
+    await page.locator('#check-text').fill(handover);
+    await page.getByRole('button', { name: 'Check this log' }).click();
+    await waitResult(page, 'Tampered');
+    assert.equal(await page.locator('.restored').count(), 0);
+
+    // The real attack: the holder changes the log and seals it again with a fresh key.
+    const changed = Buffer.from(original); changed[original.length >> 1] ^= 1;
+    const changedPath = join(evidence, 'px4-sample.ulg'); writeFileSync(changedPath, changed);
+    await page.locator('#protect-file').setInputFiles(changedPath);
+    await page.getByRole('button', { name: 'Seal this log' }).click();
+    await page.waitForSelector('#handover-text', { timeout: 60000 });
+    const [forgedDownload] = await Promise.all([page.waitForEvent('download'), page.getByRole('button', { name: 'Download sealed file' }).click()]);
+    const forgedPath = join(evidence, 'forged.fseal'); await forgedDownload.saveAs(forgedPath);
+    await page.locator('#check-file').setInputFiles(forgedPath);
+    await page.locator('#check-text').fill(handover);
+    await page.getByRole('button', { name: 'Check this log' }).click();
+    await waitResult(page, 'Tampered');
+    assert.equal(await page.locator('.restored').count(), 0);
+
+    // No receipt pasted: refused with a reason rather than a weaker check.
+    await page.locator('#check-text').fill('no receipt here');
+    await page.getByRole('button', { name: 'Check this log' }).click();
+    assert.match(await page.getByRole('alert').first().textContent(), /Paste the receipt message/);
   });
 
   await context.close();

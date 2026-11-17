@@ -5,6 +5,7 @@
 #include <algorithm>
 #include <cstdio>
 #include <fstream>
+#include <iomanip>
 #include <limits>
 #include <sstream>
 #include <vector>
@@ -198,6 +199,7 @@ EMSCRIPTEN_KEEPALIVE const char* fseal_import(const char* path, const char* outp
     const fseal::ImportResult imported = fseal::import_ulog(
         path, output_path, "/ephemeral-import.pem", every);
     std::ostringstream telemetry;
+    telemetry << std::setprecision(17); // the default 6 digits cut coordinates to about 10 m
     for (size_t i = 0; i < imported.telemetry.size(); ++i) {
       const auto& point = imported.telemetry[i];
       if (i) telemetry << ',';

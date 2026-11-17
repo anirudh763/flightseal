@@ -31,7 +31,7 @@ function makeUlog() {
   const data = new Uint8Array(2 + 8 + 8 + 8 + 4 + 4 + 4);
   const view = new DataView(data.buffer);
   view.setUint16(0, 0, true); view.setBigUint64(2, 123456n, true);
-  view.setFloat64(10, 52.5, true); view.setFloat64(18, -4.125, true);
+  view.setFloat64(10, 47.3977419, true); view.setFloat64(18, 8.5455938, true);
   view.setFloat32(26, 20, true); view.setFloat32(30, 3, true); view.setFloat32(34, 4, true);
   return bytes(header, message('B', flags), message('F', fmt), message('A', add), message('D', data));
 }
@@ -53,7 +53,7 @@ test('native ULog import preserves exact raw bytes and signs the final source di
   while (source[dataMessageOffset + 2] !== 0x44) dataMessageOffset += 3 + sourceView.getUint16(dataMessageOffset, true);
   assert.deepEqual(result.telemetry[0], {
     record: 0, sourceOffset: String(dataMessageOffset), timestampUs: '123456',
-    altitudeM: 20, latitudeDeg: 52.5, longitudeDeg: -4.125, speedMps: 5,
+    altitudeM: 20, latitudeDeg: 47.3977419, longitudeDeg: 8.5455938, speedMps: 5,
   });
 
   const sealed = module.FS.readFile('/sealed-import.fseal');

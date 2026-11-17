@@ -4,7 +4,8 @@ export { recoverTemporaryOutputs } from './opfs.mjs';
 // Each operation owns its worker, so cancellation also discards native state and keys.
 // One MiB of envelope headroom lets a one-GiB raw source verify after sealing.
 export const VERIFY_MAX_BYTES = 1025 * 1024 * 1024;
-export const SEAL_MAX_BYTES = 16 * 1024 * 1024;
+export const SEAL_MAX_BYTES = 64 * 1024 * 1024; // the bridge also caps sealed output at 64 MiB
+const MEMORY_IMPORT_MAX_BYTES = 16 * 1024 * 1024;
 export const IMPORT_MAX_BYTES = 1024 * 1024 * 1024;
 
 function run(operation, file, fields, { signal } = {}) {
@@ -42,7 +43,7 @@ function run(operation, file, fields, { signal } = {}) {
     (async () => {
       if (outputName && !memoryOnly) releaseOwnership = await ownTemporaryOutput(outputName);
       if (finished) { if (releaseOwnership) await releaseOwnership(); return; }
-      if (memoryOnly && file.size > SEAL_MAX_BYTES) throw new Error('Large imports need browser private storage and Web Locks. Use a supported browser or the CLI.');
+      if (memoryOnly && file.size > MEMORY_IMPORT_MAX_BYTES) throw new Error('Large imports need browser private storage and Web Locks. Use a supported browser or the CLI.');
       worker.postMessage({ operation, file, ...fields, outputName, memoryOnly });
     })().catch((error) => finish(reject, error));
   });
