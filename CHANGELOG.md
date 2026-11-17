@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+### Security: weak Ed25519 public keys are refused
+
+- `fseal verify`, the WebAssembly verifier, `docs/verifier.js` and named key pins refuse small-order and
+  non-canonical Ed25519 public keys with "This public key is weak and can't prove anything" (CLI exit 2). Before this, a
+  rewritten log plus a receipt forged under such a key verified as INTACT. Vectors: `tests/fixtures/ed25519-weak-keys.json`.
+
 ### Verifier page: light rebuild with separate screens
 
 The file format, the C++ core and every verdict are unchanged; `docs/verifier.js` is unchanged.

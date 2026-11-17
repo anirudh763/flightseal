@@ -153,6 +153,10 @@ int verify(const std::string& log, const std::vector<std::pair<std::string, std:
     std::cerr << "verify: --receipts needs --pubkey with the 64-hex-digit key you trust\n";
     return 2;
   }
+  if (!receipts.empty() && weak_public_key(trusted)) {
+    std::cerr << "verify: " << kWeakKeyMessage << "\n";
+    return 2;
+  }
   std::vector<Receipt> list;
   if (!receipts.empty()) {
     std::ifstream in(receipts);

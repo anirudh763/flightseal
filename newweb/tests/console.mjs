@@ -538,11 +538,16 @@ try {
     assert.equal(await page.locator('tbody tr').count(), 8);
     assert.match(await page.locator('tbody').textContent(), /No trusted key entered/);
     await route(page, 'verify');
-    await page.locator('#trusted-key').fill('0'.repeat(64));
+    await page.locator('#trusted-key').fill('1'.repeat(64));
     await page.getByRole('button', { name: 'Run check' }).click(); await waitResult(page, 'Unverified');
     await route(page, 'receipts');
     assert.match(await page.locator('tbody').textContent(), /different key/);
     await route(page, 'verify');
+    // A weak key (here the identity point, under which any message "verifies") is refused, never shown as a verdict.
+    await page.locator('#trusted-key').fill('01' + '00'.repeat(31));
+    await page.getByRole('button', { name: 'Run check' }).click();
+    await page.getByRole('alert').filter({ hasText: "This public key is weak and can't prove anything" }).waitFor({ timeout: 30000 });
+    assert.equal(await page.locator('#result-heading').count(), 0, 'no verdict is shown for a weak key');
     await page.locator('#trusted-key').fill(readFileSync(resolve(ROOT, '../docs/samples/pubkey.txt'), 'utf8').trim());
     await page.getByRole('button', { name: 'Run check' }).click(); await waitResult(page, 'Intact');
   });
@@ -898,10 +903,18 @@ try {
     await page.getByRole('button', { name: /Seal a flight log/ }).click();
     await page.waitForFunction(() => location.hash === '#/app/protect' && document.querySelector('.commandbar h1')?.textContent === 'Seal & send');
     await page.locator('#protect-file').setInputFiles(ulg);
+    const pad = (n) => String(n).padStart(2, '0');
+    const landed = new Date(Math.floor((Date.now() - 3600e3) / 1000) * 1000);
+    await page.locator('.protect-options summary').first().click();
+    await page.locator('#protect-landing').fill(`${landed.getFullYear()}-${pad(landed.getMonth() + 1)}-${pad(landed.getDate())}T${pad(landed.getHours())}:${pad(landed.getMinutes())}:${pad(landed.getSeconds())}`);
     await page.getByRole('button', { name: 'Seal this log' }).click();
     await page.waitForSelector('#handover-text', { timeout: 60000 });
     const handover = await page.locator('#handover-text').inputValue();
     assert.match(handover, new RegExp(`Original file: ${original.length} bytes, SHA-256 ${sha(original)}`));
+    assert.equal(handover.split('\n')[2], `Reported landing time: ${landed.toISOString()} (operator-entered, not signed, not verified)`);
+    const senderFingerprint = await page.locator('.handover .fingerprint').innerText();
+    assert.match(senderFingerprint, /^([0-9a-f]{4} ){15}[0-9a-f]{4}$/);
+    assert.equal(await page.locator('.trust-line').count(), 0, "the sender's own seal shows no recipient trust line");
     assert.equal(handover.split('\n').filter((line) => line.startsWith('fseal-receipt v1 ')).length, 1);
     assert.match(await page.getByRole('link', { name: 'Email it' }).getAttribute('href'), /^mailto:\?subject=HashWing%20receipt/);
     await waitResult(page, 'Intact');
@@ -925,6 +938,49 @@ try {
     const restoredPath = join(evidence, 'restored.ulg');
     await originalDownload.saveAs(restoredPath);
     assert.equal(sha(readFileSync(restoredPath)), sha(original));
+
+    // Recipient trust: not in the list until the sender's fingerprint is pinned; times say where they come from.
+    const untrusted = "Valid signature, but this key isn't in your trusted list — confirm its fingerprint through a channel you already know.";
+    await page.waitForFunction((text) => document.querySelector('.result-panel .trust-line')?.textContent === text, untrusted);
+    const times = await page.locator('.time-fields > div').evaluateAll((divs) => divs.map((d) => [d.querySelector('dt').innerText, d.querySelector('dd span').innerText, d.querySelector('dd small').innerText]));
+    assert.deepEqual(times[0], ['Reported landing time', landed.toISOString(), 'operator-entered, not signed, not verified']);
+    assert.equal(times[1][0], 'Sealed on this computer at');
+    assert.equal(times[1][2], "this computer's clock, not verified; from the receipt message, not signed");
+    assert.deepEqual(times.slice(2, 4).map((t) => t[1]), ['Not registered', 'None']);
+    assert.match(times[4][1], /^1 h \d+ min \d+ s from the reported landing to the seal$/);
+    const copyPath = join(evidence, 'my-copy.ulg'); writeFileSync(copyPath, Buffer.concat([original, Buffer.from('\n')]));
+    const compare = async (path, status) => {
+      if (!(await page.locator('.restored .protect-options').evaluate((d) => d.open))) await page.locator('.restored .protect-options summary').click();
+      await page.locator('#compare-copy').setInputFiles(path);
+      await page.waitForFunction((s) => document.querySelector('.compare-result .status-label')?.textContent === s, status, { timeout: 30000 });
+    };
+    await compare(copyPath, 'Bytes differ');
+    assert.match(await page.locator('.compare-result').innerText(), /not proof of tampering/);
+    await compare(ulg, 'Matches');
+    const pinPage = await page.context().newPage();
+    await pinPage.goto(`${url}#/app/settings`);
+    await pinPage.locator('.trusted-companies-details > summary').click();
+    await pinPage.locator('#tc-name').fill('Pilot Co');
+    await pinPage.locator('#tc-fingerprint').fill(senderFingerprint);
+    await pinPage.getByLabel('phone call with a known contact', { exact: true }).check();
+    await pinPage.getByRole('button', { name: 'Add company' }).click();
+    await pinPage.waitForFunction(() => document.querySelector('.company-list')?.textContent.includes('Pilot Co'));
+    await pinPage.close();
+    await page.getByRole('button', { name: 'Check this log' }).click();
+    await waitResult(page, 'Intact');
+    await page.waitForSelector('.restored', { timeout: 30000 });
+    const trusted = 'Signed by a key you trust: Pilot Co (added from phone call with a known contact)';
+    await page.waitForFunction((text) => document.querySelector('.result-panel .trust-line')?.textContent === text, trusted);
+    await compare(copyPath, 'Bytes differ');
+    const [textReport] = await Promise.all([page.waitForEvent('download'), page.getByRole('button', { name: 'Download text report' }).click()]);
+    const report = readFileSync(await textReport.path(), 'utf8');
+    for (const line of [`Key trust: ${trusted}`, 'Key source: phone call with a known contact', `Reported landing time: ${landed.toISOString()} (operator-entered, not signed, not verified)`, 'Sealed on this computer at:', 'Registry acceptance: Not registered', 'Trusted timestamp: None', 'Reported landing-to-seal interval: 1 h ', 'Your copy my-copy.ulg: Bytes differ.', 'not proof of tampering', 'Native chain result:']) assert.ok(report.includes(line), `report: ${line}`);
+    const [jsonReport] = await Promise.all([page.waitForEvent('download'), page.getByRole('button', { name: 'Download JSON' }).click()]);
+    const json = JSON.parse(readFileSync(await jsonReport.path(), 'utf8'));
+    assert.equal(json.keyTrust.status, 'trusted');
+    assert.equal(json.timeProvenance.fields.length, 5);
+    assert.deepEqual(json.fileComparison.items.map((item) => [item.subject, item.status]), [['Recovered file', 'Matches'], ['Your copy', 'Bytes differ']]);
+    assert.ok(json.nativeVerdict && json.report, 'older keys stay');
     for (const width of [320, 768]) {
       await page.setViewportSize({ width, height: 900 });
       const dimensions = await page.evaluate(() => ({ doc: document.documentElement.scrollWidth, client: document.documentElement.clientWidth }));

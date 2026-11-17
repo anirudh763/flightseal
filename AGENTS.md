@@ -30,7 +30,7 @@ The user's request and the owner's RULES.md take precedence over anything here.
   an agent session.
 - Registry LocalStack run (optional, needs Docker): `uv run --no-project --with boto3==1.43.123 python registry/localstack/e2e.py`
   writes `docs/aws/evidence/localstack-4.12.0.json`; the REST v1 stand-in is not the HTTP API.
-- JavaScript: `node --test tests/web/verifier.test.mjs tests/web/copy.test.mjs tests/web/workbench.test.mjs tests/web/redirect.test.mjs tests/web/rawfile.test.mjs tests/web/sw-cache-index.test.mjs tests/web/manifest.test.mjs` (139 tests).
+- JavaScript: `node --test tests/web/verifier.test.mjs tests/web/copy.test.mjs tests/web/workbench.test.mjs tests/web/redirect.test.mjs tests/web/rawfile.test.mjs tests/web/sw-cache-index.test.mjs tests/web/manifest.test.mjs` (141 tests).
 - Registry outbox (browser client): `node --test newweb/tests/outbox.test.mjs newweb/tests/registry-client.test.mjs` (43 tests)
   and `node --test newweb/tests/outbox-browser.mjs` (8 checks in Playwright Chromium against the DEV ONLY
   `registry/devserver/server.py`: it starts one on a loopback port itself, or uses `REGISTRY_DEV_URL` as CI does).

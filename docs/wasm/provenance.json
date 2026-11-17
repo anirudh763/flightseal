@@ -3,17 +3,17 @@
   "openssl_version": "3.5.8",
   "openssl_archive_sha256": "a8f84a39918ec6415ce765d9b429d313ba97b8143169c172e734b9514464f5b2",
   "sha256": {
-    "src/fseal.cpp": "e066a816a1d604ca4a0de9b2994cca99a341e87965b03eb10c0fcfee8b1d9091",
-    "src/fseal.h": "25185aa6c274d8d58a3f9201357c78af387630cb9cf35af7fc5edff31474a507",
+    "src/fseal.cpp": "0cb4253c5fdab54ef65f7231645869943090fd19146b67712406f18735194fc9",
+    "src/fseal.h": "68ec1cceb64da9673f92cfbee221d0a685a7b39eea54b0f53a21661ff3b94d0d",
     "src/import.cpp": "db54461d848b81f0fd28bbda5fb719ebeea842105af67d41b00b026ecf4f73d0",
     "src/import.h": "53ad9658244edade906942774bc8d9e673b3dbfb1a2f3206ef626ca1745dd88f",
-    "wasm/bridge.cpp": "2ded01626bc67be4d03248446d5c9d3fba3f41827b39ac5d023f7b59b9782981",
-    "CMakeLists.txt": "62056dae9d8ddbf0acdf4221bac3d2b795a82bb68e1ce9280f308a55a36e2df6",
+    "wasm/bridge.cpp": "b88a1e68745fb6f69eaa2b67bdaab734ea1e67c96d574285e751dfabe1483050",
+    "CMakeLists.txt": "c30ff0a77dd46f3c534b551410a2a4affe597e92b1b0455d338f2b2d3fe0e9d6",
     "wasm/CMakeLists.txt": "29a730bc30fb89b0829edf0e26ce420afd9b5e8429586243d93bbd080aecbce6",
     "scripts/build_wasm.sh": "1b6e416f5202395cad0d6ac76e6d19cc7f846b355baeaff330086fef5a9d008f",
     "scripts/build_wasm_inner.sh": "197117968d658e05f815a87c39cf12a2aa8d1f3fffedea53b073b3ddd468c37f",
     "docs/wasm/flightseal.mjs": "e85cfa410dc9349bcb9de81f86720ca469e5e5d06115b8974b9e34eb126ded26",
-    "docs/wasm/flightseal.wasm": "bc0e3a5847871e0c58e30920b7478df056c7753aa4c2f905fcd69d7aa3761fb9"
+    "docs/wasm/flightseal.wasm": "85288397ae88a61b0f5cf59cd6446776b95f46859cfbf1e4695b04c37939e3cd"
   },
   "telemetry_schema": {
     "basis": "PX4 ULog/uORB field-name, scalar type, and unit conventions",
