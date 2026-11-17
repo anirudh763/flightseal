@@ -1,0 +1,341 @@
+---
+name: HashWing
+status: final
+updated: 2026-11-17
+sources:
+  - ../../../newweb/src/main.jsx
+  - ../../../newweb/src/recipient-trust.mjs
+  - ../../../newweb/src/trusted-keys.mjs
+  - ../../../DESIGN.md
+  - ../../../docs/MANIFEST_MODE.md
+  - ../../../docs/aws/ARCHITECTURE_AWS.md
+  - ../../../registry/registry/app.py
+companions:
+  - DESIGN.md
+---
+
+# HashWing: how it works
+
+This spine says how HashWing behaves. `DESIGN.md` beside it says how it looks; tokens are named like `{colors.ok}`. If a mock, a plan or code disagrees with this file, this file wins until it is updated.
+
+Each surface, state and string is marked with one of three tags:
+
+- **Existing**: in `main` at 951c3dc. Keep it as it is.
+- **Change**: in `main`, but it should change.
+- **New (registry)**: to be built in the registry wiring PR. It appears only when the feature flag below is on.
+
+`[ASSUMPTION]` marks a decision this headless run made without the owner. Each one is also logged in `.memlog.md`.
+
+## Foundation
+
+- **Form factor.** Responsive web app (the React console in `newweb/`), installable for offline use. It runs on a laptop in the office and on a phone or tablet in the field. Verified at 320, 768 and 1440 px.
+- **UI system.** No component library. Native HTML controls (`<details>`, `<dialog>`, `<input type="file">`, `<input type="datetime-local">`) and Lucide icons with text labels. Native disclosures provide the keyboard behavior; no custom menu framework is added.
+- **Where the work happens.** All hashing, sealing and checking runs in the browser. Files never leave the device. The optional receipt registry (AWS, `docs/aws/ARCHITECTURE_AWS.md`) only ever receives the receipt line (head, count and signature) for a company key that has been enrolled.
+- **People.**
+  - **Operations lead / company admin.** Owns the company signing key, enrolls it, manages links and hosted records.
+  - **Pilot.** Seals files right after landing, often in a field with poor signal.
+  - **Outside reviewer.** A client or insurer with no account. Receives a link or files and checks them.
+
+## Information Architecture
+
+Primary nav (Existing: `PRIMARY_NAV`). The order is fixed.
+
+| Nav item | Route | Purpose | Who |
+|---|---|---|---|
+| Seal & send | `protect` | Seal a small file or a set of large files, then send the receipt message. With the flag on, it also lists items sealed on this device with their registry status. | Pilot, ops lead |
+| Verify | `verify` | Check what you were sent: a share link, or files plus a receipt message. | Reviewer |
+| Records | `records` | Browse the records inside a loaded `.fseal` log. | Anyone with a log loaded |
+| Receipts | `receipts` | Receipt coverage and signature checks for a loaded log. | Anyone with a log loaded |
+| Trust | `help` | Trusted companies (fingerprint pins), your signing key, your company's keys (flag on), and plain-language limits. | Reviewer, ops lead |
+
+The "More tools" disclosure (Existing: `MORE_NAV`, a `<details>` in the nav) holds Samples (`sandbox`), Video, Benchmarks and System. It is closed by default and opens automatically when one of those pages is current. Escape closes it and returns focus to its summary.
+
+Changes to the IA:
+
+- **Change: Trust becomes the home for key management.** `TrustedCompanies` and the signing-key controls render today only under `settings`, which the console nav cannot reach, and the seal hint says "Load or generate a key under Settings". Move both into Trust as two sections, "Trusted companies" and "Your signing key", above the existing "Trust and limits" text. Rewrite the hint to "…under Trust". `[ASSUMPTION]`
+- **Change: Seal & send shows one step at a time.** Today the seal panel and the check panel sit side by side, each with a primary button. The check panel moves to Verify ("Check files"), and Seal & send keeps a text link: "Checking files someone sent you? Go to Verify". `[ASSUMPTION]`
+- **Change: Verify opens on the reviewer's task.** The first panel is "Check what you were sent", with two choices: "I have a link" and "I have files". The sample demo panel moves behind a text link "Try a sample" that goes to Samples. The existing `.fseal` workbench inputs stay, under "More options". `[ASSUMPTION]`
+- **New (registry): "Sealed on this device" list** at the bottom of Seal & send. Each row shows a registry chip; opening a row gives its detail (status, share links, delete). `[ASSUMPTION]`: it lives here rather than in Records, because Records means log records.
+- **New (registry): share-link landing.** A reviewer opening a link lands on Verify with the "I have a link" choice already filled in. The token is carried only in the URL fragment (the console already routes by fragment, so it rides as a parameter of the Verify hash route), never in the path or a server-visible query. That keeps it out of Referer headers and server logs. It is never written to analytics, history state beyond the current entry, or storage. `[ASSUMPTION]`: the exact route is for the wiring PR to name.
+- **New (registry): Trust → "Your company's keys"**, for signed-in registry members. Only admins see its actions.
+
+Every stated need has a surface that serves it, and every surface is reached by at least one key flow:
+
+| Need | Surface | Flow |
+|---|---|---|
+| Seal one small file | Seal & send | 1 |
+| Seal large files (fingerprints only) | Seal & send | 1 |
+| Send the receipt message | Seal & send | 1 |
+| Register a receipt | Seal & send | 1 |
+| Check a link | Verify | 2 |
+| Check files | Verify | 2 |
+| Pin a company | Trust | 2, 3 |
+| Enroll a key | Trust | 3 |
+| Withdraw a link | Seal & send detail | 1 |
+| Delete a hosted record | Seal & send detail | 1 |
+
+## Feature flag: registry
+
+- **Rule.** All registry UI appears only when a registry URL is configured at build or deploy time. "Registry UI" means: the registry chip, the "Sealed on this device" list, registry sign-in, share links, withdraw and delete, "Your company's keys", the outbox and every message in "Registry errors" below. `[ASSUMPTION]`: the config name, for example `VITE_REGISTRY_URL`, is for the wiring PR to choose. It is a public origin, not a secret.
+- **Flag off.** No element, network request, outbox database or service-worker route for the registry exists. The Verify time fields keep the existing row "Registry acceptance: Not registered", with basis "no registry was used" (Existing: `timeFields()`).
+- **Flag on, but the registry sign-in is missing or expired.** Sealing still works fully offline. Each item's chip reads "Sealed locally", and its detail shows "Sign in to register" as its single action.
+- **Flag on is never "required".** Sealing, sending and checking never wait on the registry.
+
+## Registry and offline states
+
+New (registry). This is the lifecycle of one sealed item's registration, kept in an owner-scoped IndexedDB outbox. The outbox stores only the signed receipt line, the envelope ID, a stable idempotency key and retry state. It never stores original files or private keys.
+
+| State (chip text) | Meaning | Detail line | Single action |
+|---|---|---|---|
+| Sealed locally | Sealed on this device. Not queued yet, because there is no registry sign-in. | "Sealed on this device. Not sent to the registry yet." | "Sign in to register" |
+| Waiting for connection | Queued, but the device is offline or the registry can't be reached. Retries are automatic. | "Saved on this device. It will register when you're back online. You can close this tab." | "Try now" (secondary) |
+| Registering | A request is in flight. | "Sending the receipt to the registry…" | none |
+| Registered | An acknowledgement is saved locally. | "Registered at {received_at}. This is the registry's statement, not proof of the files." | "Make a share link" |
+| Needs attention | The registry refused the request, or retries ran out. The request will not resend by itself. | A next-step sentence from "Registry errors". | One fix action, from the same table |
+
+State rules:
+
+1. **"Not yet registered"** is the summary label for every state except Registered. It appears in the Verify time fields, in reports (text, Markdown, JSON and PDF) and in the share-dialog summary. It changes only when the acknowledgement has been written to the outbox in a committed transaction. A 200 response that has not been saved yet does not count.
+2. **"Not registered" and "Not yet registered" mean different things.** "Not registered" means the flag is off or no registry was used. "Not yet registered" means queued or pending. Never show both for the same item.
+3. **Queued work is never shown as witnessed.** Counts on Seal & send say, for example, "3 registered · 2 not yet registered". They never combine the two.
+4. **A lost acknowledgement is not a failure.** A retry that returns the original acknowledgement goes to Registered and shows the original `received_at`. There is no duplicate row and no "registered again" message.
+5. **Account switch or sign-out stops sending.** It stops dispatch and hides the other owner's rows. A result that arrives late for a previous owner is ignored. Signing back in as the same owner resumes sending; a different owner never sends those rows.
+6. **Offline, with the flag on:** one calm inline notice at the top of the "Sealed on this device" list says "You're offline. Sealing and checking still work. Registrations will send when you reconnect." There is no toast or banner, and the notice goes away by itself when the device reconnects.
+7. **Export pending proof.** It sits under "More options" in a row's detail, for any state except Registered. It downloads the receipt message and the sealed file or sealed list, if they are still in memory. If browser storage was cleared, the row is gone, and the copy never suggests it can be recovered.
+
+### Share links and hosted records
+
+New (registry).
+
+- **Make a share link** (for Registered items; any member). The link shows the registry's record of this receipt: head, count, key fingerprint and received time. It does not show the files, names or the manifest. The link appears in a share link row, with Copy link and Withdraw link. Field hint: "Anyone with this link can see that the registry received this receipt. They still need the files and the receipt message to check the files. Links stop working after {expiry date}."
+- **Withdraw link** (any member). No dialog, because a new link can be made at any time. Immediate inline status: "Link withdrawn. It no longer opens. Copies of the receipt someone already has aren't affected." A new link is always a new token.
+- **Delete hosted record** (admins only; members don't see this button). It opens a confirmation `<dialog>`:
+  - Title: "Delete the hosted record?"
+  - Body: "This removes the registry's record of this receipt and stops every link to it. Your sealed files and receipt messages are not touched. Anyone who already downloaded a report keeps it; HashWing can't recall copies."
+  - Buttons: "Delete hosted record" (bad fill) and "Keep it" (secondary; it has focus by default).
+
+  After deletion, the row's chip reads "Hosted record deleted" (neutral). The saved acknowledgement time is no longer shown as current.
+- **Mark company key as compromised** (admins only, Trust → Your company's keys). This also uses a confirmation dialog. Its body says: "New receipts signed with it will be refused. Older proofs from it will show a warning."
+
+## Voice and Tone
+
+Plain words, short sentences, second person, no exclamation marks and no emoji. Say what happened, what it means and the one next step. Technical words (SHA-256, Ed25519, chain head) appear only under "What is this?" or in data cells.
+
+| Do | Don't |
+|---|---|
+| "Saved on this device. It will register when you're back online." | "Error: network unavailable (ERR_OFFLINE)" |
+| "Bytes differ" plus the existing explanation | "Tampered!" or "File corrupted" |
+| "Registered at 14:02 UTC. This is the registry's statement, not proof of the files." | "Verified by HashWing Cloud ✓" |
+| "Signed by a key you trust: Skyline Inspections (added from contract or invoice)" | "Identity verified" |
+| "Replaced" for an old company key | "Rotated", "deprecated" or "revoked" (the internal registry value `rotated` is never shown) |
+| "This link doesn't open. It may have been withdrawn or expired, or it was copied incompletely. Ask the sender for a new link." | Different messages for withdrawn, expired and unknown links |
+
+### Honest-status copy
+
+These strings are binding. Existing strings are reused verbatim from `recipient-trust.mjs`. Do not paraphrase them in new surfaces.
+
+- **Bytes differ (Existing, `BYTES_DIFFER`).** "This file's bytes are not the ones that were sealed. Editing, re-saving, metadata changes, recompression, truncation or corruption can cause this. It is not proof of tampering, and HashWing doesn't pick a cause. Ask for the original file, or an archive that keeps the original bytes." It uses the warn style, never bad.
+- **Reported vs verified time (Existing, `timeFields()`).** Every time is shown with its basis line:
+  - Reported landing time: "operator-entered, signed, not verified" (manifest) or "operator-entered, not signed, not verified" (embedded)
+  - Sealed on this computer at: "this computer's clock, not verified; from the receipt message, not signed"
+  - Trusted timestamp: "None", with basis "receipt v1 has no signed time"
+  - Reported landing-to-seal interval: stays negative when negative, with the existing explanation
+
+  No new surface may call a time "verified" unless it was independently checked.
+- **Registry acceptance (Change, extending `timeFields()`).**
+  - Flag off: "Not registered", with basis "no registry was used" (Existing).
+  - Flag on, no saved acknowledgement: "Not yet registered", with basis "no acknowledgement saved yet".
+  - Saved: `{received_at}`, with basis "the registry's clock; the registry's statement, not proof of the files".
+- **Key trust provenance (Existing, `trustLine()`).** The trusted, untrusted, replaced, compromised, wrong-key, invalid-signature and weak-key lines are reused verbatim. On the share-link page, add: "The registry checked that this key is enrolled for the company's account. It did not check who the company is. Compare the fingerprint with one you got from the company yourself." (New)
+- **Key state display (New).** The registry key states `active`, `rotated` and `compromised` display as "Active", "Replaced on {date}" and "Marked compromised on {date}". This matches the local pin wording in `historyStatus()`.
+- **Limits (Existing, Trust page).** Sealing shows that the file has not changed since it was sealed. It cannot show what happened before sealing. Nothing here claims legal admissibility, sensor truth or insurer acceptance.
+
+## Component Patterns
+
+Behavior only. Visual specs are in `DESIGN.md` under Components.
+
+| Component | Behavior |
+|---|---|
+| Step panel (Change) | One task. It has a heading, the fields, "More options" (closed), and one primary button at the end. A finished step collapses to a one-line summary with "Change". |
+| "More options" disclosure (Existing) | Native `<details>`, closed by default. It holds optional fields: reported landing time, notes, include file names, edited copy, `.fseal` workbench inputs, export pending proof. |
+| "What is this?" disclosure (Existing) | Native `<details>` with two to four short paragraphs. Never required to finish a task. |
+| Registry chip (New) | A status word in a pill. It is not a button. The row it sits in is the button. Its text changes are announced through the row's live region (see Accessibility Floor). |
+| Sealed item row (New) | A whole-row button with the item name, "sealed {local time}" and the chip. It opens the detail inline (an accordion, not a dialog). Keyboard: Enter or Space toggles it. |
+| Share link row (New) | Read-only text field, then Copy link, then Withdraw link. Copy reports "Link copied" in a polite live region. |
+| Confirm dialog (Existing `ConfirmBox`; New `<dialog>` for delete) | Used only for replacing a key, marking a key compromised, deleting a hosted record and removing a company. The safe choice has the default focus. Escape cancels. Focus returns to the button that opened it. |
+| Inline notice (New) | Sits under what it is about. One or two sentences and at most one action. Never auto-dismissed, never animated. |
+| Trust line (Existing) | Always appears beside a verification result, as a word, a shape and a color. |
+| Fingerprint (Existing) | Groups of four, wrapped, with a full-value copy. Never shortened without a copy action. |
+
+## State Patterns
+
+| Surface | Empty | Loading | Error | Offline |
+|---|---|---|---|---|
+| Seal & send, small file | "Choose a flight log to seal." Primary button disabled until a file is chosen. | "Sealing…" in the button. Busy state with `aria-busy`. | Existing message plus the next step, for example "This file is larger than 45 MiB. Choose Large files instead." | Works fully. No notice. |
+| Seal & send, large files | "Add the files you want to fingerprint. They stay on this device." | Existing per-file progress with "Cancel". Cancelling keeps the files already hashed. | "Couldn't read {name}. Check that it is still on this device, then add it again." | Works fully. |
+| Sealed on this device (New) | "Nothing sealed on this device yet." | Rows render from the outbox. Use a skeleton only if loading takes more than 300 ms. | "Couldn't open this device's saved list. Your sealed files aren't affected. Try reloading." | The notice from state rule 6. |
+| Verify, link (New) | "Paste the link you were sent." | "Checking the link…" | The single 404 message from Voice and Tone; the 503 message from the table below. | "You're offline. Opening a link needs a connection. You can still check files." Action: "Check files instead". |
+| Verify, files (Existing) | Existing field hints. | "Checking the sealed list…" | "Manifest not verified" plus the existing three-point next step. | Works fully. |
+| Records / Receipts (Existing) | Existing `EmptyState`, which points to Verify or Samples. | Existing. | "Could not load this record page. Retry by changing pages." (Existing) | Works. |
+| Trust → Trusted companies (Existing) | "No trusted companies yet." | n/a | Existing field errors. | Works. |
+| Trust → Your company's keys (New) | "No company key enrolled yet." Admins also see "Enroll your signing key". | "Loading keys…" | The table below. | "You're offline. Key changes need a connection." Actions are disabled, with a visible reason. |
+
+Stale results: changing any input clears the previous verified or registered result shown for that input (Existing rule in the root `DESIGN.md`).
+
+### Registry errors (New)
+
+Every error shows one sentence saying what happened and one action. Raw codes appear only under "More options" ("Technical details: HTTP 422 envelope_expired").
+
+| Response | Shown as | Message | Action |
+|---|---|---|---|
+| Offline / network error / timeout | Waiting for connection | "Saved on this device. It will register when you're back online." | "Try now" |
+| 401 | Needs attention | "Your registry sign-in has ended. Sign in again to send this." | "Sign in" |
+| 403, key not enrolled | Needs attention | "This signing key isn't enrolled for your company. Ask your admin to enroll it in Trust." | "Open Trust" |
+| 403, key compromised or replaced | Needs attention | "This signing key was marked compromised or replaced, so the registry won't accept new receipts from it." | "Open Trust" |
+| 409 | Needs attention | "The registry already has a different request with this ID. Export this proof and contact your admin." | "Export pending proof" |
+| 410 | Hosted record deleted | "This receipt's hosted record was deleted, so it can't be registered again." | none |
+| 422, envelope expired | Needs attention | "This saved request is too old to send. Seal the files again to register them." | "Go to Seal & send" |
+| 422, signature | Needs attention | "The registry couldn't check this receipt's signature. Export this proof and contact your admin." | "Export pending proof" |
+| 429 | Needs attention | "Your company has reached this month's registration limit. It stays saved here. Ask your admin." | "Try again later" |
+| 503 | Waiting for connection | "The registry is temporarily unavailable. It will try again automatically." | "Try now" |
+| Retries exhausted | Needs attention | "This couldn't be sent after several tries. It is still saved here." | "Try again" |
+
+## Interaction Primitives
+
+- **One primary action per step.** No surface shows two primary buttons at once.
+- **Automatic, quiet retries.** The outbox uses exponential backoff with jitter. "Try now" is always available, and retries never cause a layout change or a focus jump.
+- **Keyboard.** Tab order follows the reading order. Enter activates and Space toggles. Escape closes the open disclosure or dialog and returns focus to its trigger (Existing `closeDisclosure`). On route change, focus moves to the `<h1>` (Existing). There are no single-key shortcuts.
+- **Never banned, never hidden.** No hover-only actions, no infinite scroll, no auto-advancing steps, no surprise modals, no auto-dismissing messages.
+- **Clipboard.** Copy actions report through a polite live region and fall back to selecting the text.
+
+## Accessibility Floor
+
+- WCAG 2.2 AA. Every target is at least 44 by 44 px. Focus is always visible (`{colors.focus}`, 3px ring). The skip link stays (Existing).
+- Every status pairs a word with a shape and a color, including under `forced-colors: active`.
+- Registry chip changes are announced once, politely, from one `role="status"` region per list, for example "Flight 12: Registered". The announcement is never repeated on re-render. Needs attention uses the same polite region, not `alert`.
+- Field errors use `role="alert"` next to the field, linked to it with `aria-describedby`.
+- Dialogs are native `<dialog>` elements. They trap focus, are labelled by their title and return focus to the button that opened them.
+- Reduced motion: no spinners or transitions. "Registering" shows static dots.
+- Hashes and fingerprints carry an accessible name, for example "Key fingerprint, 64 hexadecimal digits", plus a copy button. A screen reader is not made to read 64 characters on every pass.
+- Record which assistive technology was actually tested (for example VoiceOver with Safari) instead of claiming universal support.
+
+## Responsive & Platform
+
+| Width | Behavior |
+|---|---|
+| 1440px | Rail visible. A step panel takes the main column. The "Sealed on this device" list sits below it. |
+| 768px | The rail becomes the "Menu" button (Existing). One column. "More tools" stays a disclosure inside the menu. |
+| 320px | One column with a 16px gutter. The share link row stacks: field, then two full-width buttons. Time fields stack label, value, basis. Nothing scrolls horizontally, and no control is clipped. |
+
+Installed and offline: sealing, checking and the outbox work offline. The service worker never caches registry API responses (Existing rule: private APIs are never cached).
+
+## Inspiration & Anti-patterns
+
+- **Kept:** the existing honest-wording discipline (`BYTES_DIFFER`, time basis lines, the trust line). It is the product's voice.
+- **Rejected:** toast stacks, red banners for offline, cloud badges like "Verified by HashWing", spinners on every state, onboarding carousels, and a dark-first "aerospace" theme (already rejected in the root `DESIGN.md`).
+
+## Key Flows
+
+### Flow 1: Priya seals and sends after an inspection (pilot)
+
+Priya is a pilot for a three-person roof-inspection company. She has just landed beside a warehouse with one bar of signal, and the flag is on.
+
+1. She opens Seal & send. The step "What are you sealing?" offers "Small file (seal the whole file, up to 45 MiB)" and "Large files (fingerprint only)".
+2. **Small file:** she chooses the `.ulg` log. Under "More options" she enters the reported landing time. She presses **Seal this log**.
+3. **Large files:** she adds 14 video files totalling 9 GB. Per-file progress shows, with Cancel. Each file is hashed on the device and nothing is uploaded. She presses **Seal the list**.
+4. The step collapses to "Sealed · 14 files". The next step, "Send this receipt to someone else now", has one primary button, **Copy message**. Email and Download are secondary.
+5. Below, the new row in "Sealed on this device" shows **Waiting for connection**, with "Saved on this device. It will register when you're back online. You can close this tab."
+6. She closes the laptop. Back in the van, with signal, she reopens HashWing. The chip moves to **Registering**, then **Registered**, announced once.
+7. **Climax:** she opens the row and sees "Registered at 15:41 UTC. This is the registry's statement, not proof of the files." She presses **Make a share link**, copies it and pastes it into her email to the client next to the receipt message.
+
+Failure paths:
+
+- **Lost acknowledgement.** The retry returns the original `received_at`. There is still one row.
+- **429.** The chip shows Needs attention with the quota message. Everything stays saved locally.
+- **Next morning.** The ops lead withdraws an old link from the row detail and gets the inline confirmation. For a record sent to the wrong client, the admin uses "Delete hosted record", and the dialog's safe default is "Keep it".
+
+### Flow 2: Daniel checks what he was sent (outside reviewer, no account)
+
+Daniel is a claims reviewer at an insurer. He has the email: a link, a receipt message and a shared folder of files.
+
+1. He opens the link. Verify loads with "I have a link" already chosen. There is no sign-in prompt.
+2. The panel shows the registry's statement: "The registry received a receipt for 14 items from the key with fingerprint 3f9a 1c… on 2026-11-17 15:41 UTC." Below it is the provenance line: the registry checked enrollment, not who the company is.
+3. One next step: **Check the files**. It switches to "I have files" with the link's record kept for comparison.
+4. He adds the sealed list, pastes the receipt message and adds the 14 files. For the trusted key, he chooses "Skyline Inspections", which he pinned last month from the contract.
+5. **Climax:** "Manifest verified". The trust line reads "Signed by a key you trust: Skyline Inspections (added from contract or invoice)". The registry row reads "Matches the registry's record". Thirteen items read **Matches**, and one reads **Bytes differ**, with the existing explanation and no accusation. The time fields show reported landing (operator-entered, signed, not verified), the seal time on Priya's computer, and the registry acceptance with its basis.
+6. He downloads the PDF report, which carries the same lines.
+
+Failure paths:
+
+- **Withdrawn, expired or mangled link.** One message: "This link doesn't open. It may have been withdrawn or expired, or it was copied incompletely. Ask the sender for a new link." Then "Check files instead".
+- **No pinned key.** He sees the existing untrusted line, plus "What is this?", which explains how to get a fingerprint from a channel he already knows.
+
+### Flow 3: Marcus sets up company trust (ops lead / admin)
+
+Marcus is the ops lead and owns the company's signing key. `[ASSUMPTION]`: "adds trusted keys" covers both halves of trust, enrolling the company key and a reviewer pinning it.
+
+1. **Your signing key** (Trust; Existing controls, moved). He loads or generates the company signing key. The page shows its fingerprint with "Give it to recipients through a channel they already know, so they can add you as a trusted company."
+2. **Your company's keys** (Trust; New, flag on, admin). He presses **Enroll this key**. HashWing gets a one-time challenge, signs it and enrolls the key in one step. The list shows the fingerprint as **Active**, with "Enrolled {date} by you".
+3. **Climax:** the pilots' outstanding rows that showed "This signing key isn't enrolled…" move from Needs attention to Registering, then to Registered, after one **Try again** each.
+4. He puts the fingerprint on the company website and in client contracts.
+5. **Reviewer half** (Existing). Daniel, in Trust → Trusted companies, adds "Skyline Inspections", pastes the fingerprint and chooses "contract or invoice" as the source. The fingerprint and its source show in the company list.
+6. **Replacing a key.** Marcus enrolls a new key. The old key shows **Replaced on {date}**, never "rotated". Daniel replacing his pin needs the existing in-page confirmation, "Replace key" or "Keep current key".
+
+## Open questions
+
+- Registry sign-in surface. Cognito hosted UI or an in-app form? Where does it live (the command bar's account area is the default assumption)?
+- The exact config name for the registry URL, and the share-link route.
+- Does "Sealed on this device" belong in Seal & send (as assumed here) or in a future Records tab?
+- Should share-link expiry be chosen per link (the registry allows up to 365 days) or fixed at the 30-day default in the UI?
+
+## Acceptance checklist
+
+The wiring PR tests against these items. Each one is observable in the browser.
+
+### With the registry flag off
+
+- **AC-01** No registry URL is configured. No registry chip, "Sealed on this device" list, share link, "Your company's keys" section or registry sign-in appears on any page.
+- **AC-02** No registry URL is configured. Sealing and checking a small file and a large-file set make no network request to a registry origin, and no outbox IndexedDB database is created.
+- **AC-03** No registry URL is configured. The Verify time fields show "Registry acceptance", "Not registered", "no registry was used".
+- **AC-04** The primary nav shows exactly Seal & send, Verify, Records, Receipts and Trust, in that order. "More tools" contains Samples, Video, Benchmarks and System, and is closed unless one of them is the current page.
+- **AC-05** With "More tools" open, Escape closes it and moves focus to its summary.
+- **AC-06** No Seal & send or Verify step shows more than one `.button.primary` at a time.
+- **AC-07** "More options" and "What is this?" are closed on first load of every page.
+- **AC-08** Trust contains "Trusted companies" and "Your signing key" in console mode. The seal hint refers to Trust, not Settings.
+- **AC-09** Verify opens with "Check what you were sent". The sample demo is reachable from a "Try a sample" link.
+- **AC-10** A byte-different file shows "Bytes differ" in the warn style with the exact `BYTES_DIFFER.text`. No surface shows "tampered" for it.
+- **AC-11** Every time row shows its basis line verbatim from `timeFields()`. A negative interval is shown as negative.
+- **AC-12** The trust line strings match `trustLine()` verbatim for trusted, untrusted, replaced, compromised, wrong-key, invalid-signature and weak.
+- **AC-13** Every interactive element is at least 44 by 44 px at 320, 768 and 1440 px.
+- **AC-14** At 320, 768 and 1440 px there is no horizontal page scroll and no clipped control. Fingerprints and SHA-256 values wrap within their cells.
+- **AC-15** Under `forced-colors: active`, every status still shows its word and its distinct shape.
+- **AC-16** With reduced motion set, no spinner or transition animates.
+- **AC-17** On route change, focus moves to the page `<h1>`. The skip link reaches `#main`.
+- **AC-18** Automated axe finds no serious or critical violations on Seal & send, Verify, Trust, Records and Receipts.
+
+### With the registry flag on
+
+- **AC-19** A registry URL is configured and there is no registry sign-in. A new seal shows the chip "Sealed locally" and the single action "Sign in to register".
+- **AC-20** Signed in and offline. A new seal shows "Waiting for connection", and the list shows the notice "You're offline. Sealing and checking still work. Registrations will send when you reconnect."
+- **AC-21** A queued item survives a tab close and reopen, and registers after reconnecting without user action.
+- **AC-22** The chip moves Registering, then Registered. Each change is announced once through `role="status"`.
+- **AC-23** The summary reads "Not yet registered" until the acknowledgement is committed to the outbox. A response received but not saved, for example when the tab is killed mid-write, still shows "Not yet registered" after reopening.
+- **AC-24** A lost acknowledgement followed by a retry yields exactly one row, showing the original `received_at`.
+- **AC-25** After the acknowledgement is saved, the Verify time row reads `{received_at}` with basis "the registry's clock; the registry's statement, not proof of the files".
+- **AC-26** "Not registered" and "Not yet registered" never appear for the same item.
+- **AC-27** Counts show registered and not-yet-registered items separately. Queued items are never counted as registered.
+- **AC-28** Signing out or switching account stops dispatch. Rows owned by the other account are not shown and are not sent.
+- **AC-29** Each response in "Registry errors" (401, 403 not enrolled, 403 compromised, 409, 410, 422 expired, 422 signature, 429, 503, retries exhausted) shows its exact message and single action. Raw codes appear only under "More options".
+- **AC-30** "Make a share link" appears only for Registered items. The token is in the URL fragment and does not appear in analytics, storage or server request logs from the app.
+- **AC-31** A withdrawn, expired, unknown or malformed link shows the same message: "This link doesn't open. It may have been withdrawn or expired, or it was copied incompletely. Ask the sender for a new link."
+- **AC-32** "Withdraw link" removes the link immediately, with the inline message "Link withdrawn. It no longer opens. Copies of the receipt someone already has aren't affected." The withdrawn link then gives the AC-31 message.
+- **AC-33** "Delete hosted record" is visible only to admins. Its dialog has "Keep it" focused by default, Escape cancels, and focus returns to the trigger.
+- **AC-34** After deletion, the row reads "Hosted record deleted", and every link to it gives the AC-31 message.
+- **AC-35** The share-link page shows the head, count, key fingerprint and received time only (no file names or manifest), plus the provenance sentence "The registry checked that this key is enrolled for the company's account. It did not check who the company is…".
+- **AC-36** A reviewer with no account can open a link and then check files without being asked to sign in.
+- **AC-37** When the loaded receipt's head and key match the link's record, Verify shows "Matches the registry's record". When they don't, it shows a warn line and never a verified state.
+- **AC-38** Trust → Your company's keys shows registry key state `rotated` as "Replaced on {date}". The string "rotated" never appears in the UI or in reports.
+- **AC-39** Enroll and Mark compromised are visible only to admins. Members see the key list read-only.
+- **AC-40** With the flag on and the device offline, Trust → Your company's keys disables its actions with the visible reason "You're offline. Key changes need a connection."
+- **AC-41** The service worker does not cache any registry API response.
+- **AC-42** "Export pending proof" (under "More options") downloads the receipt message for any item that is not Registered.
