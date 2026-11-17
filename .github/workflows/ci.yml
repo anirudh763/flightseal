@@ -133,6 +133,7 @@ jobs:
         run: |
           npm ci
           node --test tests/report-pdf.test.mjs
+          node --test tests/trusted-keys.test.mjs tests/recipient-trust.test.mjs
           npm run build
       - name: Download the public PX4 sample flight the Seal & send test uses
         run: python3 tools/fetch_sample.py tests/.data

@@ -363,7 +363,7 @@ export const WEAK_KEY_MESSAGE = "This public key is weak and can't prove anythin
 
 // The y coordinates (sign bit cleared) of the 8 small-order points, as in libsodium's has_small_order list; the
 // other entries of that list have y >= p and are caught as non-canonical. Same rule as weak_public_key in src/fseal.cpp.
-const SMALL_ORDER_Y = [
+export const SMALL_ORDER_Y = [
   "00".repeat(32),
   "01" + "00".repeat(31),
   "26e8958fc2b227b045c3f489f2ef98f0d5dfac05d3c63339b13802886d53fc05",

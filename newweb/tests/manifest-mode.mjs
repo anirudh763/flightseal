@@ -3,12 +3,13 @@
 // axe 0 violations and no horizontal scroll at 320/768/1440. Run after `npm --prefix newweb run build`.
 import { createRequire } from 'node:module';
 import { mkdirSync, mkdtempSync, writeFileSync, readFileSync, rmSync, openSync, ftruncateSync, closeSync } from 'node:fs';
-import { randomBytes } from 'node:crypto';
+import { createHash, randomBytes } from 'node:crypto';
 import { tmpdir } from 'node:os';
 import { join, resolve, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import assert from 'node:assert/strict';
 import { serve } from '../../tests/web/serve.mjs';
+import { BYTES_DIFFER } from '../src/recipient-trust.mjs';
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const EVIDENCE = join(process.env.REACT_CONSOLE_EVIDENCE || join(ROOT, '.test-artifacts'), 'manifest-mode');
@@ -143,7 +144,8 @@ try {
     assert.deepEqual(rows.map((r) => [r[0], r[3].split('\n')[0], r[4]]), [['1', 'Bytes differ', 'a.bin'], ['2', 'Matches', 'b.bin'], ['3', 'Missing', '—'], ['—', 'Not in manifest', 'extra.bin']]);
     assert.match(rows[0][1], /a\.bin/);
     assert.match(rows[1][1], /Operator note: Camera B, landed 14:02/);
-    assert.match(rows[0][3], /This can happen from editing, re-saving, metadata changes, recompression, truncation or corruption — it isn't proof of tampering\./);
+    assert.ok(rows[0][3].includes(BYTES_DIFFER.text), rows[0][3]);
+    assert.equal(await page.locator('.manifest-outcome .trust-line').innerText(), "Valid signature, but this key isn't in your trusted list — confirm its fingerprint through a channel you already know.");
     const chips = await page.locator('.manifest-table .status-label').evaluateAll((els) => els.map((el) => [el.textContent, el.className]));
     assert.deepEqual(chips, [['Bytes differ', 'status-label warn'], ['Matches', 'status-label ok'], ['Missing', 'status-label grey'], ['Not in manifest', 'status-label neutral']]);
     const text = await page.locator('.manifest-outcome').innerText();
@@ -177,6 +179,230 @@ try {
     assert.equal(await page.getByRole('button', { name: 'Seal', exact: true }).isEnabled(), true);
     assert.equal(await page.locator('#manifest-handover-text').count(), 0);
     rmSync(big);
+  });
+
+  // Trusted companies live in Settings; a second page in the same context shares this browser's local list.
+  const settings = await context.newPage();
+  settings.on('pageerror', (error) => runtimeErrors.push(`settings: ${error}`));
+  const fingerprintOf = (hex) => createHash('sha256').update(Buffer.from(hex, 'hex')).digest('hex');
+  const grouped = (hex) => hex.match(/.{4}/g).join(' ');
+  const addCompany = async (name, fingerprint, source) => {
+    await settings.locator('#tc-name').fill(name);
+    await settings.locator('#tc-fingerprint').fill(fingerprint);
+    if (source) await settings.getByLabel(source, { exact: true }).check();
+    await settings.getByRole('button', { name: 'Add company' }).click();
+  };
+  const trustText = () => page.locator('.manifest-outcome .trust-line').innerText();
+  const runCheck = async (key) => {
+    await page.locator('#manifest-trusted-key').fill(key);
+    await page.getByRole('button', { name: 'Check files' }).click();
+    await page.waitForSelector('.manifest-outcome', { timeout: 60000 });
+  };
+
+  await check('Settings: Trusted companies add, replace-confirm, history and compromised; axe at 320/768/1440', async () => {
+    await settings.goto(`${url}#/app/settings`);
+    await settings.waitForFunction(() => document.querySelector('.commandbar h1')?.textContent === 'Settings');
+    await settings.locator('.trusted-companies-details > summary').click();
+    await addCompany('Acme Survey', 'ab'.repeat(32), '');
+    assert.match(await settings.getByRole('alert').innerText(), /Choose where you got this fingerprint/);
+    await addCompany('Acme Survey', 'zz', 'company website you already knew');
+    assert.match(await settings.getByRole('alert').innerText(), /64 hexadecimal digits/);
+    await addCompany('Acme Survey', 'ab'.repeat(32), 'company website you already knew');
+    const sender = fingerprintOf(publicKey);
+    await addCompany('Acme Survey', `SHA-256: ${grouped(sender).toUpperCase()}`, 'contract or invoice');
+    assert.match(await settings.locator('.confirm-box').innerText(), new RegExp(`already has the key ${grouped('ab'.repeat(32))}`));
+    await settings.getByRole('button', { name: 'Keep current key' }).click();
+    assert.match(await settings.locator('.company-list').innerText(), new RegExp(grouped('ab'.repeat(32))));
+    await addCompany('Acme Survey', `SHA-256: ${grouped(sender).toUpperCase()}`, 'contract or invoice');
+    await settings.getByRole('button', { name: 'Replace key' }).click();
+    const list = await settings.locator('.company-list').innerText();
+    assert.match(list, new RegExp(grouped(sender)));
+    assert.match(list, /Added from contract or invoice/);
+    await addCompany('Old Co', 'cd'.repeat(32), 'other');
+    await settings.getByRole('button', { name: 'Mark as compromised: Old Co' }).click();
+    await settings.locator('.confirm-box').getByRole('button', { name: 'Mark as compromised' }).click();
+    assert.doesNotMatch(await settings.locator('.company-list').innerText(), /Old Co/);
+    await settings.locator('.trusted-companies details > summary', { hasText: 'Key history' }).click();
+    const history = await settings.locator('.company-history').innerText();
+    assert.match(history, /Acme Survey[\s\S]*Replaced on \d{4}-\d{2}-\d{2}/);
+    assert.match(history, /Old Co[\s\S]*Marked compromised on \d{4}-\d{2}-\d{2}/);
+    await settings.locator('.trusted-companies details > summary', { hasText: 'What is this?' }).click();
+    await layout(settings, 'trusted companies');
+  });
+
+  await check('Check: a fingerprint pin with an empty key field is trusted; every export carries trust, source and times', async () => {
+    await runCheck('');
+    assert.equal(await trustText(), 'Signed by a key you trust: Acme Survey (added from contract or invoice)');
+    assert.match(await page.locator('.manifest-outcome').innerText(), /Used the key you saved for Acme Survey/);
+    assert.equal(await page.locator('.manifest-table').count(), 1);
+    const save = async (name) => { const [d] = await Promise.all([page.waitForEvent('download'), page.getByRole('button', { name, exact: true }).click()]); return readFileSync(await d.path()); };
+    for (const name of ['Download text report', 'Download Markdown report']) {
+      const report = (await save(name)).toString('utf8');
+      assert.match(report, /Key trust: Signed by a key you trust: Acme Survey \(added from contract or invoice\)/, name);
+      assert.match(report, /Key source: contract or invoice/, name);
+      for (const label of ['Reported landing time', 'Sealed on this computer at', 'Registry acceptance', 'Trusted timestamp', 'Reported landing-to-seal interval']) assert.ok(report.includes(label), `${name}: ${label}`);
+      assert.ok(report.includes(BYTES_DIFFER.text), name);
+    }
+    const json = JSON.parse((await save('Download JSON')).toString('utf8'));
+    assert.equal(json.keyTrust.status, 'trusted');
+    assert.equal(json.keyTrust.sourceLabel, 'contract or invoice');
+    assert.equal(json.timeProvenance.fields.length, 5);
+    assert.equal(json.fileComparison.items[0].statusLabel, 'Bytes differ');
+    assert.equal((await save('Download PDF')).subarray(0, 5).toString(), '%PDF-');
+  });
+
+  await check('Check: a compromised key is flagged and never auto-used; the wrong key still refuses', async () => {
+    assert.equal(await trustText(), 'Signed by a key you trust: Acme Survey (added from contract or invoice)');
+    await settings.getByRole('button', { name: 'Mark as compromised: Acme Survey' }).click();
+    await settings.locator('.confirm-box').getByRole('button', { name: 'Mark as compromised' }).click();
+    // The open result re-checks its trust line when a pin changes; no stale "trusted" stays on screen or in exports.
+    await page.waitForFunction(() => /marked as compromised: Acme Survey/.test(document.querySelector('.manifest-outcome .trust-line')?.textContent || ''));
+    const [stale] = await Promise.all([page.waitForEvent('download'), page.getByRole('button', { name: 'Download text report', exact: true }).click()]);
+    assert.match(readFileSync(await stale.path(), 'utf8'), /Key trust: Signed by a key you marked as compromised: Acme Survey/);
+    await runCheck('');
+    assert.match(await page.locator('.manifest-outcome').innerText(), /Manifest not verified/);
+    await runCheck(publicKey);
+    assert.equal(await trustText(), "Signed by a key you marked as compromised: Acme Survey. Don't rely on this proof without checking with the company.");
+    await runCheck('ab'.repeat(32));
+    assert.match(await page.locator('.manifest-outcome').innerText(), /Manifest not verified[\s\S]*trusted public key/);
+    assert.equal(await page.locator('.manifest-table').count(), 0);
+  });
+
+  await check('Pin controls on the check form: source required, in-page rotation confirm, history kept', async () => {
+    const pin = (id) => page.locator(`#manifest-trusted-key-pin-${id}`);
+    const pinButton = page.getByRole('button', { name: 'Pin public key on this device' });
+    await page.locator('#manifest-trusted-key').fill(publicKey);
+    await pin('name').fill('Unit A');
+    assert.equal(await pinButton.isEnabled(), false, 'a source is required');
+    await pin('source').selectOption('phone');
+    await pinButton.click();
+    assert.match(await page.locator('.trusted-key-controls [role=status]').innerText(), /Saved local pin Unit A/);
+    await page.locator('#manifest-trusted-key').fill('ab'.repeat(32));
+    await pin('name').fill('Unit A');
+    await pin('source').selectOption('phone');
+    await pinButton.click();
+    const box = page.locator('.trusted-key-controls .confirm-box');
+    assert.match(await box.innerText(), new RegExp(`Key changed for “Unit A” \\(old fingerprint ${grouped(fingerprintOf(publicKey))}\\)`));
+    await box.getByRole('button', { name: 'Keep current key' }).click();
+    assert.equal(await box.count(), 0);
+    await pinButton.click();
+    await page.locator('.trusted-key-controls .confirm-box').getByRole('button', { name: 'Replace key' }).click();
+    assert.match(await page.locator('.trusted-key-controls [role=status]').innerText(), /Saved local pin Unit A/);
+    await settings.waitForFunction(() => /Unit A[\s\S]*Replaced on \d{4}-\d{2}-\d{2}/.test(document.querySelector('.company-history')?.textContent || ''));
+    assert.match(await settings.locator('.company-list').innerText(), new RegExp(`Unit A[\\s\\S]*${grouped(fingerprintOf('ab'.repeat(32))).slice(0, 14)}`));
+  });
+
+  await check('A weak key is never trusted: its fingerprint cannot be added, and a pinned one is refused in every check', async () => {
+    const WEAK = JSON.parse(readFileSync(resolve(ROOT, '../tests/fixtures/ed25519-weak-keys.json'), 'utf8'));
+    const [{ key: weakKey, sig: weakSig }] = WEAK.weak;
+    const weakFp = fingerprintOf(weakKey);
+    const trusted = /Signed by a key you trust/;
+    await addCompany('Weak Co', grouped(weakFp), 'company website you already knew');
+    assert.equal(await settings.getByRole('alert').innerText(), WEAK.error);
+    // A pin from before this guard (or written by hand) must still never make the weak key "trusted".
+    await page.evaluate(({ fp }) => {
+      const store = JSON.parse(localStorage.getItem('flightseal_trusted_keys_v1') || '[]');
+      store.push({ name: 'Weak Co', publicKey: '', fingerprint: fp, source: 'website', addedAt: '', status: 'active' });
+      localStorage.setItem('flightseal_trusted_keys_v1', JSON.stringify(store));
+    }, { fp: weakFp });
+    const forge = (message) => message.replace(/key=[0-9a-f]{64} sig=[0-9a-f]{128}/, `key=${weakKey} sig=${weakSig}`).replace(/Public key: [0-9a-f]{64}/, `Public key: ${weakKey}`);
+    const forged = forge(handover);
+    assert.notEqual(forged, handover);
+
+    // Large files, key field empty.
+    await page.locator('#manifest-check-file').setInputFiles(sealedPath);
+    await page.locator('#manifest-check-text').fill(forged);
+    await page.locator('#manifest-local-files').setInputFiles([]);
+    await runCheck('');
+    const outcome = await page.locator('.manifest-outcome').innerText();
+    assert.match(outcome, /Manifest not verified/);
+    assert.ok(outcome.includes(WEAK.error), outcome);
+    assert.doesNotMatch(outcome, trusted);
+    assert.equal(await page.locator('.manifest-table').count(), 0);
+
+    // Verify, key field empty, with the forged receipt file.
+    const receiptsPath = join(dir, 'weak.receipts');
+    writeFileSync(receiptsPath, `${forged.split('\n').find((line) => line.startsWith('fseal-receipt v1 '))}\n`);
+    await page.evaluate(() => { location.hash = '/app/verify'; });
+    await page.waitForFunction(() => document.querySelector('.commandbar h1')?.textContent === 'Verify');
+    await page.locator('#log-input').setInputFiles(sealedPath);
+    await page.locator('#receipt-input').setInputFiles(receiptsPath);
+    await page.locator('#trusted-key').fill('');
+    await page.getByRole('button', { name: 'Run check' }).click();
+    await page.getByRole('alert').filter({ hasText: WEAK.error }).waitFor({ timeout: 30000 });
+    assert.doesNotMatch(await page.locator('main').innerText(), trusted);
+
+    // Small file: seal one, then check it with the forged message.
+    const small = write('weak-check.log', Buffer.from('0\tflight\n'));
+    await page.evaluate(() => { location.hash = '/app/protect'; });
+    await page.waitForFunction(() => document.querySelector('.commandbar h1')?.textContent === 'Seal & send');
+    await page.getByLabel('Small file (seal the whole file, up to 45 MiB)').check();
+    await page.locator('#protect-file').setInputFiles(small);
+    await page.getByRole('button', { name: 'Seal this log' }).click();
+    await page.waitForSelector('#handover-text', { timeout: 60000 });
+    const smallHandover = await page.locator('#handover-text').inputValue();
+    const [d] = await Promise.all([page.waitForEvent('download'), page.getByRole('button', { name: 'Download sealed file' }).click()]);
+    const smallSealed = join(dir, 'weak-check.log.fseal'); await d.saveAs(smallSealed);
+    await page.locator('#check-file').setInputFiles(smallSealed);
+    await page.locator('#check-text').fill(forge(smallHandover));
+    await page.getByRole('button', { name: 'Check this log' }).click();
+    await page.getByRole('alert').filter({ hasText: WEAK.error }).waitFor({ timeout: 30000 });
+    assert.doesNotMatch(await page.locator('main').innerText(), trusted);
+    await page.getByLabel('Large files (fingerprint only)').check();
+  });
+
+  await check('Edited copy and re-encoded file: Bytes differ wording, signed derived-from link, negative reported interval', async () => {
+    const text = 'Flight 42 notes\nBattery 81%\nLanded on pad B\n';
+    const original = write('flight-notes.txt', Buffer.from(text));
+    const editedDir = join(dir, 'edited'); mkdirSync(editedDir, { recursive: true });
+    const edited = join(editedDir, 'flight-notes-cropped.txt'); writeFileSync(edited, Buffer.from(text.replace('Battery 81%\n', '')));
+    const pad = (n) => String(n).padStart(2, '0');
+    const later = new Date(Date.now() + 2 * 3600e3);
+    const local = `${later.getFullYear()}-${pad(later.getMonth() + 1)}-${pad(later.getDate())}T${pad(later.getHours())}:${pad(later.getMinutes())}:${pad(later.getSeconds())}`;
+    await page.locator('#manifest-files').setInputFiles([original, edited]);
+    if (!(await page.locator('.manifest-options').evaluate((d) => d.open))) await page.locator('.manifest-options summary').click();
+    await page.getByLabel('Include file names').check();
+    await page.locator('#manifest-landing').fill(local);
+    await page.locator('#manifest-edited-1').check();
+    await page.getByRole('button', { name: 'Seal', exact: true }).click();
+    await page.locator('.manifest-body [role=alert]').filter({ hasText: /Fill in “Derived from”/ }).waitFor({ timeout: 5000 }); // an empty edited-copy link is never dropped silently
+    await page.locator('#manifest-derived-1').fill('item [1]');
+    await page.getByRole('button', { name: 'Seal', exact: true }).click();
+    await page.locator('.manifest-body [role=alert]').filter({ hasText: /can’t contain \[ or \]/ }).waitFor({ timeout: 5000 });
+    await page.locator('#manifest-derived-1').fill('item 1');
+    await page.getByRole('button', { name: 'Seal', exact: true }).click();
+    await page.waitForSelector('#manifest-handover-text', { timeout: 60000 });
+    const message = await page.locator('#manifest-handover-text').inputValue();
+    assert.doesNotMatch(message, /item 1|reported-landing/, 'notes stay in the sealed file, not the message');
+    const key = /Public key: ([0-9a-f]{64})/.exec(message)[1];
+    assert.equal(await page.locator('.handover .fingerprint').innerText(), grouped(fingerprintOf(key)));
+    const [download] = await Promise.all([page.waitForEvent('download'), page.getByRole('button', { name: 'Download sealed list' }).click()]);
+    const sealed2 = join(EVIDENCE, 'derived.manifest.fseal'); await download.saveAs(sealed2);
+    const localDir = join(dir, 'recipient'); mkdirSync(localDir, { recursive: true });
+    const reencoded = join(localDir, 'flight-notes.txt');
+    writeFileSync(reencoded, Buffer.concat([Buffer.from([0xef, 0xbb, 0xbf]), Buffer.from(text.replace(/\n/g, '\r\n'))]));
+    const copy = join(localDir, 'flight-notes-cropped.txt'); writeFileSync(copy, readFileSync(edited));
+    await page.locator('#manifest-check-file').setInputFiles(sealed2);
+    await page.locator('#manifest-check-text').fill(message);
+    await page.locator('#manifest-local-files').setInputFiles([reencoded, copy]);
+    await runCheck(key);
+    await page.waitForSelector('.manifest-table');
+    const rows = await page.locator('.manifest-table tbody tr').evaluateAll((trs) => trs.map((tr) => [...tr.cells].map((td) => td.innerText.trim())));
+    assert.deepEqual(rows.map((r) => [r[0], r[3].split('\n')[0], r[4]]), [['1', 'Bytes differ', 'flight-notes.txt'], ['2', 'Matches', 'flight-notes-cropped.txt']]);
+    assert.ok(rows[0][3].includes(BYTES_DIFFER.text));
+    assert.match(rows[1][1], /Edited copy of: item 1 \(operator-entered, signed\)/);
+    assert.doesNotMatch(rows[1][1], /reported-landing|derived-from/);
+    assert.equal(await trustText(), "Valid signature, but this key isn't in your trusted list — confirm its fingerprint through a channel you already know.");
+    const fields = await page.locator('.manifest-outcome .time-fields > div').evaluateAll((divs) => divs.map((d) => [d.querySelector('dt').innerText, d.querySelector('dd span').innerText, d.querySelector('dd small').innerText]));
+    assert.deepEqual(fields.map((f) => f[0]), ['Reported landing time', 'Sealed on this computer at', 'Registry acceptance', 'Trusted timestamp', 'Reported landing-to-seal interval']);
+    assert.equal(fields[0][2], 'operator-entered, signed, not verified');
+    assert.equal(fields[1][2], "this computer's clock, not verified; from the receipt message, not signed");
+    assert.match(fields[4][1], /^-1 h \d+ min \d+ s \(reported landing is after the seal time/);
+    assert.doesNotMatch(fields[4][1], /verified/i, 'no verified-delay wording');
+    assert.doesNotMatch(await page.locator('.manifest-outcome').innerText(), /identical|verified delay|delay verified/i);
+    await layout(page, 'manifest derived');
+    await page.locator('#manifest-files').setInputFiles([original]);
+    assert.equal(await page.locator('#manifest-landing').inputValue(), '', 'a landing time is never carried into the next batch');
   });
 
   await check('No request body contains the marker or source-file bytes', async () => {
