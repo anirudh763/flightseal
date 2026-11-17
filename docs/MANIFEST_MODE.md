@@ -125,6 +125,14 @@ disk-bound ones. Both digests matched `openssl dgst -sha256`.
 | Browser worker (`FSEAL_LARGE_HASH=1 node --test tests/wasm/hash-browser.test.mjs`) | 12.13 | 169.3 MiB/s | Browser process tree RSS 647.1 MiB idle → 787.4 MiB peak (+140.3 MiB). WebAssembly heap 33,554,432 bytes (unchanged from initial). Page JS heap used, peak 2.3 MiB. |
 | CLI (`FSEAL_LARGE_HASH=1 python3 -m pytest -q -s tests/test_manifest.py -k large`) | 1.70 | 1,205.2 MiB/s | Child peak RSS 21.5 MiB |
 
+A second run of the same two commands on the same machine gave: browser 12.12 s, 169.4 MiB/s, process tree RSS
+600.8 → 760.3 MiB (+159.5 MiB), WebAssembly heap 33,554,432 bytes, page JS heap 2.3 MiB; CLI 1.60 s, 1,279.5 MiB/s,
+child peak RSS 22.1 MiB.
+
+The proposed target was at most 128 MiB of extra payload working memory. These runs do not show that it is met.
+The browser RSS delta was 140.3 and 159.5 MiB. It also counts things that are not payload memory: worker start-up,
+the Wasm module and its fixed 32 MiB heap, and Chrome's own caching. No per-component breakdown was measured.
+
 How the browser numbers were measured:
 
 - RSS is the sum of `ps -o rss` over the launched Chrome process and its descendants (7 processes), sampled every
