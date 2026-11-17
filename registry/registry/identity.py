@@ -69,7 +69,7 @@ def _dev(headers, env, now):
         if not isinstance(head, dict) or head.get("alg") != "HS256" or not hmac.compare_digest(expect, _unb64(parts[2])):
             return None
         claims = json.loads(_unb64(parts[1]))
-    except ValueError:
+    except (ValueError, RecursionError):
         return None
     if not isinstance(claims, dict):
         return None

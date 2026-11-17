@@ -4,6 +4,7 @@ Request order: size -> auth -> schema -> idempotency lookup -> envelope -> recei
 Any store error while reading state fails closed with 503.
 """
 import base64
+import binascii
 import hashlib
 import json
 import re
@@ -111,7 +112,10 @@ class App:
             if event.get("isBase64Encoded"):
                 if len(body) > MAX_BODY * 2:
                     raise HttpError(413, "body_too_large")
-                body = base64.b64decode(body)
+                try:
+                    body = base64.b64decode(body, validate=True)
+                except (binascii.Error, ValueError):
+                    raise HttpError(400, "bad_request") from None
             raw = body.encode() if isinstance(body, str) else body
             if len(raw) > MAX_BODY:
                 raise HttpError(413, "body_too_large")
@@ -307,7 +311,9 @@ class App:
                                    "org": ident.org_id, "ref": rid, "at": now}},
         ]
         for h in reg.get("share_hashes", []):
-            ops.append({"op": "update", "key": ("SHARE#" + h, "SHARE"), "set": {"state": "withdrawn", "withdrawn_at": now}})
+            # no condition (TTL may already have removed the share); the ttl makes any upserted stub expire
+            ops.append({"op": "update", "key": ("SHARE#" + h, "SHARE"),
+                        "set": {"state": "withdrawn", "withdrawn_at": now, "ttl": now + DAY}})
             ops.append({"op": "put", "item": {"PK": f"TOMB#{ident.org_id}#{h}", "SK": "TOMB", "kind": "share",
                                               "org": ident.org_id, "ref": h, "at": now}})
         if self._transact(ops):
@@ -326,8 +332,19 @@ class App:
 
     def epoch(self, ident, body, _query):
         self._fields(body)
-        item = self.t.update(f"ORG#{ident.org_id}", "EPOCH", add={"epoch": 1})
-        return 200, {"epoch": item["epoch"]}
+        pk, now = f"ORG#{ident.org_id}", self.now()
+        cur = (self.t.get(pk, "EPOCH") or {}).get("epoch", 0)
+        new = cur + 1
+        failed = self._transact([
+            {"op": "update", "key": (pk, "EPOCH"), "set": {"epoch": new},
+             "cond": [("eq", "epoch", cur) if cur else ("missing", "epoch")]},
+            # the tombstone lets a backup restore bring the epoch forward again
+            {"op": "put", "item": {"PK": f"TOMB#{ident.org_id}#EPOCH", "SK": "TOMB", "kind": "epoch",
+                                   "org": ident.org_id, "ref": "EPOCH", "value": new, "at": now}},
+        ])
+        if failed:
+            raise HttpError(409, "conflict")
+        return 200, {"epoch": new}
 
     # ------------------------------------------------------------ keys
 
@@ -389,7 +406,9 @@ class App:
         if key is None:
             raise not_found()
         ops = [{"op": "update", "key": (pk, "KEY#" + fp), "set": {"state": "compromised", "changed_at": now},
-                "cond": [("exists",)]}]
+                "cond": [("exists",)]},
+               {"op": "put", "item": {"PK": f"TOMB#{ident.org_id}#KEY#{fp}", "SK": "TOMB", "kind": "key",
+                                      "org": ident.org_id, "ref": fp, "at": now}}]
         if (self.t.get(pk, "ACTIVE_KEY") or {}).get("fp") == fp:
             ops.append({"op": "delete", "key": (pk, "ACTIVE_KEY"), "cond": [("eq", "fp", fp)]})
         if self._transact(ops):

@@ -17,7 +17,11 @@ export AWS_CONFIG_FILE=/dev/null AWS_SHARED_CREDENTIALS_FILE=/dev/null
 export AWS_ENDPOINT_URL="http://127.0.0.1:${PORT}" EDGE_PORT="${PORT}" LOCALSTACK_HOSTNAME=127.0.0.1
 unset AWS_PROFILE AWS_SESSION_TOKEN
 
-cleanup() { docker rm -f "$NAME" >/dev/null 2>&1 || true; }
+cleanup() {
+  docker rm -f "$NAME" >/dev/null 2>&1 || true
+  # Lambda containers LocalStack started for this instance
+  docker ps -aq --filter "name=${NAME}-lambda" | xargs -r docker rm -f >/dev/null 2>&1 || true
+}
 trap cleanup EXIT
 
 # The token is passed by name only (-e VAR), so it is never echoed or put on a command line.

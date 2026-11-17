@@ -13,7 +13,7 @@ Columns:
 
 | Behaviour | Local | LocalStack 4.12.0 | Real AWS | Designed only |
 |---|---|---|---|---|
-| Ed25519 verify: RFC 8032 vectors 1–3, sample receipts, every single-bit flip | yes | — | not verified | |
+| Ed25519 verify: RFC 8032 vectors 1–3, sample receipts, every single-bit flip, small-order keys rejected | yes | — | not verified | |
 | A fresh receipt from the C++ sealer (`build/fseal`) registers; a bit flip is rejected | yes | — | not verified | |
 | Strict receipt parsing (extra tokens, uppercase hex, count 0 and ≥ 2^64) | yes | — | not verified | |
 | Authorized register (201) | yes | pass | not verified | |
@@ -29,13 +29,13 @@ Columns:
 | Replay after the dedupe window → original ack | yes | pass (`DEDUPE_SECONDS=8`) | not verified | |
 | Expired / wrong-sub / stale-epoch envelope → 422; committed retry still acked | yes | — | not verified | |
 | Monthly quota → 429 with no partial write | yes | — | not verified | |
-| Body over 4096 bytes → 413 | yes | — | not verified | |
+| Body over 4096 bytes → 413; invalid base64 body → 400; deeply nested JSON or token header → 400 / 401 | yes | — | not verified | |
 | Share lifecycle; unknown / withdrawn / expired / deleted → identical 404 | yes | pass (create, view, withdraw, 404) | not verified | |
 | Withdrawn share stays 404 after an identical register retry | yes | pass | not verified | |
 | Deletion withdraws the registration's shares and tombstones it | yes | pass (state read back from DynamoDB) | not verified | |
 | Store read errors fail closed (503) | yes (injected failures) | — | not verified | |
-| Restore gate: 503 `restore_pending` until tombstones are applied | yes | pass (function re-pointed at a second table with `RESTORED_FROM`) | not verified | CDK restore context synthesised and asserted |
-| `apply_tombstones` re-applies withdrawals/deletions; refuses on unreadable source | yes | pass for re-apply, against two DynamoDB tables; the backup was **emulated** (items copied, withdrawal and deletion undone) because community LocalStack has no PITR restore. Refusal not tested there | not verified | |
+| Restore gate: 503 `restore_pending` until tombstones are applied | yes | pass (function re-pointed at a second table with `RESTORED_FROM`; public share GETs, `POST /v1/envelopes` and `GET /v1/registrations` all 503) | not verified | CDK restore context synthesised and asserted |
+| `apply_tombstones` re-applies withdrawals, deletions, compromised keys and the org epoch; refuses on unreadable source | yes | pass for re-apply, against two DynamoDB tables; the backup was **emulated** (items copied, withdrawal and deletion undone) because community LocalStack has no PITR restore. Refusal not tested there | not verified | |
 | Key enrollment: admin only, single-use 5-minute challenge, `confirm_replace` | yes | pass (enroll) | not verified | |
 | List registrations with a cursor; list keys | yes | pass | not verified | |
 | Epoch bump invalidates an outstanding envelope | yes | pass | not verified | |

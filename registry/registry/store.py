@@ -110,7 +110,7 @@ class MemoryTable:
         self._check("query", pk, prefix)
         sks = sorted(sk for p, sk in self.items if p == pk and sk.startswith(prefix) and (start is None or sk > start))
         page = sks[:limit]
-        last = page[-1] if len(sks) > limit else None
+        last = page[-1] if len(page) == limit else None  # like DynamoDB: a full page always returns a cursor
         return [copy.deepcopy(self.items[(pk, sk)]) for sk in page], last
 
     def scan(self, pk_prefix):

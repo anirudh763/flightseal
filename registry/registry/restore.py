@@ -25,6 +25,19 @@ def apply_tombstones(source, target, source_name="source", clock=time.time):
             key = ("SHARE#" + t["ref"], "SHARE")
             if target.get(*key) is not None:
                 target.update(*key, set={"state": "withdrawn", "withdrawn_at": t["at"]})
+        elif t["kind"] == "key":
+            pk = f"ORG#{t['org']}"
+            if target.get(pk, "KEY#" + t["ref"]) is not None:
+                target.update(pk, "KEY#" + t["ref"], set={"state": "compromised", "changed_at": t["at"]})
+            else:  # enrolled after the backup: keep it compromised so it cannot be re-enrolled
+                target.put({"PK": pk, "SK": "KEY#" + t["ref"], "state": "compromised", "enrolled_at": t["at"],
+                            "enrolled_by": "restore", "changed_at": t["at"]})
+            if (target.get(pk, "ACTIVE_KEY") or {}).get("fp") == t["ref"]:
+                target.delete(pk, "ACTIVE_KEY")
+        elif t["kind"] == "epoch":
+            pk = f"ORG#{t['org']}"
+            cur = (target.get(pk, "EPOCH") or {}).get("epoch", 0)
+            target.put({"PK": pk, "SK": "EPOCH", "epoch": max(cur, t["value"])})
     target.put({"PK": "SYSTEM", "SK": "RESTORE", "source": source_name, "applied_at": now, "tombstones": len(tombs)})
     return len(tombs)
 

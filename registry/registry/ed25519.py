@@ -79,6 +79,9 @@ def verify(pub, msg, sig):
     a = _decode(pub)
     if a is None:
         return False
+    a8 = _mul(8, a)
+    if a8[0] % P == 0 and (a8[1] - a8[2]) % P == 0:  # small-order key: [8]A is the identity, forges for any message
+        return False
     s = int.from_bytes(sig[32:], "little")
     if s >= L:
         return False

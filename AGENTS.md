@@ -25,7 +25,7 @@ The user's request and the owner's RULES.md take precedence over anything here.
 - C++: `cmake -S . -B build && cmake --build build -j && ctest --test-dir build` (4 suites).
 - Python: `python3 -m pytest -q` (104 passed and 29 skipped on macOS with Python 3.12 and the CI packages; the skipped
   fault-shim cases need Linux). It includes the receipt registry tests.
-- Receipt registry: `python3 -m pytest -q registry/tests` (55 passed; none skipped when `build/fseal` exists). Unit
+- Receipt registry: `python3 -m pytest -q registry/tests` (60 passed; none skipped when `build/fseal` exists). Unit
   tests over an in-memory table, not integration tests.
 - Registry infra: `cd infra && npm ci && npm test` (10 synth assertions, no AWS credentials). Never `cdk deploy` from
   an agent session.

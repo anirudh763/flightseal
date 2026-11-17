@@ -46,3 +46,31 @@ def test_raw_backup_without_the_gate_would_serve_a_withdrawn_share():
     app, _, _ = make_app(table=restored)
     app.clock = clock
     assert call(app, "GET", paths[0])[0] == 200
+
+
+def test_restore_reapplies_compromised_keys_and_the_epoch():
+    from registry import ed25519, receipt
+    from registry_helpers import SEED_A, envelope
+
+    app, live, clock = make_app()
+    enroll(app, clock)
+    pilot, admin = token(clock), token(clock, role="admin")
+    old_envelope = envelope(app, pilot)
+    backup = MemoryTable()
+    backup.items = {k: dict(v) for k, v in live.items.items()}  # key active, epoch 0
+    fp = receipt.fingerprint(ed25519.public_key(SEED_A))
+    assert call(app, "POST", f"/v1/keys/{fp}/compromised", admin, {})[0] == 200
+    assert call(app, "POST", "/v1/epoch", admin, {})[1] == {"epoch": 1}
+    assert call(app, "POST", "/v1/epoch", admin, {})[1] == {"epoch": 2}
+
+    restored, _, _ = make_app(table=backup, RESTORED_FROM="live")
+    restored.clock = clock
+    apply_tombstones(live, backup, source_name="live")
+    keys = call(restored, "GET", "/v1/keys", pilot)[1]["keys"]
+    assert [k["state"] for k in keys] == ["compromised"]
+    assert ("ORG#orgA", "ACTIVE_KEY") not in backup.items
+    assert backup.items[("ORG#orgA", "EPOCH")]["epoch"] == 2
+    s, out, _ = register(restored, pilot, line(SEED_A, 7), env_id=old_envelope)
+    assert (s, out["error"]) == (422, "envelope_expired")
+    s, out, _ = register(restored, pilot, line(SEED_A, 7), idem="idem-key-0000000009")
+    assert (s, out["error"]) == (403, "key_not_active")

@@ -301,7 +301,7 @@ def scenarios(url, tok, table, dedupe):
     env_old = envelope(pilot)
     status, ep = http("POST", url + "/v1/epoch", admin, {})
     status2, out = register(pilot, receipt_line(seed, 400), "e2e-idem-0000000006", env_old)
-    check("epoch bump (UpdateItem ADD) invalidates an outstanding envelope",
+    check("epoch bump (transaction with its tombstone) invalidates an outstanding envelope",
           status == 200 and ep.get("epoch") == 1 and (status2, out.get("error")) == (422, "envelope_expired"),
           f"epoch {status} {ep}, register {status2} {out}")
     return {"share_path": share2["path"], "rid": ack1["registration_id"], "pilot": pilot, "ack1": ack1,
@@ -343,8 +343,10 @@ def restore_drill(url, state, base_env):
 
     serve({**base_env, "TABLE_NAME": target, "RESTORED_FROM": TABLE})
     gated = [http("GET", url + p)[1].get("error") for p in [live_share["path"], *state["withdrawn_paths"]]]
-    check("restore gate: every route 503 restore_pending before tombstones are applied",
-          gated == ["restore_pending"] * 3, str(gated))
+    gated.append(http("POST", url + "/v1/envelopes", state["pilot"], {})[1].get("error"))  # an authenticated route
+    gated.append(http("GET", url + "/v1/registrations", state["pilot"])[1].get("error"))
+    check("restore gate: public and authenticated routes 503 restore_pending before tombstones are applied",
+          gated == ["restore_pending"] * 5, "GET share x3, POST /v1/envelopes, GET /v1/registrations: " + str(gated))
     n = apply_tombstones(DynamoTable(TABLE, client=ddb), restored, source_name=TABLE)
     views = [http("GET", url + p)[0] for p in [live_share["path"], *state["withdrawn_paths"]]]
     marker = restored.get("SYSTEM", "RESTORE") or {}
@@ -406,14 +408,22 @@ def main():
     a = p.parse_args()
     started = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
     meta = {"image": IMAGE, "digest": DIGEST, "boto3": boto3.__version__, "host_machine": platform.machine(),
-            "started_at": started, "mode": "cdklocal-http-api" if a.api_url else "rest-v1-stand-in",
+            "started_at": started, "mode": "rest-v1-stand-in",
             "note": "REST API v1 {proxy+} stand-in, not the HTTP API; dev-hs256 identity adapter; LocalStack community"}
     if a.api_url:
+        meta.update(mode="cdklocal-http-api", image="localstack/localstack-pro:4.12.0", digest="not pinned",
+                    note="HTTP API with the Cognito JWT authorizer deployed by cdklocal; cognito identity adapter "
+                         "(ID tokens from the LocalStack user pool); LocalStack Pro; no persistence or restore steps")
         try:
             scenarios(a.api_url.rstrip("/"), CognitoTokens(a.user_pool_id, a.client_id), a.table_name, None)
         except Exception as err:  # noqa: BLE001
             record("scenarios", "blocked", f"{type(err).__name__}: {err}"[:500])
-        print(json.dumps({**meta, "steps": steps}, indent=2))
+        meta["finished_at"] = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+        meta["summary"] = {r: sum(s["result"] == r for s in steps) for r in ("pass", "fail", "blocked", "skipped")}
+        out = EVIDENCE.with_name("localstack-4.12.0-cdklocal-http-api.json")
+        out.parent.mkdir(parents=True, exist_ok=True)
+        out.write_text(json.dumps({**meta, "steps": steps}, indent=2) + "\n")
+        print(f"evidence: {out.relative_to(ROOT)}")
         return 0 if all(s["result"] in ("pass", "skipped") for s in steps) else 1
 
     remove_everything()  # a clean start: no state left from an earlier run

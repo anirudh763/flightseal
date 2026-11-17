@@ -52,6 +52,16 @@ def test_dev_token_checks_hmac_expiry_claims_and_secret_length():
     assert identify({}, _headers(good), {"IDENTITY_ADAPTER": "nope"}, now) is None
 
 
+def test_deeply_nested_token_header_is_401_not_an_error():
+    import base64
+    head = base64.urlsafe_b64encode(b"[" * 5000).rstrip(b"=").decode()
+    tok = f"{head}.e30.c2ln"
+    env = {"IDENTITY_ADAPTER": "dev-hs256", "DEV_TOKEN_SECRET": SECRET}
+    assert identify({}, _headers(tok), env, 0) is None
+    app, _, _ = make_app()
+    assert call(app, "GET", "/v1/keys", tok)[:2] == (401, {"error": "unauthorized"})
+
+
 def test_cognito_adapter_reads_authorizer_claims_only():
     claims = {"sub": "s", "custom:org_id": "orgA", "custom:role": "admin"}
     event = {"requestContext": {"authorizer": {"jwt": {"claims": claims}}}}

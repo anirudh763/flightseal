@@ -78,7 +78,7 @@ One table, string keys `PK`/`SK`:
 | `ORG#o / REG#<rid>` | fp, head, count, received_at, state, up to 10 share hashes |
 | `ORG#o / IDEM#<key>` | payload hash, rid, received_at, expiry (`DEDUPE_SECONDS`, default 7 days) |
 | `SHARE#<sha256(token)> / SHARE` | org, rid, state, expiry (default 30 days, at most 365) |
-| `TOMB#<org>#<id> / TOMB` | a withdrawal or deletion record, never expired |
+| `TOMB#<org>#<id> / TOMB` | a withdrawal, deletion, key-compromise or epoch record, never expired |
 
 ### Never stored
 
@@ -122,7 +122,7 @@ different payload), an existing REG returns the original ack (or 410 if deleted)
   1. Restore to a new table and deploy the function against it with `RESTORED_FROM=<source table>`. While the
      marker is missing, every route answers 503 `restore_pending`.
   2. Run `python -m registry.restore --source <source> --target <restored>`. It copies every TOMB item, re-applies
-     it (registrations deleted, shares withdrawn), and writes the `SYSTEM/RESTORE` marker last. If the source's
+     it (registrations deleted, shares withdrawn, compromised keys stay compromised, the org epoch moves forward), and writes the `SYSTEM/RESTORE` marker last. If the source's
      tombstones cannot be read, it stops with an error and writes no marker, so the function stays closed.
   3. After that, withdrawn and deleted views are 404 again and active ones are served.
 

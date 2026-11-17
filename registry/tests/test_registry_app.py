@@ -236,12 +236,15 @@ def test_identical_retry_after_deletion_reports_current_disposition():
 
 def test_list_pages_are_bounded():
     app, _, clock, pilot = setup()
-    for i in range(1, 4):
+    for i in range(1, 5):
         register(app, pilot, line(SEED_A, i), idem=f"idem-key-000000000{i}")
     s, page, _ = call(app, "GET", "/v1/registrations", pilot, query={"limit": "2"})
     assert s == 200 and len(page["registrations"]) == 2 and page["next_cursor"]
     _, rest, _ = call(app, "GET", "/v1/registrations", pilot, query={"limit": "2", "cursor": page["next_cursor"]})
-    assert len(rest["registrations"]) == 1 and rest["next_cursor"] is None
+    # like DynamoDB, a full final page still returns a cursor; it leads to an empty page
+    assert len(rest["registrations"]) == 2 and rest["next_cursor"]
+    _, end, _ = call(app, "GET", "/v1/registrations", pilot, query={"limit": "2", "cursor": rest["next_cursor"]})
+    assert end == {"registrations": [], "next_cursor": None}
     assert call(app, "GET", "/v1/registrations", pilot, query={"limit": "51"})[0] == 400
 
 
@@ -341,3 +344,34 @@ def test_repeated_404s_do_not_accumulate_state():
 def test_deeply_nested_json_is_400():
     app, _, clock, pilot = setup()
     assert call(app, "POST", "/v1/registrations", pilot, raw="[" * 2000 + "]" * 2000)[:2] == (400, {"error": "bad_json"})
+
+
+def test_small_order_key_is_rejected_and_cannot_be_enrolled():
+    identity = (1).to_bytes(32, "little")  # the neutral point: R = identity, S = 0 would "verify" any message
+    forged = identity + bytes(32)
+    assert not ed25519.verify(identity, b"anything", forged)
+    app, _, clock = make_app()
+    admin = token(clock, role="admin")
+    _, ch, _ = call(app, "GET", "/v1/keys/challenge", admin)
+    body = {"public_key": identity.hex(), "nonce": ch["nonce"], "signature": forged.hex()}
+    assert call(app, "POST", "/v1/keys", admin, body)[:2] == (422, {"error": "bad_signature"})
+    assert call(app, "GET", "/v1/keys", admin)[1]["keys"] == []
+
+
+def test_bad_base64_body_is_400():
+    app, _, clock, pilot = setup()
+    event = {"httpMethod": "POST", "path": "/v1/registrations", "headers": {"authorization": f"Bearer {pilot}"},
+             "body": "not*base64!", "isBase64Encoded": True}
+    r = app.handle(event)
+    assert (r["statusCode"], json.loads(r["body"])) == (400, {"error": "bad_request"})
+
+
+def test_deleting_a_registration_whose_share_ttl_expired_leaves_only_an_expiring_stub():
+    app, table, clock, pilot = setup()
+    _, reg, _ = register(app, pilot, line(SEED_A, 5))
+    _, share, _ = _share(app, pilot, reg["registration_id"])
+    key = next(k for k in table.items if k[0].startswith("SHARE#"))
+    del table.items[key]  # TTL already removed it
+    assert call(app, "DELETE", f"/v1/registrations/{reg['registration_id']}", token(clock, role="admin"))[0] == 200
+    assert table.items[key]["ttl"] == clock.t + 86400
+    assert call(app, "GET", share["path"])[0] == 404
