@@ -101,3 +101,9 @@ clock, held and dropped registrations, and a request log. Set `PYTHON` to choose
    still exhausted after 10 attempts (9 backoff waits totalling about 9 to 17 minutes), the row ends in `attempts_exhausted`.
 6. **`received_at` is rounded to the second** (ISO 8601 UTC), so two commits in the same second have the same
    timestamp.
+7. **`POST /v1/shares` takes no idempotency key.** If its response is lost, the share exists but the client never
+   received its token, so it cannot withdraw that share. Only an admin deleting the registration withdraws it.
+   The outbox never retries share creation.
+8. **There is no way to read the current epoch, and one 422 covers three cases.** `envelope_expired` is returned for
+   an expired envelope, an epoch bump and a `sub` mismatch alike. A client finds out about an epoch bump only when
+   a registration fails.
