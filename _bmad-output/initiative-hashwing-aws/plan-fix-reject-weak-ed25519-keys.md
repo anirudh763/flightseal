@@ -3,16 +3,16 @@ title: 'Reject weak Ed25519 public keys in every receipt verifier'
 type: bugfix
 ticket: ''
 created: '2026-11-17'
-status: in-progress
+status: built
 baseline_revision: '96e7e7430638a8c2f453dd4e0944fbf4a997ef58'
 route: full
 route_source: auto
 risk: high
-review: ''
-review_source: ''
-lenses_ran: []
+review: quick
+review_source: pinned
+lenses_ran: [quick]
 review_loop_iteration: 0
-followup_review_recommended: false
+followup_review_recommended: true
 context: ['{project-root}/AGENTS.md']
 warnings: ['oversized']
 deferred: []
@@ -85,9 +85,27 @@ deferred: []
 
 Implemented in the main session rather than by a fresh subagent. The investigation (live repros, browser probe, fixture generation) is already in this context, and the advisor recommended doing it here and using subagents only for review.
 
+- Failing-first, run on baseline code with the new tests: `pytest tests/test_weak_keys.py` gave 2 failed. The forged identity-key receipt for `docs/samples/rewritten.fseal` printed `RESULT: INTACT`, and weak key `00…00` gave exit 1 (TAMPERED, so the signature was accepted). `verifier.test.mjs` gave 2 failed (missing exports, and `checkReceipts` did not reject). `trusted-keys.test.mjs` gave 1 failed. `bridge.test.mjs` gave 1 failed (the old module returned verdicts). `test_fseal.cpp` did not compile (missing symbols).
+- The CLI test forges against `rewritten.fseal`, not `intact.fseal`, because a rewritten log printing INTACT is the actual attack. The baseline output above shows it.
+- The JS primitive guard is tested with a stand-in WebCrypto that accepts every signature, because Node 24 already rejects the forgeries. A mutation that removes the guard makes that test fail (checked).
+- Probes: the OpenSSL 3.5.9 CLI accepted the exact repro. Unpatched `fseal` (OpenSSL 4) accepted it too, reporting head-mismatch rather than bad-signature. Headless Chromium 153 accepted all 14 forged fixture receipts and verified RFC 1–3. Node 24.22.3 (OpenSSL 3.5.9) rejected all 14.
+- `docs/app.js` was left unchanged: no file under docs/ references it.
+- Python: no Python receipt verifier exists. `tools/*.py` call the CLI, so pytest covers the CLI.
+
 ## Plan Change Log
 
 ## Review Triage Log
+
+### 2026-11-17 — Review pass
+- verdicts: 7 findings — high 0, medium 4, low 3, false 0, maybe-false 0
+- findings:
+  - `[medium]` `[patch]` docs/wasm not rebuilt and provenance stale — the planned last step had not run yet. Ran `scripts/build_wasm.sh`; `verify_wasm_provenance.py` verified 11 hashes.
+  - `[medium]` `[patch]` bridge weak-key test ran against the stale module — passes after the rebuild (Wasm node tests 30/30).
+  - `[medium]` `[patch]` docs/console not rebuilt — ran `npm --prefix newweb run build`; the bundle `index-Cm2TuuMu.js` now contains the message.
+  - `[low]` `[patch]` docs claimed Wasm protection that was not yet shipped — true once the rebuild is committed in the same PR.
+  - `[medium]` `[patch]` the JS `ed25519Verify` guard was not exercised under Node — added a stand-in WebCrypto that accepts everything; the mutation check fails without the guard.
+  - `[low]` `[reject]` CLI test uses rewritten.fseal instead of intact.fseal — the stronger, intended attack; recorded in Implementation Notes with the baseline INTACT output.
+  - `[low]` `[patch]` no recorded failing-first evidence or counts — recorded in Implementation Notes and Auto Run Result.
 
 ## Design Notes
 
@@ -104,3 +122,15 @@ Small-order y values (LE hex, bit 255 masked): `00…00`, `01 00…00`, `ecff…
 - `python3 tools/verify_wasm_provenance.py` -- expected: ok
 - `npm --prefix newweb run build && npm --prefix newweb run test:browser && node newweb/tests/edge-matrix.mjs` -- expected: 0 failures
 - `node tests/web/e2e.mjs` and `node tests/web/routes.mjs` -- expected: 5 and 6 checks pass
+
+## Auto Run Result
+
+Status: built. A weak Ed25519 trusted key (48 encodings: the 8 small-order points incl. non-canonical forms, every y ≥ p) is refused with "This public key is weak and can't prove anything". This applies to the CLI (exit 2), the Wasm bridge (`{error}`), `docs/verifier.js` `checkReceipts` (throws) and `pinTrustedKey`. `ed25519_verify` and `ed25519Verify` return false for such keys.
+
+Files: `src/fseal.{h,cpp}` (predicate, message, `ed25519_verify`), `src/main.cpp` (CLI refusal), `wasm/bridge.cpp` (Wasm refusal), `docs/verifier.js` (exports and guard), `newweb/src/trusted-keys.mjs` (pin refusal), `CMakeLists.txt` (test source dir), `tests/fixtures/*` (generator and vectors), tests (C++, pytest, node, Wasm, console), `THREAT_MODEL.md`, `DECISIONS.md` #22, `CHANGELOG.md`, `AGENTS.md` counts, rebuilt `docs/wasm` and `docs/console`.
+
+Review: 6 patched, 1 rejected (reason above), 0 deferred. Follow-up review recommended: true (4 medium patched). The named risk is that the rebuilt `docs/wasm` and `docs/console` artifacts were not re-reviewed after patching; provenance and browser checks pass
+
+Verification (all run after the rebuild): ctest 5/5. pytest 63 passed, 30 skipped. JS 141/141. Wasm node 30/30. Wasm browser 8 passed, 3 skipped (opt-in large-file). newweb unit 46/46. provenance verified 11 hashes. Console `test:browser` 42 ok, exit 0. edge-matrix 9 ok. e2e 5 ok. routes 6 ok.
+
+Residual risk: the CLI and Wasm verdict for a weak key that appears only inside a receipt (not the trusted key) stays `wrong-key`, as before. Small-order `R` is not rejected separately (not needed once the key is checked).

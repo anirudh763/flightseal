@@ -381,6 +381,16 @@ test("weak Ed25519 keys are detected, and RFC 8032 vectors 1-3 still verify", as
     assert.equal(weakPublicKey(unhex(v.key)), false);
     assert.equal(await ed25519Verify(unhex(v.key), unhex(v.sig), unhex(v.msg)), true, v.key);
   }
+  // Node's WebCrypto already rejects the forgeries, but Chromium's accepts them. Stand in a WebCrypto that accepts
+  // every signature, as Chromium does for these, so this checks the guard itself.
+  const real = Object.getOwnPropertyDescriptor(globalThis, "crypto");
+  Object.defineProperty(globalThis, "crypto", { configurable: true, value: { subtle: { importKey: async () => ({}), verify: async () => true } } });
+  try {
+    for (const e of forged) assert.equal(await ed25519Verify(unhex(e.key), unhex(e.sig), message(e.count, e.head)), false, e.key);
+    assert.equal(await ed25519Verify(unhex(WEAK.rfc8032[0].key), new Uint8Array(64), new Uint8Array(0)), true);
+  } finally {
+    Object.defineProperty(globalThis, "crypto", real);
+  }
 });
 
 test("checkReceipts refuses a weak trusted key with a clear error, and a real key still checks out", async () => {
