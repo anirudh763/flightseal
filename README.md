@@ -24,6 +24,33 @@ has not been tried.
 
 C++17 core (OpenSSL SHA-256 and Ed25519), Python tools for PX4 flight logs, tests under AddressSanitizer and UBSan.
 
+## Use it: seal a flight log and hand over the receipt
+
+The console opens on **Seal & check** (`/flightseal/console/#/protect`). Nothing is uploaded.
+
+1. **Pilot or operator:** after downloading a flight, choose the log file (any type up to 45 MiB: PX4 `.ulg`,
+   ArduPilot `.bin`, a DJI flight record, CSV) and press **Seal this log**. The exact bytes are sealed into
+   `<name>.fseal`, checked, and a short receipt message is shown.
+2. **Send that message to someone else right away** (your company, client or insurer) with Copy, Email or Download.
+   It holds one signed receipt and the public key. The signing key is made for that file and discarded, never stored or exported.
+3. **Whoever kept the message** later receives the `.fseal` file, pastes the message and presses **Check this log**.
+   If it is intact, they can download the exact original file; its SHA-256 is matched against the sealed record.
+
+The same files from the command line:
+
+```
+python3 tools/raw_file.py encode flight.ulg | build/fseal append flight.fseal --key drone.pem --receipts flight.receipts --every 1000000
+build/fseal verify flight.fseal --receipts flight.receipts --pubkey <public key>
+python3 tools/raw_file.py extract flight.fseal restored.ulg
+```
+
+This proves the file is unchanged *since sealing*. It says nothing about what happened before, and the protection
+holds only if the receipt really went to someone else at sealing time. Sealing a whole file uses ordinary `FLTSEAL1`
+records (a manifest line, then base64 chunks), so every existing verifier checks it; see [docs/rawfile.js](docs/rawfile.js).
+It has been tested on the public PX4 sample flight and on a 45 MiB random file: in headless Chrome on one Mac, sealing
+45 MiB took 14.9 s, checking and restoring it 1.4 s, and the longest page freeze was 177 ms. No pilot or insurer has
+used it yet.
+
 ## See it work
 
 Output from [`tools/demo.sh`](tools/demo.sh) on a public PX4 flight log (69 s of flight, 64,542 logged samples), with
@@ -61,7 +88,7 @@ cannot change is the receipts someone else already holds.
 
 ## Interactive security console
 
-**[Open the sandbox](https://anirudh763.github.io/flightseal/console/)** to check an included 800-record synthetic
+**[Open the sandbox](https://anirudh763.github.io/flightseal/console/#/sandbox)** to check an included 800-record synthetic
 log immediately. Change a copy with a payload byte flip, middle-record deletion, or tail truncation; inspect the
 first failure and its record, then download a text or JSON summary. No account or upload is needed.
 
@@ -266,6 +293,9 @@ Measured with `build-release/fseal-bench records.tsv <dir> 5` on the PX4 flight 
   ([tools/fseal_py.py](tools/fseal_py.py), no shared code) must agree with the CLI on 7 attacks; the real PX4 flight
   is sealed and an altitude edit is found at the right record. `append` must refuse a receipts path it cannot open
   (before sealing anything) and fail when a receipt cannot be written (`/dev/full`).
+- **Whole-file sealing** ([tests/web/rawfile.test.mjs](tests/web/rawfile.test.mjs), 10 tests): the browser and Python
+  encoders write identical records for the PX4 flight log, the CLI seals and verifies them, both extractors return the
+  exact file, an edit, a cut tail and a re-seal with a new key are caught, and hostile manifests are refused.
 - **JavaScript** ([tests/web/verifier.test.mjs](tests/web/verifier.test.mjs), 101 tests): the browser verifier must
   print exactly the same report as `fseal verify` and find the same first problem, record, byte and head as the
   Python reader. The cases are the 7 attacks with and without receipts, a full rewrite, a deleted tail, receipts

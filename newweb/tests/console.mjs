@@ -4,6 +4,7 @@ import { serve } from '../../tests/web/serve.mjs';
 import { join, resolve, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import assert from 'node:assert/strict';
+import { createHash } from 'node:crypto';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const ROOT = resolve(HERE, '..');
@@ -36,7 +37,7 @@ async function loadFreshDemo(page) {
 async function route(page, screen) {
   await page.evaluate((s) => { location.hash = `/${s}`; }, screen);
   await page.waitForFunction((s) => location.hash === `#/${s}`, screen);
-  const heading = screen === 'video' ? 'Video sync' : screen[0].toUpperCase() + screen.slice(1);
+  const heading = { video: 'Video sync', protect: 'Seal & check', help: 'Trust help' }[screen] || screen[0].toUpperCase() + screen.slice(1);
   await page.waitForFunction((expected) => document.querySelector('.page-heading h1')?.textContent === expected, heading);
 }
 async function auditAxe(page, label) {
@@ -54,7 +55,7 @@ try {
   page.on('pageerror', (error) => runtimeErrors.push(String(error)));
   page.on('console', (message) => { if (message.type() === 'error') runtimeErrors.push(`${message.text()} (${message.location().url})`); });
   const initialStarted = performance.now();
-  await page.goto(url);
+  await page.goto(`${url}#/sandbox`);
   await waitResult(page, 'Intact');
   await page.waitForFunction(() => document.querySelector('.result-stat')?.textContent.includes('800'));
   metrics.firstVisit800DemoMs = Math.round(performance.now() - initialStarted);
@@ -333,21 +334,21 @@ try {
   });
 
   await check('documented modifier shortcuts navigate without altering the checked evidence', async () => {
-    await page.goto(url); await waitResult(page, 'Intact');
-    for (const [number, screen] of [[2, 'verify'], [3, 'records'], [4, 'receipts'], [5, 'video'], [6, 'help'], [1, 'sandbox']]) {
+    await page.goto(`${url}#/sandbox`); await page.reload(); await waitResult(page, 'Intact');
+    for (const [number, screen] of [[3, 'verify'], [4, 'records'], [5, 'receipts'], [6, 'video'], [7, 'help'], [1, 'protect'], [2, 'sandbox']]) {
       await page.keyboard.press(`Alt+Shift+${number}`);
       await page.waitForFunction((screen) => document.activeElement?.id === `page-${screen}` && location.hash === `#/${screen}`, screen, { timeout: 1500 });
     }
     assert.match(await page.locator('.result-stat').textContent(), /800/);
-    await page.keyboard.press('Alt+Shift+2');
-    await page.locator('#trusted-key').fill('editing');
     await page.keyboard.press('Alt+Shift+3');
+    await page.locator('#trusted-key').fill('editing');
+    await page.keyboard.press('Alt+Shift+4');
     assert.equal(await page.evaluate(() => location.hash), '#/verify');
     assert.equal(await page.locator('#trusted-key').inputValue(), 'editing');
   });
 
   await check('team pricing dialog is keyboard accessible and does not pretend to collect email or sell a plan', async () => {
-    await page.goto(url); await waitResult(page, 'Intact');
+    await page.goto(`${url}#/sandbox`); await page.reload(); await waitResult(page, 'Intact');
     await page.getByRole('button', { name: 'Team options' }).click({ timeout: 1500 });
     const dialog = page.getByRole('dialog', { name: 'Commercial fleet and cloud notary' });
     assert.match(await dialog.textContent(), /Starter · proposed \$49\/month/);
@@ -366,6 +367,118 @@ try {
     await auditAxe(page, '320px team pricing dialog');
     assert.ok(await dialog.evaluate((element) => element.getBoundingClientRect().width <= innerWidth));
     await page.keyboard.press('Escape');
+  });
+
+  await check('old bookmarks to data screens still open with the included demo loaded', async () => {
+    await page.goto(`${url}#/records`); await page.reload();
+    await page.waitForFunction(() => document.querySelector('.subcount')?.textContent.includes('800'), null, { timeout: 30000 });
+  });
+
+  await check('a pilot seals a real PX4 .ulg, a witness checks it with the emailed receipt and gets the exact original back; edits are caught', async () => {
+    const ulg = resolve(ROOT, '../tests/.data/px4-sample.ulg');
+    const original = readFileSync(ulg);
+    const sha = (bytes) => createHash('sha256').update(bytes).digest('hex');
+    await page.setViewportSize({ width: 1440, height: 960 });
+    await page.goto('about:blank');
+    const sampleRequests = [];
+    const onRequest = (request) => { if (request.url().includes('/samples/')) sampleRequests.push(request.url()); };
+    page.on('request', onRequest);
+    await page.goto(url);
+    await page.waitForFunction(() => location.hash === '#/protect' && document.querySelector('.page-heading h1')?.textContent === 'Seal & check');
+    await page.waitForTimeout(3000);
+    page.off('request', onRequest);
+    assert.deepEqual(sampleRequests, [], 'the start screen must not fetch or verify the demo');
+    await page.locator('#protect-file').setInputFiles(ulg);
+    await page.getByRole('button', { name: 'Seal this log' }).click();
+    await page.waitForSelector('#handover-text', { timeout: 60000 });
+    const handover = await page.locator('#handover-text').inputValue();
+    assert.match(handover, new RegExp(`Original file: ${original.length} bytes, SHA-256 ${sha(original)}`));
+    assert.equal(handover.split('\n').filter((line) => line.startsWith('fseal-receipt v1 ')).length, 1);
+    assert.match(await page.getByRole('link', { name: 'Email it' }).getAttribute('href'), /^mailto:\?subject=FlightSeal%20receipt/);
+    assert.match(await page.locator('#result-heading').textContent(), /Intact/);
+    const [sealedDownload] = await Promise.all([page.waitForEvent('download'), page.getByRole('button', { name: 'Download sealed file' }).click()]);
+    assert.equal(sealedDownload.suggestedFilename(), 'px4-sample.ulg.fseal');
+    const sealedPath = join(EVIDENCE, 'protect-sealed.fseal');
+    await sealedDownload.saveAs(sealedPath);
+    await auditAxe(page, '1440px seal handover');
+    await page.screenshot({ path: join(EVIDENCE, 'protect-sealed-1440.png'), fullPage: true });
+
+    // The witness, in a fresh page, with the message quoted the way an email reply quotes it.
+    await page.goto(`${url}#/protect`); await page.reload();
+    await page.locator('#check-file').setInputFiles(sealedPath);
+    await page.locator('#check-text').fill(handover.split('\n').map((line) => `> ${line}`).join('\n'));
+    await page.getByRole('button', { name: 'Check this log' }).click();
+    await waitResult(page, 'Intact');
+    await page.waitForSelector('.restored', { timeout: 30000 });
+    assert.match(await page.locator('.restored h3').textContent(), /Original file recovered/);
+    const [originalDownload] = await Promise.all([page.waitForEvent('download'), page.getByRole('button', { name: 'Download original file' }).click()]);
+    assert.equal(originalDownload.suggestedFilename(), 'px4-sample.ulg');
+    const restoredPath = join(EVIDENCE, 'protect-restored.ulg');
+    await originalDownload.saveAs(restoredPath);
+    assert.equal(sha(readFileSync(restoredPath)), sha(original));
+    for (const width of [320, 768]) {
+      await page.setViewportSize({ width, height: 900 });
+      const dimensions = await page.evaluate(() => ({ doc: document.documentElement.scrollWidth, client: document.documentElement.clientWidth }));
+      assert.ok(dimensions.doc <= dimensions.client + 1, `${width}px overflow: ${JSON.stringify(dimensions)}`);
+      await auditAxe(page, `${width}px check result`);
+      await page.screenshot({ path: join(EVIDENCE, `protect-checked-${width}.png`), fullPage: true });
+    }
+    await page.setViewportSize({ width: 1440, height: 960 });
+
+    // One changed byte in the middle of the sealed file: TAMPERED, and no original is offered.
+    const edited = Buffer.from(readFileSync(sealedPath));
+    edited[edited.length >> 1] ^= 1;
+    const editedPath = join(EVIDENCE, 'protect-edited.fseal');
+    writeFileSync(editedPath, edited);
+    await page.locator('#check-file').setInputFiles(editedPath);
+    await page.getByRole('button', { name: 'Check this log' }).click();
+    await waitResult(page, 'Tampered');
+    assert.equal(await page.locator('.restored').count(), 0);
+
+    // The real attack: the file holder changes the log and seals it again with a fresh key. Checked against the
+    // message the witness kept, it must not be Intact.
+    const changed = Buffer.from(original); changed[original.length >> 1] ^= 1;
+    const changedPath = join(EVIDENCE, 'px4-sample.ulg'); // same name, as an attacker would keep it
+    writeFileSync(changedPath, changed);
+    await page.locator('#protect-file').setInputFiles(changedPath);
+    await page.getByRole('button', { name: 'Seal this log' }).click();
+    await page.waitForSelector('#handover-text', { timeout: 60000 });
+    const [forgedDownload] = await Promise.all([page.waitForEvent('download'), page.getByRole('button', { name: 'Download sealed file' }).click()]);
+    const forgedPath = join(EVIDENCE, 'protect-forged.fseal');
+    await forgedDownload.saveAs(forgedPath);
+    await page.locator('#check-file').setInputFiles(forgedPath);
+    await page.locator('#check-text').fill(handover);
+    await page.getByRole('button', { name: 'Check this log' }).click();
+    await waitResult(page, 'Tampered');
+    assert.equal(await page.locator('.restored').count(), 0);
+    assert.match(await page.locator('[role=note]').textContent(), /receipt message you pasted/);
+
+    // A log of decoded flight records (not a whole sealed file): intact, and it says there is no original to download.
+    const samples = resolve(ROOT, '../docs/samples');
+    const sampleReceipts = readFileSync(join(samples, 'flight.receipts'), 'utf8');
+    await page.locator('#check-file').setInputFiles(join(samples, 'intact.fseal'));
+    await page.locator('#check-text').fill(sampleReceipts);
+    await page.getByRole('button', { name: 'Check this log' }).click();
+    await waitResult(page, 'Intact');
+    await page.waitForFunction(() => document.body.innerText.includes('there is no original file to download'), null, { timeout: 15000 });
+    // Only the first receipt kept: intact so far, but records after it are unprotected, so no restore is offered either.
+    await page.locator('#check-file').setInputFiles(sealedPath);
+    await page.locator('#check-text').fill(handover); // first the sealed file with its full receipt: restore appears
+    await page.getByRole('button', { name: 'Check this log' }).click();
+    await page.waitForSelector('.restored', { timeout: 30000 });
+    await page.locator('#check-file').setInputFiles(join(samples, 'intact.fseal'));
+    await page.locator('#check-text').fill(sampleReceipts.split('\n')[0] + '\n');
+    await page.getByRole('button', { name: 'Check this log' }).click();
+    await waitResult(page, 'Intact');
+    await page.waitForTimeout(500);
+    assert.equal(await page.locator('.restored').count(), 0);
+    assert.equal(await page.getByText('there is no original file to download').count(), 0);
+
+    // No receipt pasted: refused with a reason rather than a weaker check.
+    await page.locator('#check-text').fill('no receipt here');
+    await page.getByRole('button', { name: 'Check this log' }).click();
+    assert.match(await page.getByRole('alert').textContent(), /Paste the receipt message/);
+    assert.equal(runtimeErrors.length, 0, runtimeErrors.join('\n'));
   });
 
   await context.close();

@@ -24,9 +24,9 @@ The user's request and the owner's RULES.md take precedence over anything here.
 ## Test gates (all must pass before you report done)
 - C++: `cmake -S . -B build && cmake --build build -j && ctest --test-dir build` (4 suites).
 - Python: `python3 -m pytest -q` (77 passing including the local video cases).
-- JavaScript: `node --test tests/web/verifier.test.mjs tests/web/copy.test.mjs` (106 passing).
+- JavaScript: `node --test tests/web/verifier.test.mjs tests/web/copy.test.mjs tests/web/rawfile.test.mjs` (116 passing).
 - Wasm: `node --test tests/wasm/bridge.test.mjs tests/wasm/enterprise-edge.test.mjs` and `node --test tests/wasm/browser.test.mjs`.
-- Console: `npm --prefix newweb run build && npm --prefix newweb run test:browser`, then `node newweb/tests/edge-matrix.mjs` (the latter owns its browser lock).
+- Console: `python3 tools/fetch_sample.py tests/.data && npm --prefix newweb run build && npm --prefix newweb run test:browser`, then `node newweb/tests/edge-matrix.mjs` (the latter owns its browser lock).
 - Browser: `node tests/web/e2e.mjs` (45 checks) and `node tests/web/routes.mjs` (30 checks). axe-core reports 0
   violations in light and dark, at 1280 and 320 px.
 - For every bug fix or new behaviour: a test that fails before the change and passes after it.

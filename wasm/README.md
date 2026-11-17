@@ -23,7 +23,7 @@ Receipt `count` values are decimal strings, preserving all 64 bits. File-derived
 `records`, `goodBytes`, `covered`, `uncovered`, and `timeReversals` are numbers
 bounded by the upload limit and remain exact in JavaScript. The native
 heap has a 256 MiB hard ceiling; file verification is limited to 500 MiB, receipt
-text to 4 MiB / 10,000 receipts, and sandbox sealing to 16 MiB of input / 64 MiB of output. The result
+text to 4 MiB / 10,000 receipts, and sandbox sealing to 64 MiB of input / 64 MiB of output. The result
 includes `nativeHeapBytes` for observing the actual Wasm memory allocation.
 Invalid inputs and crypto failures reject; they never become an intact verdict.
 

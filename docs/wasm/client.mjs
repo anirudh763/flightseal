@@ -1,6 +1,6 @@
 // Each operation owns its worker, so cancellation also discards native state and keys.
 export const VERIFY_MAX_BYTES = 500 * 1024 * 1024;
-export const SEAL_MAX_BYTES = 16 * 1024 * 1024;
+export const SEAL_MAX_BYTES = 64 * 1024 * 1024; // the bridge also caps sealed output at 64 MiB
 
 function run(operation, file, fields, { signal } = {}) {
   if (!(file instanceof Blob)) return Promise.reject(new TypeError('Choose a file first.'));

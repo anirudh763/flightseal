@@ -230,3 +230,15 @@ after(async () => {
   }, null, 2));
   console.log(`native edge evidence: ${evidenceFile}`);
 });
+
+testCase('a whole log file at the 45 MiB browser limit seals through the native bridge and verifies intact', async () => {
+  const { fileToRecords, RAW_MAX_BYTES } = await import('../../docs/rawfile.js');
+  const bytes = new Uint8Array(RAW_MAX_BYTES);
+  for (let i = 0; i < bytes.length; i += 4096) bytes[i] = i & 255;
+  const { records } = await fileToRecords(new File([bytes], 'max.ulg'));
+  const { verify, seal } = await native();
+  const sealed = seal(new Uint8Array(await records.arrayBuffer()), 1000000);
+  assert.equal(sealed.error, undefined, sealed.error);
+  assert.ok(sealed.bytes.length <= 64 * 1024 * 1024);
+  assert.equal(verify(sealed.bytes, sealed.receipts, sealed.publicKey).verdict, 'intact');
+});

@@ -120,3 +120,14 @@ email collection or analytics runs without configured services. This gives up ma
 Video metadata helps inspect accompanying evidence, but video does not become a signed flight record. The static
 UI cannot truthfully offer server transcoding at zero compute cost, so FFmpeg conversion is an explicit bounded
 local tool and AVFoundation is an optional native helper. They do not change the FLTSEAL1 format or verification.
+
+### 21. Seal whole files inside the existing format, one receipt, one key per file
+A pilot's real artifact is a log file (`.ulg`, `.bin`, a DJI record), not decoded records. The browser and
+`tools/raw_file.py` seal its exact bytes as ordinary FLTSEAL1 records: a manifest line (name, size, SHA-256), then
+base64 chunks of 48 KiB whose timestamps are byte offsets, so every existing reader verifies it and the original
+can be rebuilt and checked against the manifest. Sealing happens after download, so one final receipt covers
+everything; the handover is a short message whose receipt line carries the public key, and the verifier pastes
+that message. The key is generated per file and discarded, which needs no key storage in the browser.
+**Rejected:** a new format version (breaks three readers for no gain); storing a long-lived private key in browser
+storage (silent loss or theft); bring-your-own-key (needs a Wasm rebuild and key handling UI; next step if operators
+want one identity across flights); trusting a public key that travels with the log.

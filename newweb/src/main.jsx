@@ -1,15 +1,16 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { createRoot } from 'react-dom/client';
-import { ChevronDown, CircleHelp, FileCheck2, FlaskConical, List, Menu, ShieldCheck, Stamp, Video } from 'lucide-react';
+import { ChevronDown, CircleHelp, Copy, Download, FileCheck2, FileLock2, FlaskConical, List, Mail, Menu, ShieldCheck, Stamp, Video } from 'lucide-react';
 import { verifyFile, sealFile, SEAL_MAX_BYTES } from '../../docs/wasm/client.mjs';
+import { fileToRecords, handoverText, parseHandover, recordsToFile, RAW_MAX_BYTES } from '../../docs/rawfile.js';
 import { blobSource, checkReceipts, crc32, HEADER, parseHex, parseReceipts, readRecord, scanLog, summarize } from '../../docs/verifier.js';
 import './style.css';
 
 const MAX_UI_BYTES = 64 * 1024 * 1024;
 const PAGE_SIZE = 50;
 const NAV = [
-  ['sandbox', 'Sandbox', FlaskConical, '1'], ['verify', 'Verify', ShieldCheck, '2'], ['records', 'Records', List, '3'],
-  ['receipts', 'Receipts', Stamp, '4'], ['video', 'Video sync', Video, '5'], ['help', 'Trust help', CircleHelp, '6'],
+  ['protect', 'Seal & check', FileLock2, '1'], ['sandbox', 'Sandbox', FlaskConical, '2'], ['verify', 'Verify', ShieldCheck, '3'],
+  ['records', 'Records', List, '4'], ['receipts', 'Receipts', Stamp, '5'], ['video', 'Video sync', Video, '6'], ['help', 'Trust help', CircleHelp, '7'],
 ];
 const asBig = (value) => typeof value === 'bigint' ? value : BigInt(value ?? 0);
 const fmtBig = (value) => new Intl.NumberFormat('en-US').format(asBig(value));
@@ -26,6 +27,7 @@ const humanStatus = (status) => ({
   incomplete: ['Incomplete', 'warn'], tampered: ['Tampered', 'bad'], unverified: ['Unverified', 'warn'],
 }[status] || [String(status || 'Unknown'), 'warn']);
 const titleFor = (screen) => NAV.find(([key]) => key === screen)?.[1] || 'Not found';
+const startScreen = () => location.hash.slice(2).split(/[/?]/)[0] || 'protect';
 
 function download(name, content, type = 'text/plain;charset=utf-8') {
   const url = URL.createObjectURL(new Blob([content], { type }));
@@ -35,7 +37,7 @@ function download(name, content, type = 'text/plain;charset=utf-8') {
 }
 
 function App() {
-  const [screen, setScreen] = useState(() => location.hash.slice(2).split(/[/?]/)[0] || 'sandbox');
+  const [screen, setScreen] = useState(startScreen);
   const [result, setResult] = useState(null);
   const [busy, setBusy] = useState('');
   const [error, setError] = useState('');
@@ -57,6 +59,14 @@ function App() {
   const [operationStatus, setOperationStatus] = useState('');
   const [offlineStatus, setOfflineStatus] = useState('');
   const [mobileMenu, setMobileMenu] = useState(false);
+  const [protectFile, setProtectFile] = useState(null);
+  const [protectSealed, setProtectSealed] = useState(null);
+  const [checkFile, setCheckFile] = useState(null);
+  const [checkText, setCheckText] = useState('');
+  const [protectResult, setProtectResult] = useState(null);
+  const [restored, setRestored] = useState(null);
+  const [copyStatus, setCopyStatus] = useState('');
+  const demoRequestedRef = useRef(false);
   const runRef = useRef(0);
   const controllerRef = useRef(null);
   const recordRef = useRef(0);
@@ -79,7 +89,7 @@ function App() {
       if (teamDialogRef.current?.open || event.defaultPrevented || event.isComposing || !event.altKey || !event.shiftKey ||
           event.ctrlKey || event.metaKey || event.getModifierState('AltGraph')) return;
       if (event.target instanceof Element && event.target.closest('input, textarea, select, [contenteditable="true"]')) return;
-      const match = /^Digit([1-6])$/.exec(event.code);
+      const match = /^Digit([1-7])$/.exec(event.code);
       if (!match) return;
       event.preventDefault();
       navigate(NAV[Number(match[1]) - 1][0]);
@@ -90,7 +100,7 @@ function App() {
 
   useEffect(() => {
     const update = () => {
-      const next = location.hash.slice(2).split(/[/?]/)[0] || 'sandbox';
+      const next = startScreen();
       setScreen(NAV.some(([key]) => key === next) ? next : 'help');
       setMobileMenu(false);
     };
@@ -256,7 +266,12 @@ function App() {
     }
   }, [runVerify]);
 
-  useEffect(() => { if (!location.hash) history.replaceState(null, '', `${location.pathname}${location.search}#/sandbox`); loadDemo(); }, [loadDemo]);
+  useEffect(() => { if (!location.hash) history.replaceState(null, '', `${location.pathname}${location.search}#/protect`); }, []);
+  // The demo loads when the sandbox is first opened, not on the Seal & check screen where it would only distract.
+  // Other screens open with it too (old bookmarks), but never over a result or a running seal or check.
+  useEffect(() => {
+    if (screen !== 'protect' && !result && !busy && !demoRequestedRef.current) { demoRequestedRef.current = true; loadDemo(); }
+  }, [screen, result, busy, loadDemo]);
 
   const cancel = () => {
     runRef.current++;
@@ -353,7 +368,7 @@ function App() {
   const runSeal = async () => {
     invalidateCheck(); setResult(null); setRecordDetail(null); setSealOutput(null);
     if (!sealFileInput) { setError('Choose a tab-separated timestamp and payload file first.'); return; }
-    if (sealFileInput.size > SEAL_MAX_BYTES) { setError('The C++ sealer accepts source files up to 16 MiB.'); return; }
+    if (sealFileInput.size > SEAL_MAX_BYTES) { setError(`The C++ sealer accepts source files up to ${SEAL_MAX_BYTES / 1024 / 1024} MiB.`); return; }
     const op = ++runRef.current;
     controllerRef.current?.abort();
     const controller = new AbortController(); controllerRef.current = controller;
@@ -371,6 +386,61 @@ function App() {
       if (op !== runRef.current || cause?.name === 'AbortError') return;
       setError(cause?.message || 'Could not seal this file. Check the TSV format and retry.');
     } finally { if (op === runRef.current) setBusy(''); }
+  };
+
+  const runProtectSeal = async () => {
+    invalidateCheck(); setProtectSealed(null); setProtectResult(null); setRestored(null); setCopyStatus(''); setError('');
+    if (!protectFile) { setError('Choose the flight log file you want to seal.'); return; }
+    let op = ++runRef.current;
+    const controller = new AbortController(); controllerRef.current = controller;
+    setBusy('Sealing your file on this computer…');
+    try {
+      const packed = await fileToRecords(protectFile);
+      if (op !== runRef.current) return;
+      const sealed = await sealFile(packed.records, { every: 1000000, signal: controller.signal });
+      if (op !== runRef.current) return;
+      const log = new File([sealed.log], `${packed.name}.fseal`, { type: 'application/octet-stream' });
+      const verified = await runVerify(log, sealed.receipts, sealed.publicKey, `${packed.name} (just sealed)`);
+      if (!verified) return;
+      op = runRef.current; // runVerify started its own operation; Cancel or a newer action changes it
+      setBusy('Rebuilding the original from the sealed copy to double-check it…');
+      const back = await recordsToFile(log);
+      if (op !== runRef.current) return;
+      if (verified.overallVerdict !== 'intact' || !back?.matches) { setResult(null); throw new Error('The sealed copy did not check out, so it was discarded. Choose the file again and retry.'); }
+      setProtectResult(verified);
+      setProtectSealed({
+        name: packed.name, bytes: packed.bytes, sha256: packed.sha256, log,
+        handover: handoverText({ ...packed, receipts: sealed.receipts, publicKey: sealed.publicKey, sealedAt: new Date().toISOString(), checkUrl: `${location.origin}${location.pathname}#/protect` }),
+      });
+      setOperationStatus('Sealed and checked on this computer; nothing was uploaded. Now send the receipt message to someone else.');
+    } catch (cause) {
+      if (op !== runRef.current || cause?.name === 'AbortError') return;
+      setBusy(''); setError(cause?.message || 'Could not seal this file. Choose it again and retry.');
+    } finally { if (op === runRef.current) setBusy(''); }
+  };
+
+  const runProtectCheck = async () => {
+    invalidateCheck(); setProtectResult(null); setRestored(null); setError('');
+    if (!checkFile) { setError('Choose the sealed file (.fseal) you were given.'); return; }
+    const { receipts, publicKey, keyConflict } = parseHandover(checkText);
+    if (keyConflict) { setError('This message names more than one public key. Paste only the receipt message you received when the flight was sealed.'); return; }
+    if (!receipts || !publicKey) { setError('Paste the receipt message you received when the flight was sealed. Without it, a rewritten file cannot be told apart from the original.'); return; }
+    const verified = await runVerify(checkFile, receipts, publicKey, checkFile.name);
+    if (!verified) return;
+    const op = runRef.current;
+    setProtectResult(verified);
+    if (verified.overallVerdict !== 'intact' || Number(verified.receiptCoverage.uncovered) !== 0) return;
+    setBusy('Rebuilding the original file…');
+    try {
+      const back = await recordsToFile(checkFile);
+      if (op === runRef.current) setRestored(back || 'none');
+    } catch (cause) { if (op === runRef.current) setError(cause.message); }
+    finally { if (op === runRef.current) setBusy(''); }
+  };
+
+  const copyHandover = async () => {
+    try { await navigator.clipboard.writeText(protectSealed.handover); setCopyStatus('Copied. Paste it into an email or message to the person who will keep it.'); }
+    catch { setCopyStatus('This browser blocked copying. Select the text in the box and copy it, or download the receipt.'); }
   };
 
   const clearVideo = () => {
@@ -457,7 +527,7 @@ function App() {
   return <div className="app-shell">
     <a className="skip-link" href="#main" onClick={(event) => { event.preventDefault(); document.querySelector('main h1')?.focus(); }}>Skip to content</a>
     <header className="topbar">
-      <a className="brand" href="#/sandbox" onClick={(e) => { e.preventDefault(); navigate('sandbox'); }}><span className="brand-mark" aria-hidden="true">F</span><span>FlightSeal <b>Console</b></span></a>
+      <a className="brand" href="#/protect" onClick={(e) => { e.preventDefault(); navigate('protect'); }}><span className="brand-mark" aria-hidden="true">F</span><span>FlightSeal <b>Console</b></span></a>
       <button className="menu-toggle" type="button" aria-expanded={mobileMenu} aria-controls="primary-nav" onClick={() => setMobileMenu(!mobileMenu)}><Menu size={17} aria-hidden="true" />Menu</button>
       <nav id="primary-nav" className={mobileMenu ? 'nav open' : 'nav'} aria-label="Console sections">
         {NAV.map(([key, label, Icon, shortcut]) => <a key={key} href={`#/${key}`} aria-keyshortcuts={`Alt+Shift+${shortcut}`} aria-current={screen === key ? 'page' : undefined} onClick={(e) => { e.preventDefault(); navigate(key); }}><Icon size={17} strokeWidth={1.8} aria-hidden="true" />{label}</a>)}
@@ -474,6 +544,51 @@ function App() {
       {busy && <div className="busy-card" role="status" aria-live="polite"><span className="spinner" aria-hidden="true" />{busy}<button className="button secondary" type="button" onClick={cancel}>Cancel</button></div>}
       {operationStatus && !busy && <p className="operation-status" role="status">{operationStatus}</p>}
       {offlineStatus && <p className="offline-note" role="status">{offlineStatus}</p>}
+
+      {screen === 'protect' && <section className="screen">
+        <p className="lede">Seal a flight log as soon as you download it, then send one short receipt to someone you trust: your company, client or insurer. Later, anyone with that receipt can prove the file was not changed and get the exact original back. Files never leave this computer.</p>
+        <div className="section-grid">
+          <section className="panel" aria-labelledby="seal-title"><div className="panel-head"><FileLock2 aria-hidden="true" size={18} /><h2 id="seal-title">Seal a flight log</h2></div><div className="panel-body">
+            <p>For the pilot or operator. Works with any log file: PX4 <code>.ulg</code>, ArduPilot <code>.bin</code>, DJI flight records, CSV and others. The exact bytes are sealed.</p>
+            <label className="field-label" htmlFor="protect-file">Flight log file <span>(up to {RAW_MAX_BYTES / 1024 / 1024} MiB)</span></label>
+            <input id="protect-file" type="file" onChange={(e) => { invalidateCheck(); setProtectFile(e.target.files?.[0] || null); setProtectSealed(null); setProtectResult(null); setRestored(null); setCopyStatus(''); setError(''); }} />
+            <button className="button primary" type="button" disabled={!protectFile || !!busy} onClick={runProtectSeal}>Seal this log</button>
+            {protectSealed && <div className="handover">
+              <h3>Send this receipt to someone else now</h3>
+              <p>Protection depends on it. A copy kept only by you could be rewritten together with the file.</p>
+              <label className="field-label" htmlFor="handover-text">Receipt message</label>
+              <textarea id="handover-text" className="mono-input" readOnly rows={9} value={protectSealed.handover} />
+              <div className="actions-row">
+                <button className="button primary" type="button" onClick={copyHandover}><Copy aria-hidden="true" size={16} />Copy message</button>
+                <a className="button secondary" href={`mailto:?subject=${encodeURIComponent(`FlightSeal receipt for ${protectSealed.name}`)}&body=${encodeURIComponent(protectSealed.handover)}`}><Mail aria-hidden="true" size={16} />Email it</a>
+                <button className="button secondary" type="button" onClick={() => download(`${protectSealed.name}.receipt.txt`, protectSealed.handover)}><Download aria-hidden="true" size={16} />Download receipt</button>
+              </div>
+              {copyStatus && <p className="field-hint" role="status">{copyStatus}</p>}
+              <h3>Keep the sealed file</h3>
+              <p>It holds your original log, byte for byte. Store it like the original and send it when someone asks for this flight.</p>
+              <button className="button secondary" type="button" onClick={() => download(protectSealed.log.name, protectSealed.log, 'application/octet-stream')}><Download aria-hidden="true" size={16} />Download sealed file</button>
+              <p className="field-hint">The signing key was made for this file only and was discarded, never stored or exported, so no further receipt can be made with it. Anyone can seal a different file with a new key; that is why the receipt you send now is what counts later. Sealing shows the file has not changed since now; it cannot show what happened before you sealed it.</p>
+            </div>}
+          </div></section>
+          <section className="panel" aria-labelledby="check-title"><div className="panel-head"><ShieldCheck aria-hidden="true" size={18} /><h2 id="check-title">Check a sealed log</h2></div><div className="panel-body">
+            <p>For whoever kept the receipt: an operator's company, a client, an insurer or an investigator.</p>
+            <label className="field-label" htmlFor="check-file">Sealed file <span>(.fseal)</span></label>
+            <input id="check-file" type="file" accept=".fseal,application/octet-stream" onChange={(e) => { invalidateCheck(); setCheckFile(e.target.files?.[0] || null); setProtectResult(null); setRestored(null); setError(''); }} />
+            <label className="field-label" htmlFor="check-text">Receipt message you were sent</label>
+            <textarea id="check-text" className="mono-input" rows={6} value={checkText} spellCheck="false" aria-describedby="check-text-hint" onChange={(e) => { invalidateCheck(); setCheckText(e.target.value); setProtectResult(null); setRestored(null); setError(''); }} />
+            <p id="check-text-hint" className="field-hint">Use the copy you received when the flight was sealed, not one that arrives with the file now.</p>
+            <button className="button primary" type="button" disabled={!checkFile || !checkText.trim() || !!busy} onClick={runProtectCheck}>Check this log</button>
+            {result && result === protectResult && checkFile && result.file === checkFile && <p className="field-hint" role="note">This result compares the file with the receipt message you pasted. It means something only if you received that message directly from the pilot or operator when the flight was sealed.</p>}
+            {restored && restored !== 'none' && result === protectResult && <div className="restored">
+              <h3>{restored.matches ? 'Original file recovered' : 'Recovered file does not match'}</h3>
+              <dl className="detail-grid"><dt>Name</dt><dd className="wrap">{restored.name}</dd><dt>Size</dt><dd>{fmtBytes(restored.bytes)}</dd><dt>SHA-256</dt><dd><code>{restored.actualSha256}</code></dd></dl>
+              {restored.matches ? <button className="button secondary" type="button" onClick={() => download(restored.name, restored.data, 'application/octet-stream')}><Download aria-hidden="true" size={16} />Download original file</button> : <p>Do not rely on this file.</p>}
+            </div>}
+            {restored === 'none' && result === protectResult && <p className="field-hint">This log holds decoded flight records rather than a whole sealed file, so there is no original file to download.</p>}
+          </div></section>
+        </div>
+        {result && result === protectResult && <ResultPanel result={result} resultTitle={resultTitle} reportText={reportText} reportJson={reportJson} onDownloadText={() => download('flightseal-verification-report.txt', reportText)} onDownloadJson={() => download('flightseal-verification-report.json', reportJson, 'application/json')} onNavigate={navigate} />}
+      </section>}
 
       {screen === 'sandbox' && <section className="screen" aria-labelledby="sandbox-title">
         <section className="sandbox-tools" aria-label="Local verification workspace">
@@ -495,7 +610,7 @@ function App() {
 
       {screen === 'video' && <section className="screen"><p className="lede">Choose a local clip and align it manually to the selected record. Flight timestamps may be boot-relative or untrusted; this is a playback aid, not proof of provenance.</p><section className="panel"><div className="panel-head"><Video aria-hidden="true" size={18} /><h2>Video sync</h2></div><div className="panel-body video-grid"><label className="field-label" htmlFor="video-input">Choose a local video</label><input id="video-input" type="file" accept="video/*" onChange={(e) => inspectVideo(e.target.files?.[0] || null)} /><video ref={videoRef} src={videoUrl || undefined} controls playsInline aria-label="Selected local video preview" onLoadedMetadata={(e) => { const media = e.currentTarget; const url = videoUrlRef.current; const metadata = { duration: media.duration, width: media.videoWidth, height: media.videoHeight }; if (!url || media.currentSrc !== url) return; setVideoInfo((v) => v && v.url === url ? { ...v, ...metadata, state: 'Browser metadata available. Codec identification is unknown.' } : v); }} onCanPlay={() => setVideoInfo((v) => v && ({ ...v, playable: true }))} onError={() => setVideoInfo((v) => v && ({ ...v, playable: false, state: 'The browser could not read metadata or play this stream. Codec identification is unknown.' }))} />{result && <div className="video-sync-controls"><p><strong>Selected record {fmtBig(selectedRecord)}</strong>{selectedTimestamp == null ? ' · timestamp unavailable' : ` · ${fmtBig(selectedTimestamp)} µs`}</p><p>Anchor: first indexed record at {firstTimestamp == null ? 'unavailable' : `${fmtBig(firstTimestamp)} µs`}</p><label className="field-label" htmlFor="video-offset">Manual offset (seconds)</label><input id="video-offset" type="number" step="any" value={videoOffset} onChange={(e) => setVideoOffset(e.target.value)} /><button className="button primary" type="button" disabled={!videoInfo?.duration || selectedTimestamp == null || firstTimestamp == null} onClick={syncVideo}>Sync to selected record</button></div>}{videoInfo && <div className="video-meta" role="status"><strong>{videoInfo.name}</strong><span>{fmtBytes(videoInfo.size)}</span>{videoInfo.duration != null && <span>{Number.isFinite(videoInfo.duration) ? `${videoInfo.duration.toFixed(2)} seconds` : 'Duration unavailable'}</span>}{videoInfo.width && <span>{videoInfo.width} × {videoInfo.height} pixels</span>}<p>{videoInfo.state}</p>{videoInfo.syncMessage && <p>{videoInfo.syncMessage}</p>}<p>Video bytes stay local. No codec name is inferred when the browser does not expose one.</p></div>}{!result && <p className="muted">Verify or load a flight record before syncing a clip.</p>}</div></section></section>}
 
-      {screen === 'help' && <section className="screen help-layout"><section className="panel"><div className="panel-head"><CircleHelp aria-hidden="true" size={18} /><h2>What a result means</h2></div><div className="panel-body prose"><h3>Integrity and authenticity are different.</h3><p>An intact result means this file agrees with its own hash chain. With receipts, the native verifier checks signed checkpoints against the public key you enter. Neither result proves that sensor data was true when recorded or that every byte of the original PX4 ULog was preserved. The PX4 examples contain selected decoded records; they do not authenticate every byte of the original ULog.</p><h3>Keep the witness separate.</h3><p>Receipts protect against a shortened or rebuilt log only when someone other than the log holder kept them. Confirm the public key with that witness through a separate channel.</p><h3>Read the first failure.</h3><p>Verification stops at the first record that cannot be trusted. A hash-chain break locates the first inconsistent link, not every changed record. A torn tail may reflect a writer interruption; other failures require investigation. The console does not repair or overwrite the supplied file.</p><h3>Keyboard shortcuts</h3><p>Alt+Shift+1 through Alt+Shift+6 open the six sections in navigation order. Tab and Enter work throughout; Escape closes the menu or team dialog.</p><h3>Local limits.</h3><p>Files and payloads stay in this browser. Reports contain verdicts, counts and hashes, not record payloads. This is an AI-assisted project; generated code and documentation require human review.</p><p><a href="https://github.com/anirudh763/flightseal" target="_blank" rel="noreferrer">Review source and report an issue on GitHub</a></p><p><a href="/flightseal/" rel="noopener">Open the existing verifier</a></p></div></section><section className="panel limits-panel"><div className="panel-head"><h2>Current browser boundaries</h2></div><div className="panel-body"><dl><dt>Verify file size</dt><dd>64 MiB console guard</dd><dt>Native worker limit</dt><dd>500 MiB</dd><dt>Seal source file</dt><dd>16 MiB</dd><dt>Receipt text</dt><dd>4 MiB</dd><dt>Record list index</dt><dd>At most 100,000 rows</dd><dt>Payload display</dt><dd>First 4 KiB per selected record</dd></dl></div></section></section>}
+      {screen === 'help' && <section className="screen help-layout"><section className="panel"><div className="panel-head"><CircleHelp aria-hidden="true" size={18} /><h2>What a result means</h2></div><div className="panel-body prose"><h3>Integrity and authenticity are different.</h3><p>An intact result means this file agrees with its own hash chain. With receipts, the native verifier checks signed checkpoints against the public key you enter. Neither result proves that sensor data was true when recorded or that every byte of the original PX4 ULog was preserved. The PX4 examples contain selected decoded records; they do not authenticate every byte of the original ULog.</p><h3>Keep the witness separate.</h3><p>Receipts protect against a shortened or rebuilt log only when someone other than the log holder kept them. Confirm the public key with that witness through a separate channel. On Seal &amp; check the key comes from the pasted receipt message, which counts only if the witness received it from the sealer when the flight was sealed.</p><h3>Read the first failure.</h3><p>Verification stops at the first record that cannot be trusted. A hash-chain break locates the first inconsistent link, not every changed record. A torn tail may reflect a writer interruption; other failures require investigation. The console does not repair or overwrite the supplied file.</p><h3>Keyboard shortcuts</h3><p>Alt+Shift+1 through Alt+Shift+7 open the seven sections in navigation order. Tab and Enter work throughout; Escape closes the menu or team dialog.</p><h3>Local limits.</h3><p>Files and payloads stay in this browser. Reports contain verdicts, counts and hashes, not record payloads. This is an AI-assisted project; generated code and documentation require human review.</p><p><a href="https://github.com/anirudh763/flightseal" target="_blank" rel="noreferrer">Review source and report an issue on GitHub</a></p><p><a href="/flightseal/" rel="noopener">Open the existing verifier</a></p></div></section><section className="panel limits-panel"><div className="panel-head"><h2>Current browser boundaries</h2></div><div className="panel-body"><dl><dt>Verify file size</dt><dd>64 MiB console guard</dd><dt>Native worker limit</dt><dd>500 MiB</dd><dt>Seal a log file</dt><dd>Up to 45 MiB</dd><dt>Seal timestamp records</dt><dd>Up to 64 MiB in, sealed output at most 64 MiB</dd><dt>Receipt text</dt><dd>4 MiB</dd><dt>Record list index</dt><dd>At most 100,000 rows</dd><dt>Payload display</dt><dd>First 4 KiB per selected record</dd></dl></div></section></section>}
     </main>
     <dialog ref={teamDialogRef} className="team-dialog" aria-labelledby="team-title" aria-describedby="team-description">
       <h2 id="team-title">Commercial fleet and cloud notary</h2>

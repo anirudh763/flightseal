@@ -3,7 +3,7 @@
   "name": "FlightSeal Console",
   "short_name": "FlightSeal",
   "description": "Local flight-log integrity and receipt verification",
-  "start_url": "/flightseal/console/#/sandbox",
+  "start_url": "/flightseal/console/#/protect",
   "scope": "/flightseal/console/",
   "display": "standalone",
   "background_color": "#f1f8f3",
