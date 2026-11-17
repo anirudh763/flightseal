@@ -3,7 +3,7 @@ import { createRoot } from 'react-dom/client';
 import { Activity, ArrowRight, Check, Copy, Download, Gauge, ChevronDown, CircleHelp, FileCheck2, FileLock2, FileUp, Mail, FlaskConical, List, LockKeyhole, LogIn, MapPin, Menu, Pause, Play, ShieldCheck, Stamp, UserRound, Video } from 'lucide-react';
 import { hashFile, importFile, IMPORT_MAX_BYTES, VERIFY_MAX_BYTES, verifyFile, sealFile, SEAL_MAX_BYTES, recoverTemporaryOutputs } from '../../docs/wasm/client.mjs';
 import { compareFiles, encodeManifest, MANIFEST_LIMITS, MANIFEST_STATUS, manifestHandoverText, manifestRecordsBlob, newSalt, verifySealedManifest } from '../../docs/manifest.mjs';
-import { blobSource, checkReceipts, decodeReceipts, parseHex, parseReceipts, readRecord, scanLog, summarize } from '../../docs/verifier.js';
+import { WEAK_KEY_MESSAGE, blobSource, checkReceipts, decodeReceipts, parseHex, parseReceipts, readRecord, scanLog, summarize, weakPublicKey } from '../../docs/verifier.js';
 import { mutateFile, readIndexedRecords, recordAt } from '../../docs/records.mjs';
 import { parseLocation, parseRouteHash, productHref, routeHash, safeReturnRoute } from './routes.mjs';
 import {
@@ -397,6 +397,8 @@ function App() {
         throw new Error(message);
       }
       const needsTrustedKey = !!receipts && !trustedKey.trim();
+      // A receipt carrying a weak key proves nothing, whatever key field or pin is used later.
+      if (needsTrustedKey && parsedReceipts?.receipts?.some((receipt) => weakPublicKey(receipt.key))) throw new Error(WEAK_KEY_MESSAGE);
       const engineReceipts = needsTrustedKey ? '' : receipts;
       const engineKey = needsTrustedKey ? '' : trustedKey;
       const [native, indexed] = await Promise.all([
@@ -1873,10 +1875,10 @@ function TrustedCompanies() {
   const [pending, setPending] = useState(null); // { kind: replace | compromise | remove, text, entry? }
   const [message, setMessage] = useState('');
   const [error, setError] = useState('');
-  const add = (confirmReplace = false) => {
+  const add = async (confirmReplace = false) => {
     setPending(null); setMessage(''); setError('');
     try {
-      const entry = addTrustedCompany(name, fingerprint, { source, confirmReplace });
+      const entry = await addTrustedCompany(name, fingerprint, { source, confirmReplace });
       setEntries(read()); setName(''); setFingerprint(''); setSource('');
       setMessage(`Added ${entry.name}.`);
     } catch (cause) {
@@ -2320,9 +2322,10 @@ function ManifestCheck({ onActiveChange }) {
       if (!key.trim()) {
         const stated = parseHandover(text);
         const trust = stated.publicKey && !stated.keyConflict ? await trustForKey(stated.publicKey).catch(() => null) : null;
+        if (trust?.status === 'weak') { if (revision === revisionRef.current) setOutcome({ verified: false, reason: WEAK_KEY_MESSAGE }); return; }
         if (trust?.status === 'trusted') { useKey = stated.publicKey; pinned = trust.entry; }
       }
-      const verified = await verifySealedManifest(sealed, text, useKey);
+      const verified = await verifySealedManifest(sealed, text, useKey).catch((cause) => { if (cause?.message === WEAK_KEY_MESSAGE) return { verified: false, reason: WEAK_KEY_MESSAGE }; throw cause; });
       if (revision !== revisionRef.current) return;
       if (!verified.verified) { setOutcome({ verified: false, reason: verified.reason }); return; }
       const trust = await trustForKey(verified.publicKey).catch(() => ({ status: 'untrusted' }));

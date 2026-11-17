@@ -335,16 +335,48 @@ Receipt sign_receipt(const std::string& pem_path, uint64_t count, const Hash& he
   return r;
 }
 
-bool signature_ok(const Receipt& r) {
-  Pkey k = need_ptr(Pkey(EVP_PKEY_new_raw_public_key(EVP_PKEY_ED25519, nullptr, r.key.data(), r.key.size())),
+const char kWeakKeyMessage[] = "This public key is weak and can't prove anything";
+
+bool weak_public_key(const PublicKey& key) {
+  // The y coordinates (little-endian, sign bit cleared) of the 8 small-order points: libsodium's has_small_order
+  // list (crypto_core/ed25519/ref10/ed25519_ref10.c) minus its entries with y >= p, which the next check covers.
+  // Derived and cross-checked in tests/fixtures/make_ed25519_weak_keys.py.
+  static const uint8_t small_order[5][32] = {
+      {0},
+      {1},
+      {0x26, 0xe8, 0x95, 0x8f, 0xc2, 0xb2, 0x27, 0xb0, 0x45, 0xc3, 0xf4, 0x89, 0xf2, 0xef, 0x98, 0xf0,
+       0xd5, 0xdf, 0xac, 0x05, 0xd3, 0xc6, 0x33, 0x39, 0xb1, 0x38, 0x02, 0x88, 0x6d, 0x53, 0xfc, 0x05},
+      {0xc7, 0x17, 0x6a, 0x70, 0x3d, 0x4d, 0xd8, 0x4f, 0xba, 0x3c, 0x0b, 0x76, 0x0d, 0x10, 0x67, 0x0f,
+       0x2a, 0x20, 0x53, 0xfa, 0x2c, 0x39, 0xcc, 0xc6, 0x4e, 0xc7, 0xfd, 0x77, 0x92, 0xac, 0x03, 0x7a},
+      {0xec, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
+       0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0x7f},  // p - 1
+  };
+  PublicKey y = key;
+  y[31] &= 0x7f;
+  // Non-canonical: y >= p = 2^255 - 19, i.e. 0x7fff...ffed and above.
+  bool high_ones = y[31] == 0x7f;
+  for (size_t i = 1; i < 31; ++i) high_ones = high_ones && y[i] == 0xff;
+  if (high_ones && y[0] >= 0xed) return true;
+  for (const auto& s : small_order)
+    if (std::memcmp(y.data(), s, y.size()) == 0) return true;
+  return false;
+}
+
+bool ed25519_verify(const PublicKey& key, const uint8_t* msg, size_t n, const Signature& sig) {
+  if (weak_public_key(key)) return false;  // OpenSSL would accept forged signatures for these
+  Pkey k = need_ptr(Pkey(EVP_PKEY_new_raw_public_key(EVP_PKEY_ED25519, nullptr, key.data(), key.size())),
                     "EVP_PKEY_new_raw_public_key");
   MdCtx ctx = need_ptr(MdCtx(EVP_MD_CTX_new()), "EVP_MD_CTX_new");
-  std::string m = signed_message(r.count, r.head);
   need(EVP_DigestVerifyInit(ctx.get(), nullptr, nullptr, nullptr, k.get()), "EVP_DigestVerifyInit");
-  int rc = EVP_DigestVerify(ctx.get(), r.sig.data(), r.sig.size(), reinterpret_cast<const uint8_t*>(m.data()), m.size());
+  int rc = EVP_DigestVerify(ctx.get(), sig.data(), sig.size(), msg, n);
   if (rc == 1) return true;
   if (rc == 0) return false;  // a well-formed check that says "not this key's signature"
   crypto_fail("EVP_DigestVerify");  // anything else is an error, never a verdict
+}
+
+bool signature_ok(const Receipt& r) {
+  std::string m = signed_message(r.count, r.head);
+  return ed25519_verify(r.key, reinterpret_cast<const uint8_t*>(m.data()), m.size(), r.sig);
 }
 
 std::string to_line(const Receipt& r) {

@@ -83,12 +83,13 @@ export function trustLine(trust, sources = {}) {
     case 'trusted': return `Signed by a key you trust: ${entry.name} (added from ${sources[entry.source] || entry.source})`;
     case 'compromised': return `Signed by a key you marked as compromised: ${entry.name}. Don't rely on this proof without checking with the company.`;
     case 'replaced': return `Signed by a key that was replaced for ${entry.name} on ${String(entry.replacedAt || '').slice(0, 10) || 'an unknown date'}. Ask the company whether proofs from that key are still valid.`;
+    case 'weak': return "This public key is weak and can't prove anything"; // docs/verifier.js WEAK_KEY_MESSAGE
     case 'wrong-key': return "Not signed by the key you chose. Don't rely on this proof.";
     case 'invalid-signature': return "The signature doesn't match. Don't rely on this proof.";
     default: return "Valid signature, but this key isn't in your trusted list — confirm its fingerprint through a channel you already know.";
   }
 }
-export const TRUST_KIND = { trusted: 'ok', untrusted: 'warn', replaced: 'warn', compromised: 'bad', 'wrong-key': 'bad', 'invalid-signature': 'bad' };
+export const TRUST_KIND = { trusted: 'ok', untrusted: 'warn', replaced: 'warn', compromised: 'bad', 'wrong-key': 'bad', 'invalid-signature': 'bad', weak: 'bad' };
 
 export const BYTES_DIFFER = Object.freeze({
   title: 'Bytes differ',

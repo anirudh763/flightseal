@@ -1,3 +1,4 @@
+import { SMALL_ORDER_Y, WEAK_KEY_MESSAGE, parseHex, weakPublicKey } from '../../docs/verifier.js';
 // Local trusted-companies list (public keys and fingerprints only; never a private key). History is kept: a
 // replaced or compromised key stays listed with its status, so an old proof can still be explained.
 const STORAGE_KEY = 'flightseal_trusted_keys_v1';
@@ -20,6 +21,16 @@ export function normalizeFingerprint(input) {
   if (!HEX64.test(value)) throw new Error('A fingerprint has 64 hexadecimal digits (0–9, a–f). Check it and try again.');
   return value;
 }
+// Every weak Ed25519 encoding (small-order y, or non-canonical y >= p; either sign bit), filtered through the shared
+// weakPublicKey rule, so a fingerprint of one of them can never be added as a trusted company.
+function weakKeys() {
+  const ys = SMALL_ORDER_Y.map((y) => parseHex(y, 32));
+  for (let low = 0xed; low <= 0xff; low++) ys.push(Uint8Array.from({ length: 32 }, (_, i) => (i === 0 ? low : i === 31 ? 0x7f : 0xff)));
+  return ys.flatMap((y) => [y, Uint8Array.from(y, (b, i) => (i === 31 ? b | 0x80 : b))]).filter(weakPublicKey);
+}
+const toHex = (bytes) => [...bytes].map((b) => b.toString(16).padStart(2, '0')).join('');
+let weakFingerprints = null;
+const weakFingerprintSet = (cryptoObject) => (weakFingerprints ??= Promise.all(weakKeys().map((key) => fingerprintHex(toHex(key), cryptoObject))).then((list) => new Set(list)));
 export const formatFingerprint = (hex) => String(hex || '').match(/.{1,4}/g)?.join(' ') || '';
 
 function clean(entry) {
@@ -78,16 +89,18 @@ export async function pinTrustedKey(nameInput, publicKey, { storage = globalThis
   if (!Object.hasOwn(SOURCES, source)) throw new Error('Choose where you got this key.');
   const value = String(publicKey || '').trim().toLowerCase();
   const fingerprint = await fingerprintHex(value, cryptoObject);
+  if (weakPublicKey(parseHex(value, 32))) throw new Error(WEAK_KEY_MESSAGE);
   const { entries, entry } = upsert(read(storage), { name, publicKey: value, fingerprint, source, now, confirm: confirmRotation,
     message: (old) => `Key changed for “${old.name}” (old fingerprint ${formatFingerprint(old.fingerprint)}). Confirm rotation after verifying the new key independently.` });
   write(storage, entries);
   return clean(entry);
 }
 
-export function addTrustedCompany(nameInput, fingerprintInput, { source, confirmReplace = false, now = new Date().toISOString(), storage = globalThis.localStorage } = {}) {
+export async function addTrustedCompany(nameInput, fingerprintInput, { source, confirmReplace = false, now = new Date().toISOString(), storage = globalThis.localStorage, cryptoObject = globalThis.crypto } = {}) {
   const name = checkName(nameInput);
   const fingerprint = normalizeFingerprint(fingerprintInput);
   if (!source || source === 'not-recorded' || !Object.hasOwn(SOURCES, source)) throw new Error('Choose where you got this fingerprint.');
+  if ((await weakFingerprintSet(cryptoObject)).has(fingerprint)) throw new Error(WEAK_KEY_MESSAGE);
   const { entries, entry } = upsert(read(storage), { name, publicKey: '', fingerprint, source, now, confirm: confirmReplace,
     message: (old) => `“${old.name}” already has the key ${formatFingerprint(old.fingerprint)}. Replace it only if the company told you about a new key through a channel you already know.` });
   write(storage, entries);
@@ -108,6 +121,7 @@ export function markCompromised(name, fingerprintInput, { now = new Date().toISO
 export async function trustForKey(publicKey, { storage = globalThis.localStorage, cryptoObject = globalThis.crypto } = {}) {
   let fingerprint;
   try { fingerprint = await fingerprintHex(publicKey, cryptoObject); } catch { return { status: 'untrusted', fingerprint: '' }; }
+  if (weakPublicKey(parseHex(String(publicKey).trim().toLowerCase(), 32))) return { status: 'weak', fingerprint };
   const matches = read(storage).filter((entry) => entry.fingerprint === fingerprint);
   for (const [status, result] of [['compromised', 'compromised'], ['active', 'trusted'], ['replaced', 'replaced']]) {
     const entry = matches.findLast((item) => item.status === status);

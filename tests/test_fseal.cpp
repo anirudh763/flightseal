@@ -452,6 +452,61 @@ TEST(kill_9_never_loses_an_acknowledged_record) {
   }
 }
 
+// tests/fixtures/ed25519-weak-keys.json holds one entry per line, so a field is the quoted value after its name.
+static std::string field(const std::string& line, const std::string& name) {
+  size_t at = line.find("\"" + name + "\": \"");
+  if (at == std::string::npos) return "";
+  at += name.size() + 5;
+  return line.substr(at, line.find('"', at) - at);
+}
+template <size_t N> static std::array<uint8_t, N> bytes(const std::string& h) {
+  std::array<uint8_t, N> out{};
+  CHECK(parse_hex(h, out.data(), N));
+  return out;
+}
+
+TEST(weak_ed25519_keys_are_refused_and_real_signatures_still_verify) {
+  std::ifstream in(std::string(FSEAL_SOURCE_DIR) + "/tests/fixtures/ed25519-weak-keys.json");
+  CHECK(in.good());
+  std::string line, section;
+  int weak = 0, forged = 0, controls = 0, rfc = 0;
+  while (std::getline(in, line)) {
+    if (line.find("\"error\": ") != std::string::npos) CHECK(field(line, "error") == kWeakKeyMessage);
+    if (line.find("\": [") != std::string::npos) section = line.substr(line.find('"') + 1, line.find("\": [") - line.find('"') - 1);
+    if (section == "not_weak" && line.find("    \"") == 0) {
+      CHECK(!weak_public_key(bytes<32>(line.substr(5, 64))));
+      ++controls;
+    }
+    if (field(line, "key").empty()) continue;
+    PublicKey key = bytes<32>(field(line, "key"));
+    if (section == "weak") {
+      CHECK(weak_public_key(key));
+      ++weak;
+      if (field(line, "sig").empty()) continue;
+      Receipt r;
+      r.key = key;
+      r.count = std::stoull(line.substr(line.find("\"count\": ") + 9));
+      r.head = bytes<32>(field(line, "head"));
+      r.sig = bytes<64>(field(line, "sig"));
+      CHECK(!signature_ok(r));
+      ++forged;
+    } else if (section == "rfc8032") {
+      std::vector<uint8_t> m(field(line, "msg").size() / 2);
+      CHECK(parse_hex(field(line, "msg"), m.data(), m.size()));
+      CHECK(!weak_public_key(key));
+      CHECK(ed25519_verify(key, m.data(), m.size(), bytes<64>(field(line, "sig"))));
+      ++rfc;
+    }
+  }
+  CHECK(weak == 48 && forged == 14 && controls == 1 && rfc == 3);
+  // A real receipt from the shipped sample still verifies.
+  std::ifstream receipts(std::string(FSEAL_SOURCE_DIR) + "/docs/samples/flight.receipts");
+  CHECK(std::getline(receipts, line));
+  Receipt real;
+  CHECK(parse_line(line, &real));
+  CHECK(!weak_public_key(real.key) && signature_ok(real));
+}
+
 int main(int argc, char** argv) {
   for (const Test& t : registry()) {
     if (argc > 1 && std::string(argv[1]) != t.name) continue;

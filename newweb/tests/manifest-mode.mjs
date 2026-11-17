@@ -292,6 +292,65 @@ try {
     assert.match(await settings.locator('.company-list').innerText(), new RegExp(`Unit A[\\s\\S]*${grouped(fingerprintOf('ab'.repeat(32))).slice(0, 14)}`));
   });
 
+  await check('A weak key is never trusted: its fingerprint cannot be added, and a pinned one is refused in every check', async () => {
+    const WEAK = JSON.parse(readFileSync(resolve(ROOT, '../tests/fixtures/ed25519-weak-keys.json'), 'utf8'));
+    const [{ key: weakKey, sig: weakSig }] = WEAK.weak;
+    const weakFp = fingerprintOf(weakKey);
+    const trusted = /Signed by a key you trust/;
+    await addCompany('Weak Co', grouped(weakFp), 'company website you already knew');
+    assert.equal(await settings.getByRole('alert').innerText(), WEAK.error);
+    // A pin from before this guard (or written by hand) must still never make the weak key "trusted".
+    await page.evaluate(({ fp }) => {
+      const store = JSON.parse(localStorage.getItem('flightseal_trusted_keys_v1') || '[]');
+      store.push({ name: 'Weak Co', publicKey: '', fingerprint: fp, source: 'website', addedAt: '', status: 'active' });
+      localStorage.setItem('flightseal_trusted_keys_v1', JSON.stringify(store));
+    }, { fp: weakFp });
+    const forge = (message) => message.replace(/key=[0-9a-f]{64} sig=[0-9a-f]{128}/, `key=${weakKey} sig=${weakSig}`).replace(/Public key: [0-9a-f]{64}/, `Public key: ${weakKey}`);
+    const forged = forge(handover);
+    assert.notEqual(forged, handover);
+
+    // Large files, key field empty.
+    await page.locator('#manifest-check-file').setInputFiles(sealedPath);
+    await page.locator('#manifest-check-text').fill(forged);
+    await page.locator('#manifest-local-files').setInputFiles([]);
+    await runCheck('');
+    const outcome = await page.locator('.manifest-outcome').innerText();
+    assert.match(outcome, /Manifest not verified/);
+    assert.ok(outcome.includes(WEAK.error), outcome);
+    assert.doesNotMatch(outcome, trusted);
+    assert.equal(await page.locator('.manifest-table').count(), 0);
+
+    // Verify, key field empty, with the forged receipt file.
+    const receiptsPath = join(dir, 'weak.receipts');
+    writeFileSync(receiptsPath, `${forged.split('\n').find((line) => line.startsWith('fseal-receipt v1 '))}\n`);
+    await page.evaluate(() => { location.hash = '/app/verify'; });
+    await page.waitForFunction(() => document.querySelector('.commandbar h1')?.textContent === 'Verify');
+    await page.locator('#log-input').setInputFiles(sealedPath);
+    await page.locator('#receipt-input').setInputFiles(receiptsPath);
+    await page.locator('#trusted-key').fill('');
+    await page.getByRole('button', { name: 'Run check' }).click();
+    await page.getByRole('alert').filter({ hasText: WEAK.error }).waitFor({ timeout: 30000 });
+    assert.doesNotMatch(await page.locator('main').innerText(), trusted);
+
+    // Small file: seal one, then check it with the forged message.
+    const small = write('weak-check.log', Buffer.from('0\tflight\n'));
+    await page.evaluate(() => { location.hash = '/app/protect'; });
+    await page.waitForFunction(() => document.querySelector('.commandbar h1')?.textContent === 'Seal & send');
+    await page.getByLabel('Small file (seal the whole file, up to 45 MiB)').check();
+    await page.locator('#protect-file').setInputFiles(small);
+    await page.getByRole('button', { name: 'Seal this log' }).click();
+    await page.waitForSelector('#handover-text', { timeout: 60000 });
+    const smallHandover = await page.locator('#handover-text').inputValue();
+    const [d] = await Promise.all([page.waitForEvent('download'), page.getByRole('button', { name: 'Download sealed file' }).click()]);
+    const smallSealed = join(dir, 'weak-check.log.fseal'); await d.saveAs(smallSealed);
+    await page.locator('#check-file').setInputFiles(smallSealed);
+    await page.locator('#check-text').fill(forge(smallHandover));
+    await page.getByRole('button', { name: 'Check this log' }).click();
+    await page.getByRole('alert').filter({ hasText: WEAK.error }).waitFor({ timeout: 30000 });
+    assert.doesNotMatch(await page.locator('main').innerText(), trusted);
+    await page.getByLabel('Large files (fingerprint only)').check();
+  });
+
   await check('Edited copy and re-encoded file: Bytes differ wording, signed derived-from link, negative reported interval', async () => {
     const text = 'Flight 42 notes\nBattery 81%\nLanded on pad B\n';
     const original = write('flight-notes.txt', Buffer.from(text));
@@ -306,10 +365,10 @@ try {
     await page.locator('#manifest-landing').fill(local);
     await page.locator('#manifest-edited-1').check();
     await page.getByRole('button', { name: 'Seal', exact: true }).click();
-    assert.match(await page.getByRole('alert').first().textContent(), /Fill in “Derived from”/, 'an empty edited-copy link is never dropped silently');
+    await page.locator('.manifest-body [role=alert]').filter({ hasText: /Fill in “Derived from”/ }).waitFor({ timeout: 5000 }); // an empty edited-copy link is never dropped silently
     await page.locator('#manifest-derived-1').fill('item [1]');
     await page.getByRole('button', { name: 'Seal', exact: true }).click();
-    assert.match(await page.getByRole('alert').first().textContent(), /can’t contain \[ or \]/);
+    await page.locator('.manifest-body [role=alert]').filter({ hasText: /can’t contain \[ or \]/ }).waitFor({ timeout: 5000 });
     await page.locator('#manifest-derived-1').fill('item 1');
     await page.getByRole('button', { name: 'Seal', exact: true }).click();
     await page.waitForSelector('#manifest-handover-text', { timeout: 60000 });

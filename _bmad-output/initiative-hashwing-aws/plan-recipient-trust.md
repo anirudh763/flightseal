@@ -162,6 +162,23 @@ deferred: []
   - `[low]` `[patch]` The pinTrustedKey replace message used the raw fingerprint — it now uses the grouped form; unit and browser tests failed first.
   - `[low]` `[patch]` The interval assertions depended on timing — the regexes now accept any minute count.
 
+### 2026-11-17 — Advisor review pass (PR #24)
+- verdicts: 4 findings — high 1, medium 2, low 0, false 1, maybe-false 0
+- findings:
+  - `[false]` `[reject]` secret-scan failure blamed on hex fingerprints in the tests — local `gitleaks git --log-opts=--all` showed all 10 findings were in main's commit 9bd3fdc (PR #22 weak-key fixtures). My branch's `.gitleaks.toml` didn't yet have main's allowlist. Merging origin/main brings it in; `gitleaks git . --config .gitleaks.toml --log-opts="origin/main..HEAD"` reports no leaks, and the tests add no hex fingerprints (the new ones are computed at runtime).
+  - `[medium]` `[patch]` Merge with PR #22 (weak-key refusal). Conflicts resolved:
+    - `pinTrustedKey`: both the weak-key refusal and the history-keeping upsert are kept.
+    - Test file: both test sets kept.
+    - `docs/console/`: rebuilt, not hand-merged.
+    - AGENTS.md: taken from main; its counts were confirmed by a fresh run.
+  - `[high]` `[patch]` A pinned fingerprint of a weak key could make a forged receipt "Signed by a key you trust". The fix:
+    - `addTrustedCompany` (now async) refuses the fingerprint of any of the 48 weak encodings. These are enumerated from the shared `SMALL_ORDER_Y` (newly exported from `docs/verifier.js`) and the y >= p range, filtered by `weakPublicKey`.
+    - `trustForKey` returns `weak` before consulting pins, and the trust line for it is the shared weak-key message.
+    - The large-file check refuses a weak receipt key with an empty key field, and maps a thrown weak-key error to "Manifest not verified".
+    - Verify refuses receipts carrying a weak key even with an empty key field.
+    - Test: unit tests and the browser check "A weak key is never trusted…" cover Settings, large-file, Verify and small-file. They failed with the guards removed.
+  - `[medium]` `[patch]` The browser and registry fingerprint definitions were not proven equal — a unit test now runs `registry.receipt.fingerprint` (Python) on the sample key, a plain key and a weak key, and compares it with `fingerprintHex`: SHA-256 of the 32 raw key bytes, lowercase hex.
+
 ## Auto Run Result
 
 - Summary: trusted companies (fingerprint + required source, replace with confirm, history, compromised), a trust line on every check path, labelled time fields with a reported interval that is never clamped, neutral Bytes differ wording, compare-a-copy, a signed edited-copy link in large-file mode, and trust/time/bytes-differ fields in every report. Browser only; formats unchanged.

@@ -69,6 +69,7 @@ test('Sealed and landing lines parse from a quoted, wrapped email reply', () => 
 test('trust wording is exact for every status', () => {
   const entry = { name: 'Acme', source: 'contract', replacedAt: '2026-02-02T00:00:00.000Z' };
   assert.equal(trustLine({ status: 'trusted', entry }, SOURCES), 'Signed by a key you trust: Acme (added from contract or invoice)');
+  assert.equal(trustLine({ status: 'weak' }, SOURCES), "This public key is weak and can't prove anything");
   assert.equal(trustLine({ status: 'untrusted' }, SOURCES), "Valid signature, but this key isn't in your trusted list — confirm its fingerprint through a channel you already know.");
   assert.equal(trustLine({ status: 'compromised', entry }, SOURCES), "Signed by a key you marked as compromised: Acme. Don't rely on this proof without checking with the company.");
   assert.equal(trustLine({ status: 'replaced', entry }, SOURCES), 'Signed by a key that was replaced for Acme on 2026-02-02. Ask the company whether proofs from that key are still valid.');

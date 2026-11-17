@@ -68,6 +68,7 @@ install(TARGETS fseal-cli RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR})
 enable_testing()
 add_executable(fseal-tests tests/test_fseal.cpp)
 target_link_libraries(fseal-tests fseal)
+target_compile_definitions(fseal-tests PRIVATE FSEAL_SOURCE_DIR="${CMAKE_SOURCE_DIR}")
 add_test(NAME unit COMMAND fseal-tests)
 
 add_executable(fseal-import-tests tests/test_import.cpp)
