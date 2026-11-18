@@ -135,11 +135,24 @@ token. A server-made token could only be recovered by issuing a new one.
   idempotency record expired, and it gets the share back with its current disposition. Without this, a link holder
   could re-register an old withdrawn hash once TTL had removed its record, and the old link would show their
   registration. Share records are about 150 bytes, at most 10 per registration.
+- **Accepted low-severity disclosure: the 409 shows that a hash was used.** A signed-in member with an active
+  registration who sends the hash of a token they hold gets 409 `conflict` if that hash was ever used (even when the
+  share is withdrawn or expired), and 201 if it was not. So someone who already holds a link (or its hash) can learn
+  that it was once real. A 201 is not free: it creates a live share on the caller's registration, which counts
+  toward the 10-share limit. The response does not name the org, the registration or the state, and the shipped client makes a new
+  256-bit token for every share, so this happens only when a token is reused on purpose. Hiding it would mean
+  answering 201 for a share that was not created, which breaks the retry rules above, so this is documented
+  rather than changed.
 - A replay never reopens anything. It reports the share's current `disposition` (`active`, `withdrawn` or
   `expired`).
 - A replay is answered before the 10-share limit is checked, so a retry at the limit still gets its share.
 - The response has no token: `{registration_id, expires_at, disposition}`.
-- **Enumeration resistance is unchanged.** Unknown, expired, withdrawn and malformed links get the same 404. The
+- **Enumeration resistance is unchanged.** In the Lambda (and the dev server), unknown, expired, withdrawn and
+  malformed links get the same 404, with the same body and headers: every GET under `/v1/shares/` carries the
+  public CORS header. On the deployed HTTP API, a path that is not exactly one segment after `/v1/shares/` (empty,
+  or with an extra `/`) matches no route, so API Gateway answers its own 404 without calling the Lambda. That 404
+  shows only the path's shape, which the caller already knows; it says nothing about any token. Not verified on
+  AWS. The
   registry cannot check the randomness of a token it never sees, so a weak token chosen by a member only weakens that
   member's own link. The shipped client always uses 256 random bits.
 

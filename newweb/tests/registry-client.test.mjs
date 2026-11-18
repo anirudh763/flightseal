@@ -17,6 +17,10 @@ test('tokenOwner reads org_id or custom:org_id plus sub, without verification', 
   assert.equal(tokenOwner(null), null);
 });
 
+test('tokenOwner prefers custom:org_id over org_id, like the server Cognito adapter', () => {
+  assert.equal(tokenOwner(jwt({ sub: 'p1', 'custom:org_id': 'orgCognito', org_id: 'orgDev' })), 'orgCognito/p1');
+});
+
 test('register sends the bearer token and only the three fields; 2xx is ok with data', async () => {
   const calls = [];
   const client = createRegistryClient({ baseUrl: 'http://x/', getToken: async () => 'T1', fetch: async (url, init) => { calls.push({ url, init }); return json(201, { registration_id: 'r' }); } });

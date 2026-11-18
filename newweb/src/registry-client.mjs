@@ -23,7 +23,7 @@ export function tokenOwner(jwt) {
   let claims;
   try { claims = JSON.parse(b64urlDecode(parts[1])); } catch { return null; }
   if (!claims || typeof claims !== 'object') return null;
-  const org = claims.org_id ?? claims['custom:org_id'];
+  const org = claims['custom:org_id'] ?? claims.org_id; // the server's Cognito adapter reads custom:org_id
   const sub = claims.sub;
   if (typeof org !== 'string' || !org || typeof sub !== 'string' || !sub) return null;
   return `${org}/${sub}`;

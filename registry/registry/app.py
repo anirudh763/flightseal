@@ -45,7 +45,8 @@ ROUTES = [
     ("DELETE", r"/v1/shares/([A-Za-z0-9_-]{1,128})", "withdraw_share", ANY),
 ]
 ROUTES = [(m, re.compile(p), name, access) for m, p, name, access in ROUTES]
-SHARE_VIEW = re.compile(r"/v1/shares/[A-Za-z0-9_-]{1,128}")
+# Any GET under /v1/shares/, routed or not: a malformed link must get the same 404 headers as an unknown one.
+SHARE_VIEW = re.compile(r"/v1/shares/.*", re.S)
 # CORS. Only an exact allowlisted origin is echoed back, never "*", and credentials (cookies) are never allowed:
 # the bearer token travels in Authorization. A `scheme://host:*` entry matches any port (dev servers only).
 CORS_ENTRY = re.compile(r"https?://[a-z0-9]([a-z0-9.-]*[a-z0-9])?(:([0-9]{1,5}|\*))?")

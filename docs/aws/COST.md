@@ -98,6 +98,10 @@ keep the stage default of 10 a second, burst 20. So the flood reaches the Lambda
 | CloudWatch Logs | about 350 bytes per invocation: 1.81 GB × $0.50 per GB | $0.91 |
 | **Total** | | **about $8** (was about $40 at the 10-a-second stage limit) |
 
+**About $8 assumes throttled requests are free.** It is not known whether API Gateway bills the requests it
+throttles with a 429 (see "Still not a cap" below). If those are billed, the HTTP API line grows with the
+attacker's send rate, not with the 2-a-second throttle.
+
 **Why 2 a second, burst 5.** The baseline is 5,000 checks a month, which averages 0.002 a second. A person opening a
 handful of links at once fits inside the burst of 5, and a steady 2 a second is still about 1,000 times the baseline
 average. Going lower (for example 1 a second, about $4) would get under $5, but it would start rejecting a
@@ -113,7 +117,12 @@ so they get 429s. The signed-in routes have their own limits and keep working.
   was **not retrieved**. If throttled requests are billed, the HTTP API line grows with the attacker's send rate at
   $1.00 per million. Only the Lambda, DynamoDB and log lines stay capped by the throttle.
 - **Invalid-token floods:** a flood of the signed-in routes with invalid tokens is stopped by the JWT authorizer
-  before the Lambda. Its API Gateway charge, if billed, is the same $1.00 per million.
+  before the Lambda. Its API Gateway charge, if billed, is the same $1.00 per million. The stage default of
+  10 a second, burst 20 is synthesised as the stage's `DefaultRouteSettings`, which we read as a limit for each of the
+12 signed-in routes separately (AWS's wording was not retrieved), so up to about 120 requests a second
+  with invalid tokens get past the throttle to the authorizer. That is about 311 M a month, roughly $300 of HTTP API
+  requests if requests the authorizer rejects are billed. If throttled requests are billed too, there is no
+  ceiling. All of this is unverified on AWS, because the stack has never been deployed.
 - **Budget alerts:** they only send email. They do not stop requests or limit spend.
 
 Ways to lower the ceiling further without fixed-fee services:

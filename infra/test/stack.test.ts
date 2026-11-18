@@ -3,6 +3,8 @@ import assert from 'node:assert/strict';
 import { App } from 'aws-cdk-lib';
 import { Match, Template } from 'aws-cdk-lib/assertions';
 import { RegistryStack } from '../lib/stack';
+import { existsSync, readdirSync, statSync } from 'node:fs';
+import { join, sep } from 'node:path';
 
 // Synth with no credentials: an environment-agnostic stack performs no lookups.
 for (const v of ['AWS_ACCESS_KEY_ID', 'AWS_SECRET_ACCESS_KEY', 'AWS_SESSION_TOKEN', 'AWS_PROFILE']) delete process.env[v];
@@ -172,4 +174,17 @@ test('no fixed-fee services', () => {
     'AWS::Route53::HostedZone', 'AWS::SecretsManager::Secret']) {
     assert.equal(resources(type).length, 0, type);
   }
+});
+
+test('Lambda asset holds only the runtime: handler.py and registry/*.py', () => {
+  const app = new App();
+  new RegistryStack(app, 'Asset');
+  const dir = app.synth().directory;
+  const assets = readdirSync(dir).filter((d) => d.startsWith('asset.') && existsSync(join(dir, d, 'handler.py')));
+  assert.equal(assets.length, 1);
+  const root = join(dir, assets[0]);
+  const files = (readdirSync(root, { recursive: true }) as string[])
+    .filter((f) => statSync(join(root, f)).isFile()).map((f) => f.split(sep).join('/')).sort();
+  assert.ok(files.includes('handler.py') && files.includes('registry/app.py'));
+  for (const f of files) assert.match(f, /^(handler\.py|registry\/[a-z0-9_]+\.py)$/, `unexpected file in asset: ${f}`);
 });

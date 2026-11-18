@@ -80,7 +80,7 @@ export class RegistryStack extends Stack {
       memorySize: 128,
       timeout: Duration.seconds(5),
       handler: 'handler.handler',
-      code: lambda.Code.fromAsset('../registry', { exclude: ['tests', 'localstack', '**/__pycache__'] }),
+      code: lambda.Code.fromAsset('../registry', { exclude: ['tests', 'localstack', 'devserver', '**/__pycache__'] }),
       logGroup,
       environment,
     });
