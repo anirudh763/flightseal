@@ -60,7 +60,7 @@ export function SigningLine({ signingKey, trustHref, onTrust, registryLine }) {
  * question comes, once, when "Seal more files" would discard a part that is not saved (`unsaved`, the same predicate
  * the parent's unsaved-work gate uses, never a copy of it): Download (default focus), I saved it, Keep it, Discard it.
  */
-export function Handoff({ headingRef, headingId, summary, kind, fileName, receiptName, unsaved, downloaded, receiptSaved, requested, onDownload, onSaved, onDownloadReceipt, onReceiptSaved, originals, handoverId, handover, onCopy, copyStatus, actions, shareNote, details, onSealMore }) {
+export function Handoff({ headingRef, headingId, summary, kind, fileName, receiptName, unsaved, downloaded, receiptSaved, requested, onDownload, onSaved, onDownloadReceipt, onReceiptSaved, originals, handoverId, handover, onCopy, copyStatus, actions, shareNote, details, onSealMore, ask, onKeep, notHeld }) {
   const [asking, setAsking] = useState(false);
   const [showAll, setShowAll] = useState(false);
   const askRef = useRef(null);
@@ -68,11 +68,12 @@ export function Handoff({ headingRef, headingId, summary, kind, fileName, receip
   const fileRequested = !!requested?.file && !downloaded;
   const receiptRequested = !!requested?.receipt && !receiptSaved;
   useEffect(() => { if (asking) askRef.current?.focus(); }, [asking, fileRequested, receiptRequested, downloaded]);
-  useEffect(() => { if (asking && !unsaved) setAsking(false); }, [asking, unsaved]); // kept now: nothing left to ask
+  useEffect(() => { if (asking && !unsaved) { setAsking(false); onKeep?.(); } }, [asking, unsaved]); // kept now: nothing left to ask (and a waiting Resume is dropped, not run later)
+  useEffect(() => { if (ask && unsaved) setAsking(true); }, [ask]); // eslint-disable-line react-hooks/exhaustive-deps -- Jobs' Resume would replace this result: the same one question first
   const wasAsking = useRef(false);
   useEffect(() => { if (wasAsking.current && !asking) moreRef.current?.focus(); wasAsking.current = asking; }, [asking]); // a closed question hands focus back to Seal more files
   const list = kind === 'list';
-  const keep = () => setAsking(false);
+  const keep = () => { setAsking(false); onKeep?.(); };
   const discard = () => { setAsking(false); onSealMore(); };
   useEffect(() => { // Escape keeps the result wherever focus is while the question is open
     if (!asking) return undefined;
@@ -97,9 +98,10 @@ export function Handoff({ headingRef, headingId, summary, kind, fileName, receip
     <h2 id={headingId} ref={headingRef} tabIndex="-1">Send these to your client</h2>
     <ol className="handoff-steps">
       <li>
-        <div className="handoff-step-head"><span className="handoff-step-title">{list ? 'Download the list' : 'Download the sealed file'}</span><code className="wrap">{fileName}</code></div>
-        <p className="field-hint">{list ? 'It holds the fingerprints, not your files.' : 'It holds your original file, byte for byte.'}</p>
-        <div className="actions-row"><button type="button" className={`button ${downloaded || fileRequested || asking ? 'secondary' : 'primary'}`} aria-label={list ? 'Download sealed list' : 'Download sealed file'} onClick={onDownload}><Download aria-hidden="true" size={16} />Download</button></div>
+        <div className="handoff-step-head"><span className="handoff-step-title">{notHeld ? (list ? 'The list' : 'The sealed file') : list ? 'Download the list' : 'Download the sealed file'}</span><code className="wrap">{fileName}</code></div>
+        {!notHeld && <p className="field-hint">{list ? 'It holds the fingerprints, not your files.' : 'It holds your original file, byte for byte.'}</p>}
+        {notHeld ? <p className="field-hint jobs-not-held">{notHeld}</p> /* a resumed job whose bytes this tab no longer holds */
+          : <div className="actions-row"><button type="button" className={`button ${downloaded || fileRequested || asking ? 'secondary' : 'primary'}`} aria-label={list ? 'Download sealed list' : 'Download sealed file'} onClick={onDownload}><Download aria-hidden="true" size={16} />Download</button></div>}
         <p className="field-hint download-status" role="status">{fileRequested ? `Download started: ${fileName}. Check your Downloads folder.` : ''}</p>{/* always mounted, so the text is announced */}
         {list && originals?.length > 0 && <div className="handoff-originals">
           <p>Send these originals separately (not inside the list):</p>
@@ -121,8 +123,8 @@ export function Handoff({ headingRef, headingId, summary, kind, fileName, receip
     {asking ? <div className="confirm-box">
       <p id="seal-more-ask">{askText}</p>
       <div className="actions-row">{askPrimary === 'copy'
-        ? <button ref={askRef} type="button" className="button primary" aria-describedby="seal-more-ask" onClick={onCopy}><Copy aria-hidden="true" size={16} />Copy message</button>
-        : <button ref={askRef} type="button" className="button primary" aria-describedby="seal-more-ask" onClick={onDownload}><Download aria-hidden="true" size={16} />{fileRequested ? 'Download again' : 'Download'}</button>}
+        ? <button ref={askRef} id="seal-more-ask-action" type="button" className="button primary" aria-describedby="seal-more-ask" onClick={onCopy}><Copy aria-hidden="true" size={16} />Copy message</button>
+        : <button ref={askRef} id="seal-more-ask-action" type="button" className="button primary" aria-describedby="seal-more-ask" onClick={onDownload}><Download aria-hidden="true" size={16} />{fileRequested ? 'Download again' : 'Download'}</button>}
         {askPrimary === 'copy' && fileRequested && <button type="button" className="button secondary" onClick={onDownload}><Download aria-hidden="true" size={16} />Download again</button>}
         {canConfirm && <button type="button" className="button secondary" onClick={savedThenMore}>{started.length > 1 ? 'I saved both' : 'I saved it'}</button>}{keepButton}{discardButton}</div>
     </div> : <div className="actions-row"><button ref={moreRef} type="button" className="button secondary" onClick={() => (unsaved ? setAsking(true) : onSealMore())}>Seal more files</button></div>}

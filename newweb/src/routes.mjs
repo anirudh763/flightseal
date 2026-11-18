@@ -1,4 +1,4 @@
-const screens = new Set(['protect', 'sandbox', 'verify', 'records', 'receipts', 'video', 'help', 'benchmarks', 'system', 'overview', 'workbench', 'reports', 'settings']);
+const screens = new Set(['protect', 'sandbox', 'verify', 'jobs', 'records', 'receipts', 'video', 'help', 'benchmarks', 'system', 'overview', 'workbench', 'reports', 'settings']);
 const aliases = new Map([['findings', 'sandbox'], ['examples', 'sandbox'], ['telemetry', 'sandbox']]);
 const samples = new Set(['intact', 'byte-flip', 'tampered', 'rewritten', 'truncated', 'px4', 'px4-tampered', 'px4-full']);
 
@@ -41,6 +41,8 @@ export function routeHash(target, params = {}) {
   if (params.sample && samples.has(params.sample)) query.set('sample', params.sample);
   if (Number.isSafeInteger(Number(params.record)) && Number(params.record) >= 0 && params.record !== '') query.set('record', String(Number(params.record)));
   if (Number.isSafeInteger(Number(params.receipt)) && Number(params.receipt)>0) query.set('receipt',String(Number(params.receipt)));
+  if (target === 'jobs' && params.q) query.set('q', String(params.q).slice(0, 200)); // Jobs: the search and the page are in the URL
+  if (target === 'jobs' && Number.isSafeInteger(Number(params.page)) && Number(params.page) > 1) query.set('page', String(Number(params.page)));
   return `#${path}${query.size ? `?${query.toString()}` : ''}`;
 }
 

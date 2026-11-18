@@ -769,10 +769,10 @@ try {
     assert.equal(await page.locator('#trusted-key').inputValue(), 'editing');
     await page.goto(`${url}#/protect`); await page.waitForSelector('#page-protect');
     await page.waitForFunction(() => document.querySelector('.nav-more')?.open === false, null, { timeout: 3000 }).catch(() => assert.fail('More tools starts closed on a primary page'));
-    // AC-04, changed on purpose: the primary links are Seal & send, Verify and Trust (Jobs joins when its page lands);
+    // AC-04, changed on purpose: the primary links are Seal & send, Verify, Jobs and Trust;
     // Records and Receipts moved under More tools with their routes kept.
     for (const name of ['Records', 'Receipts', 'Samples', 'Video', 'Benchmarks', 'System']) assert.equal(await rail.getByRole('link', { name, exact: true }).isVisible(), false, `${name} is behind More tools`);
-    assert.deepEqual(await rail.locator('a:visible').allTextContents(), ['Seal & send', 'Verify', 'Trust'], 'only the primary links show, in order');
+    assert.deepEqual(await rail.locator('a:visible').allTextContents(), ['Seal & send', 'Verify', 'Jobs', 'Trust'], 'only the primary links show, in order');
     assert.equal(await page.locator('.session-strip').isVisible(), false, 'Seal & send hides the workbench session strip');
     assert.equal(await page.locator('.source-actions').isVisible(), false, 'Seal & send hides the workbench source actions');
     await rail.locator('.nav-more summary').click();
@@ -793,7 +793,7 @@ try {
   await check('page shell: workbench strip only on Verify and More tools, one profile menu, full-height rail, 44px shell targets', async () => {
     await page.setViewportSize({ width: 1440, height: 900 });
     // AC-66
-    for (const [screen, shown] of [['protect', false], ['help', false], ['verify', true], ['records', true], ['receipts', true], ['sandbox', true], ['video', true], ['benchmarks', true], ['system', true]]) {
+    for (const [screen, shown] of [['protect', false], ['jobs', false], ['help', false], ['verify', true], ['records', true], ['receipts', true], ['sandbox', true], ['video', true], ['benchmarks', true], ['system', true]]) {
       await page.goto(`${url}#/app/${screen}`); await page.waitForSelector(`#page-${screen}`);
       assert.equal(await page.locator('.session-strip').isVisible(), shown, `${screen}: session strip ${shown ? 'shown' : 'hidden'}`);
       assert.equal(await page.locator('.source-actions').isVisible(), shown, `${screen}: Source and report actions ${shown ? 'shown' : 'hidden'}`);
