@@ -838,6 +838,7 @@ try {
       assert.deepEqual(small, [], `${width}px: undersized shell targets ${JSON.stringify(small)}`);
     }
     await page.setViewportSize({ width: 1440, height: 900 });
+    await page.setViewportSize({ width: 1440, height: 900 });
   });
 
   await check('direct routes and root hash resolve to their own current screens', async () => {
@@ -989,7 +990,10 @@ try {
     const sealedPath = join(evidence, 'sealed.fseal');
     await sealedDownload.saveAs(sealedPath);
     assert.ok(!readFileSync(sealedPath).includes(Buffer.from('JOB-REF-7Q2X')), 'the job reference is not in the sealed file');
-    assert.deepEqual(await page.locator('.seal-panel .button.primary').allInnerTexts(), ['Copy message'], 'after the download, Copy message is the one primary action');
+    assert.deepEqual(await page.locator('.seal-panel .button.primary').allInnerTexts(), ['Yes, saved'], 'a Download click is not proof: the one primary action is to confirm it finished');
+    await page.locator('.handoff-confirm').getByRole('button', { name: 'Yes, saved' }).click();
+    await page.waitForFunction(() => document.activeElement?.textContent === 'Copy message');
+    assert.deepEqual(await page.locator('.seal-panel .button.primary').allInnerTexts(), ['Copy message'], 'after the confirmed download, Copy message is the one primary action');
     await auditAxe(page, '1440px seal handover');
     await page.screenshot({ path: join(evidence, 'sealed-1440.png'), fullPage: true });
 
@@ -1143,17 +1147,41 @@ try {
     assert.equal(await panel.locator('.seal-file-list').innerText(), 'flight-12.ulg\n12,582,912 bytes');
     assert.equal(await page.locator('#handover-text').count(), 0);
 
-    // AC-53 N3: "Seal more files" before the download asks first, with Download focused.
+    // Oversize: the spec message on the field, and "Use Large files" moves the same file across, ready to seal.
+    const huge = { name: 'huge.bin', mimeType: 'application/octet-stream', buffer: Buffer.alloc(45 * 1024 * 1024 + 1, 1) };
+    await page.locator('#protect-file').setInputFiles(huge);
+    await page.getByRole('button', { name: 'Seal this file' }).click();
+    await page.waitForFunction(() => document.activeElement?.id === 'protect-file');
+    assert.equal(await page.locator('#protect-file-error').innerText(), 'This file is larger than 45 MiB. Choose Large files instead.');
+    assert.deepEqual(await panel.locator('.button.primary').allInnerTexts(), ['Seal this file']);
+    assert.equal(await page.getByRole('button', { name: 'Use Large files' }).getAttribute('class'), 'button secondary');
+    await page.getByRole('button', { name: 'Use Large files' }).click();
+    await page.waitForFunction(() => document.activeElement?.id === 'manifest-seal');
+    assert.equal(await page.getByLabel('Large files: fingerprint only, files stay where they are').isChecked(), true);
+    assert.equal(await panel.locator('.seal-total').innerText(), 'Total 1 file\n47,185,921 bytes', 'the file is still chosen');
+    await page.getByLabel('Small file: seal the whole file, up to 45 MiB').check();
+    assert.equal(await page.locator('#protect-file-error').count(), 0);
+    await page.getByLabel('Large files: fingerprint only, files stay where they are').check();
+    await page.locator('#manifest-files').setInputFiles([]);
+    await page.getByLabel('Small file: seal the whole file, up to 45 MiB').check();
+
+    // AC-53 N3: "Seal more files" before the download asks first, with Download focused and primary. Escape keeps the result.
     await page.locator('#protect-file').setInputFiles({ name: 'n3.bin', mimeType: 'application/octet-stream', buffer: Buffer.from(`n3 ${Date.now()}`) });
     await page.getByRole('button', { name: 'Seal this file' }).click();
     await page.waitForSelector('#handover-text', { timeout: 60000 });
     await page.getByRole('button', { name: 'Seal more files' }).click();
     assert.equal(await page.locator('#seal-more-ask').innerText(), "You haven't downloaded n3.bin.fseal. Download it first?");
     assert.equal(await page.evaluate(() => document.activeElement?.textContent), 'Download', 'Download has focus');
+    assert.deepEqual(await page.locator('.confirm-box .button.primary').allInnerTexts(), ['Download']);
+    await page.keyboard.press('Escape');
+    await page.waitForFunction(() => !document.getElementById('seal-more-ask') && document.activeElement?.textContent === 'Seal more files');
+    assert.equal(await page.locator('#handover-text').count(), 1, 'Escape kept the result');
+    await page.getByRole('button', { name: 'Seal more files' }).click();
     const [n3] = await Promise.all([page.waitForEvent('download'), page.keyboard.press('Enter')]);
     assert.equal(n3.suggestedFilename(), 'n3.bin.fseal');
-    await page.waitForFunction(() => !document.getElementById('seal-more-ask') && document.activeElement?.textContent === 'Seal more files');
-    await page.getByRole('button', { name: 'Seal more files' }).click(); // downloaded now, so no question
+    // A click is not proof the save finished: the question stays, now asking for the confirmation.
+    await page.waitForFunction(() => document.getElementById('seal-more-ask')?.textContent === 'Did the download of n3.bin.fseal finish?' && document.activeElement?.textContent === 'Yes, saved');
+    await page.keyboard.press('Enter'); // "Yes, saved" goes on to seal more
     await page.waitForFunction(() => document.activeElement?.id === 'seal-what-title');
     assert.equal(await panel.locator('.seal-file-list').count(), 0, 'the selection is cleared');
     assert.equal(await page.locator('#job-ref').inputValue(), '');
@@ -1164,6 +1192,23 @@ try {
       await page.getByRole('button', { name: 'Seal this file' }).click();
       await page.waitForSelector('#handover-text', { timeout: 60000 });
     };
+    // A download that was cancelled or blocked never counts: Download, no "Yes, saved", then Seal more files still asks
+    // and #/login still warns (the receipt is downloaded, so only the unconfirmed file keeps it unsaved).
+    await sealOne('cancelled.bin');
+    await page.getByRole('button', { name: 'Download receipt' }).click();
+    await Promise.all([page.waitForEvent('download'), page.getByRole('button', { name: 'Download sealed file' }).click()]);
+    await page.locator('.handoff-confirm').getByText('Did the download finish?').waitFor();
+    await page.getByRole('button', { name: 'Seal more files' }).click();
+    assert.equal(await page.locator('#seal-more-ask').innerText(), 'Did the download of cancelled.bin.fseal finish?', 'an unconfirmed download still asks');
+    await page.keyboard.press('Escape');
+    await page.goto(`${url}#/login`);
+    await page.getByText('This tab has work that is not saved yet. Download it before you sign in.').waitFor({ timeout: 5000 })
+      .catch(() => assert.fail('an unconfirmed download was counted as saved'));
+    await page.goto(`${url}#/app/protect`); await page.waitForSelector('#handover-text');
+    await page.getByRole('button', { name: 'Seal more files' }).click();
+    await page.getByRole('button', { name: 'Discard it' }).click();
+    await page.waitForFunction(() => document.activeElement?.id === 'seal-what-title');
+
     await sealOne('first.bin');
     await page.goto(`${url}#/login`);
     await page.getByText('This tab has work that is not saved yet. Download it before you sign in.').waitFor();

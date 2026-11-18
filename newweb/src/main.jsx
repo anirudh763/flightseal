@@ -156,6 +156,7 @@ function App() {
   const [protectLanding, setProtectLanding] = useState(''); // datetime-local value; goes in the handover as an unsigned line
   const [jobRef, setJobRef] = useState(''); // a local label only: never signed, never in the receipt message, never sent to the registry
   const [protectStep, setProtectStep] = useState(0); // 1-4 while a small file is being sealed (PROTECT_STEPS)
+  const [carryToLarge, setCarryToLarge] = useState(null); // { file }: a too-large small-file pick handed to Large files
   const [protectError, setProtectError] = useState(''); // shown under the file field, which names it through aria-describedby
   const [manifestSealed, setManifestSealed] = useState(false); // ManifestSeal has a result, so its handoff replaces the step panel
   const protectRunRef = useRef(0);
@@ -788,7 +789,7 @@ function App() {
     const extension = file.name.toLowerCase().split('.').pop();
     if (forSeal && !['tsv', 'txt', 'csv', 'json', 'tlog'].includes(extension)) { setError('Choose a timestamped TSV/TXT, CSV, JSON or MAVLink Tlog source to seal.'); return; }
     if (!['fseal', 'ulg', 'tsv', 'txt', 'csv', 'json', 'tlog'].includes(extension)) {
-      setError('Unsupported source format. Choose a .fseal log, a PX4 .ulg capture, a timestamped TSV/TXT file, or CSV, JSON or MAVLink .tlog telemetry. To seal any other log file, use Seal & send.');
+      setError('Unsupported source format. Choose a .fseal log, a PX4 .ulg capture, a timestamped TSV/TXT file, or CSV, JSON or MAVLink .tlog telemetry. To seal any other file, use Seal & send.');
       return;
     }
     setCsvDraft(null);
@@ -840,7 +841,7 @@ function App() {
       return;
     }
     if (extension !== 'ulg') {
-      setError('Unsupported source format. Choose a .fseal log, a PX4 .ulg capture, a timestamped TSV/TXT file, or CSV, JSON or MAVLink .tlog telemetry. To seal any other log file, use Seal & send.');
+      setError('Unsupported source format. Choose a .fseal log, a PX4 .ulg capture, a timestamped TSV/TXT file, or CSV, JSON or MAVLink .tlog telemetry. To seal any other file, use Seal & send.');
       return;
     }
     await importUlog(file);
@@ -1050,11 +1051,12 @@ function App() {
     } finally { if (op === runRef.current) setBusy(''); }
   };
 
-  // Seal & send: seal the exact bytes of any log file, hand one receipt to a witness, later check and give the original back.
+  // Seal & send: seal the exact bytes of any file, hand one receipt to a witness, later check and give the original back.
   const runProtectSeal = async () => {
     invalidateCheck(); setProtectSealed(null); setProtectResult(null); setRestored(null); setCopyStatus(''); setError(''); setProtectError('');
     const fail = (message) => { setProtectError(message); requestAnimationFrame(() => document.getElementById('protect-file')?.focus()); };
     if (!protectFile) { fail('Choose the file you want to seal.'); return; }
+    if (protectFile.size > RAW_MAX_BYTES) { fail(TOO_LARGE_FOR_SMALL); return; }
     let op = ++runRef.current;
     const run = ++protectRunRef.current;
     const controller = new AbortController(); controllerRef.current = controller;
@@ -1189,7 +1191,7 @@ function App() {
     setUnsavedAsk(null); setUnsavedError(''); setDiscardAsk(false);
     setSealOutput(null); setSealOutputAcknowledged(false); setCurrentSample(null); setDemoLabel(''); setError(''); setOperationStatus('');
     setVideoOffset('0'); clearVideo();
-    setManifestUnsaved(null); setProtectFile(null); setProtectSealed(null); setProtectResult(null); setRestored(null); setProtectLanding(''); setProtectTimes(null); setCopyCompare(null); setCopyStatus(''); setCheckFile(null); setCheckText(''); setJobRef(''); setProtectStep(0); setProtectError(''); setManifestSealed(false); protectRunRef.current++;
+    setManifestUnsaved(null); setProtectFile(null); setCarryToLarge(null); setProtectSealed(null); setProtectResult(null); setRestored(null); setProtectLanding(''); setProtectTimes(null); setCopyCompare(null); setCopyStatus(''); setCheckFile(null); setCheckText(''); setJobRef(''); setProtectStep(0); setProtectError(''); setManifestSealed(false); protectRunRef.current++;
     receiptInvalidRef.current = false; receiptInvalidMessageRef.current = ''; sealPickerRef.current = false;
     if (receiptInputRef.current) receiptInputRef.current.value = '';
     if (workbenchFileRef.current) workbenchFileRef.current.value = '';
@@ -1638,6 +1640,7 @@ function App() {
             <label className="field-label" htmlFor="protect-file">File <span>(up to {RAW_MAX_BYTES / 1024 / 1024} MiB)</span></label>
             <input id="protect-file" type="file" aria-invalid={protectError ? 'true' : undefined} aria-describedby={protectError ? 'protect-file-error' : undefined} onChange={(e) => { invalidateCheck(); setProtectFile(e.target.files?.[0] || null); setProtectLanding(''); setProtectSealed(null); setProtectResult(null); setRestored(null); setCopyStatus(''); setError(''); setProtectError(''); }} />
             {protectError && <p id="protect-file-error" className="field-hint receipt-error">{protectError}</p>}
+            {protectError === TOO_LARGE_FOR_SMALL && protectFile && <div className="actions-row"><button type="button" className="button secondary" onClick={() => { setCarryToLarge({ file: protectFile }); setProtectFile(null); setProtectError(''); setProtectMode('manifest'); }}>Use Large files</button></div>}
             {protectFile && <><ul className="manifest-file-list seal-file-list" aria-label="Selected files"><li><div className="manifest-file-row"><span className="manifest-file-name">{protectFile.name}</span><span className="mono-values">{exactBytes(protectFile.size)}</span></div></li></ul><FileTotals rows={[protectFile]} /></>}
             {sealCommon}
             <details className="report-details protect-options"><summary>More options <ChevronDown size={17} aria-hidden="true" /></summary><div className="manifest-options-body">
@@ -1651,14 +1654,14 @@ function App() {
           {protectMode === 'embedded' && protectSealed && <Handoff headingRef={handoffRef} headingId="handoff-title"
             summary={`Sealed · 1 file${protectSealed.jobRef ? ` · ${protectSealed.jobRef}` : ''}`}
             kind="file" fileName={protectSealed.log.name} downloaded={!!protectSealed.saved?.file}
-            onDownload={() => { download(protectSealed.log.name, protectSealed.log, 'application/octet-stream'); markProtectSaved('file'); }}
+            onDownload={() => download(protectSealed.log.name, protectSealed.log, 'application/octet-stream')} onSaved={() => markProtectSaved('file')}
             handoverId="handover-text" handover={protectSealed.handover} onCopy={copyHandover} copyStatus={copyStatus}
             actions={<><a className="button secondary" href={`mailto:?subject=${encodeURIComponent(`HashWing receipt for ${protectSealed.name}`)}&body=${encodeURIComponent(protectSealed.handover)}`}><Mail aria-hidden="true" size={16} />Email it</a>
               <button className="button secondary" type="button" onClick={() => { download(`${protectSealed.name}.receipt.txt`, protectSealed.handover); markProtectSaved('receipt'); }}><Download aria-hidden="true" size={16} />Download receipt</button></>}
             details={<><SenderFingerprint fingerprint={protectSealed.fingerprint} /><details className="report-details handoff-about"><summary>What is this? <ChevronDown size={17} aria-hidden="true" /></summary><div className="manifest-options-body prose"><p>{protectSealed.savedKey ? 'Signed with the key loaded under Trust. Anyone holding that private key can sign other files, so keep its backup private.' : 'The signing key was made for this file only and was discarded, never stored or exported, so no further receipt can be made with it.'} Anyone can seal a different file with another key; that is why the receipt you send now is what counts later. Sealing shows the file has not changed since now; it cannot show what happened before you sealed it.</p></div></details></>}
             shareNote={__REGISTRY_URL__ ? <RegistryShareNote /> : null}
             onSealMore={sealMoreProtect} />}
-          <ManifestSeal hidden={protectMode !== 'manifest'} common={sealCommon} jobRef={jobRef} signingKey={signingKey} onActiveChange={setManifestSealActive} onUnsaved={setManifestUnsaved} onSealed={__REGISTRY_URL__ ? registrySealed : undefined} onDone={setManifestSealed} onSealMore={() => { setJobRef(''); sealStartFocusRef.current = true; }} shareNote={__REGISTRY_URL__ ? <RegistryShareNote /> : null} />
+          <ManifestSeal hidden={protectMode !== 'manifest'} carry={carryToLarge} common={sealCommon} jobRef={jobRef} signingKey={signingKey} onActiveChange={setManifestSealActive} onUnsaved={setManifestUnsaved} onSealed={__REGISTRY_URL__ ? registrySealed : undefined} onDone={setManifestSealed} onSealMore={() => { setJobRef(''); sealStartFocusRef.current = true; }} shareNote={__REGISTRY_URL__ ? <RegistryShareNote /> : null} />
           {!protectDone && <p className="seal-verify-link"><a href={workspaceHref('verify')} onClick={(e) => { if (e.button !== 0 || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return; e.preventDefault(); navigate('verify'); }}>Checking files someone sent you? Go to Verify</a></p>}
         </div></section>
       </section>
@@ -1675,7 +1678,7 @@ function App() {
         {result?.source && <FlightTelemetry source={result.source} points={telemetry} verificationProblem={result.indexed.problem} selectedPointIndex={selectedTelemetryIndex} onMovePoint={(pointIndex) => { const point = telemetry[pointIndex]; if (!point) return; telemetrySelectionRef.current++; setSelectedTelemetryIndex(pointIndex); setSelectedRecord(Number(point.record)); setPage(Math.floor(Number(point.record) / PAGE_SIZE)); }} onSelectPoint={(pointIndex) => { const point = telemetry[pointIndex]; if (!point) return; telemetrySelectionRef.current++; setSelectedTelemetryIndex(pointIndex); setSelectedRecord(Number(point.record)); setPage(Math.floor(Number(point.record) / PAGE_SIZE)); navigate('records'); }} />}
         <div className="section-grid">
           <section className="panel"><div className="panel-head"><FlaskConical aria-hidden="true" size={18} /><h2>Mutations</h2></div><div className="panel-body"><div className="mutation-list"><button className="mutation" type="button" disabled={!result || !!busy} onClick={(event) => doMutation('flip', event.currentTarget)}><span>Flip one payload byte</span></button><button className="mutation" type="button" disabled={!result || !!busy} onClick={(event) => doMutation('delete', event.currentTarget)}><span>Remove one middle record</span></button><button className="mutation" type="button" disabled={!result || !!busy} onClick={(event) => doMutation('truncate', event.currentTarget)}><span>Trim seven tail bytes</span></button></div></div></section>
-          <section className="panel"><div className="panel-head"><FileCheck2 aria-hidden="true" size={18} /><h2>Seal</h2></div><div className="panel-body"><p>Create a sealed log from a timestamped source.</p><p className="field-hint">TSV, CSV, JSON or MAVLink <code>.tlog</code>. Converted values are canonicalized; MAVLink frame CRC is not checked.</p><details className="report-details import-details"><summary>Import details <ChevronDown size={17} aria-hidden="true" /></summary><div className="prose"><p>TSV/TXT uses <code>timestamp_us&lt;TAB&gt;payload</code>. CSV opens a bounded preview and requires explicit column and unit mapping before conversion. JSON accepts an array of objects with an unsigned <code>timestamp_us</code>. MAVLink .tlog records use their 8-byte big-endian timestamps; frame checksum/CRC_EXTRA validation is not performed.</p><p>CSV timestamp units must be microseconds. Coordinates require both latitude and longitude in degrees; altitude is mapped in meters and speed in meters per second. All original CSV columns remain in each payload and the mapping is saved in provenance. Unsupported/conflicting unit labels are rejected. JSON fields use the documented names and units; unknown names are not guessed. Missing/null coordinates stay unavailable. TSV/TXT sources are limited to {fmtBytes(SEAL_MAX_BYTES)}; CSV, JSON and .tlog conversion to 16 MiB. To seal any other log file byte for byte, use Seal &amp; send.</p></div></details><button className="button secondary" type="button" onClick={() => { sealPickerRef.current = true; workbenchFileRef.current?.click(); }}>Choose telemetry source</button>{csvDraft && <CsvMappingEditor draft={csvDraft} setDraft={setCsvDraft} onConvert={convertCsvDraft} onCancel={() => { setCsvDraft(null); if (workbenchFileRef.current) workbenchFileRef.current.value = ''; setOperationStatus('CSV mapping canceled. No source was converted or sealed.'); }} busy={!!busy} />}{sealSourceMetadata && <TelemetrySourcePreview source={sealSourceMetadata} original={sealSourceOriginal} />}{signingKeyControls}<label className="field-label" htmlFor="receipt-interval">Receipt interval (records)</label><input id="receipt-interval" type="number" min="1" max="1000000" value={sealInterval} onChange={(e) => { invalidateCheck(); setSealInterval(e.target.value); }} /><button className="button primary" type="button" disabled={!sealFileInput || !!busy} onClick={runSeal}>Seal and verify</button>{sealOutput && <div className="seal-outputs"><p>Generated from <strong>{sealOutput.filename}</strong>.</p><button className="button secondary" onClick={() => download('sealed.fseal', sealOutput.log, 'application/octet-stream')}>Download sealed log</button><button className="button secondary" onClick={() => download('sealed.receipts', sealOutput.receipts)}>Download receipts</button><button className="button secondary" onClick={() => download('sealed-public-key.txt', sealOutput.publicKey + '\n')}>Download public key</button><p>Keep receipts and public key with a separate witness. The private key is not included in these outputs.</p><label className="output-ack"><input type="checkbox" checked={sealOutputAcknowledged} onChange={(e) => setSealOutputAcknowledged(e.target.checked)} /> I saved these files or no longer need them</label></div>}</div></section>
+          <section className="panel"><div className="panel-head"><FileCheck2 aria-hidden="true" size={18} /><h2>Seal</h2></div><div className="panel-body"><p>Create a sealed file from a timestamped source.</p><p className="field-hint">TSV, CSV, JSON or MAVLink <code>.tlog</code>. Converted values are canonicalized; MAVLink frame CRC is not checked.</p><details className="report-details import-details"><summary>Import details <ChevronDown size={17} aria-hidden="true" /></summary><div className="prose"><p>TSV/TXT uses <code>timestamp_us&lt;TAB&gt;payload</code>. CSV opens a bounded preview and requires explicit column and unit mapping before conversion. JSON accepts an array of objects with an unsigned <code>timestamp_us</code>. MAVLink .tlog records use their 8-byte big-endian timestamps; frame checksum/CRC_EXTRA validation is not performed.</p><p>CSV timestamp units must be microseconds. Coordinates require both latitude and longitude in degrees; altitude is mapped in meters and speed in meters per second. All original CSV columns remain in each payload and the mapping is saved in provenance. Unsupported/conflicting unit labels are rejected. JSON fields use the documented names and units; unknown names are not guessed. Missing/null coordinates stay unavailable. TSV/TXT sources are limited to {fmtBytes(SEAL_MAX_BYTES)}; CSV, JSON and .tlog conversion to 16 MiB. To seal any other file byte for byte, use Seal &amp; send.</p></div></details><button className="button secondary" type="button" onClick={() => { sealPickerRef.current = true; workbenchFileRef.current?.click(); }}>Choose telemetry source</button>{csvDraft && <CsvMappingEditor draft={csvDraft} setDraft={setCsvDraft} onConvert={convertCsvDraft} onCancel={() => { setCsvDraft(null); if (workbenchFileRef.current) workbenchFileRef.current.value = ''; setOperationStatus('CSV mapping canceled. No source was converted or sealed.'); }} busy={!!busy} />}{sealSourceMetadata && <TelemetrySourcePreview source={sealSourceMetadata} original={sealSourceOriginal} />}{signingKeyControls}<label className="field-label" htmlFor="receipt-interval">Receipt interval (records)</label><input id="receipt-interval" type="number" min="1" max="1000000" value={sealInterval} onChange={(e) => { invalidateCheck(); setSealInterval(e.target.value); }} /><button className="button primary" type="button" disabled={!sealFileInput || !!busy} onClick={runSeal}>Seal and verify</button>{sealOutput && <div className="seal-outputs"><p>Generated from <strong>{sealOutput.filename}</strong>.</p><button className="button secondary" onClick={() => download('sealed.fseal', sealOutput.log, 'application/octet-stream')}>Download sealed file</button><button className="button secondary" onClick={() => download('sealed.receipts', sealOutput.receipts)}>Download receipts</button><button className="button secondary" onClick={() => download('sealed-public-key.txt', sealOutput.publicKey + '\n')}>Download public key</button><p>Keep receipts and public key with a separate witness. The private key is not included in these outputs.</p><label className="output-ack"><input type="checkbox" checked={sealOutputAcknowledged} onChange={(e) => setSealOutputAcknowledged(e.target.checked)} /> I saved these files or no longer need them</label></div>}</div></section>
         </div>
       </section>}
 
@@ -2138,6 +2141,7 @@ async function hashAll(files, signal, onProgress) {
   }
   return out;
 }
+const TOO_LARGE_FOR_SMALL = `This file is larger than ${RAW_MAX_BYTES / 1024 / 1024} MiB. Choose Large files instead.`;
 const PROTECT_STEPS = ['Reading the file', 'Sealing', 'Checking the seal', 'Rebuilding the original to double-check'];
 const percent = (done, size) => (size ? Math.floor((done / size) * 100) : 100);
 function FileProgressList({ files, progress, idPrefix, label, onCancel }) {
@@ -2161,7 +2165,7 @@ const friendlyLimit = (cause) => cause instanceof RangeError && /exceeds 65536 b
   : / name /.test(cause.message) ? `${cause.message} Rename the file or turn off Include file names under More options, then press Seal again.`
   : `${cause.message} Shorten it under More options, then press Seal again.`;
 
-function ManifestSeal({ hidden, common, jobRef, signingKey, onActiveChange, onUnsaved, onSealed, onDone, onSealMore, shareNote }) {
+function ManifestSeal({ hidden, carry, common, jobRef, signingKey, onActiveChange, onUnsaved, onSealed, onDone, onSealMore, shareNote }) {
   const [files, setFiles] = useState([]);
   const [includeNames, setIncludeNames] = useState(false);
   const [notes, setNotes] = useState({});
@@ -2187,6 +2191,10 @@ function ManifestSeal({ hidden, common, jobRef, signingKey, onActiveChange, onUn
       setOutput((current) => (current?.log === output.log ? { ...current, saved: true } : current)); onUnsaved((current) => (current?.files?.[0]?.blob === output.log ? null : current)); } });
   }, [output, onUnsaved]);
   const reset = () => { controllerRef.current?.abort(); setOutput(null); setMessage(''); setCopyStatus(''); setError(''); };
+  useEffect(() => { // a file too large for Small file arrives already chosen, ready for "Seal the list"
+    if (!carry || output || phase) return;
+    choose([carry.file]); requestAnimationFrame(() => document.getElementById('manifest-seal')?.focus());
+  }, [carry]); // eslint-disable-line react-hooks/exhaustive-deps
   const choose = (list) => {
     reset(); setNotes({}); setEdited({}); setDerived({}); setLandingLocal(''); // a landing time belongs to one batch
     const picked = [...(list || [])];
@@ -2252,7 +2260,7 @@ function ManifestSeal({ hidden, common, jobRef, signingKey, onActiveChange, onUn
   if (output) return <>{live}<Handoff headingRef={headingRef} headingId="manifest-handoff-title"
     summary={`Sealed · ${output.items} file${output.items === 1 ? '' : 's'} · ${exactBytes(output.total)}${output.jobRef ? ` · ${output.jobRef}` : ''}`}
     kind="list" fileName={output.log.name} downloaded={output.saved} originals={output.names}
-    onDownload={() => { download(output.log.name, output.log, 'application/octet-stream'); setOutput((current) => current && { ...current, saved: true }); }}
+    onDownload={() => download(output.log.name, output.log, 'application/octet-stream')} onSaved={() => setOutput((current) => current && { ...current, saved: true })}
     handoverId="manifest-handover-text" handover={output.handover} onCopy={copy} copyStatus={copyStatus}
     actions={<><button className="button secondary" type="button" onClick={() => download(`${output.base}.receipt.txt`, output.handover)}><Download aria-hidden="true" size={16} />Download receipt</button>
       <button className="button secondary" type="button" onClick={() => download(`${output.base}.public-key.txt`, `${output.publicKey}\n`)}><Download aria-hidden="true" size={16} />Download public key</button></>}
