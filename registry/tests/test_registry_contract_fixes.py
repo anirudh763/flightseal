@@ -82,6 +82,15 @@ def test_public_share_view_allows_any_origin_without_credentials():
     assert missing["statusCode"] == 404 and missing["headers"]["access-control-allow-origin"] == "*"
 
 
+def test_every_404_on_the_public_share_route_has_identical_headers_and_body():
+    app, *_ = setup(CORS_ORIGINS=ORIGINS)
+    for origin in ("https://insurer.example", GOOD):
+        unknown = raw(app, "GET", "/v1/shares/" + "A" * 43, {"Origin": origin})
+        assert unknown["statusCode"] == 404
+        for tail in ("A" * 42, "A" * 129, "bad!token", "", "a/b", "A" * 43 + "/x"):
+            assert raw(app, "GET", "/v1/shares/" + tail, {"Origin": origin}) == unknown, tail
+
+
 # ------------------------------------------------------------------ shares
 
 def test_share_retry_after_a_lost_response_returns_the_same_share():
