@@ -33,6 +33,8 @@ def apply_tombstones(source, target, source_name, target_name, restore_id, serve
             key = (f"ORG#{t['org']}", "REG#" + t["ref"])
             if target.get(*key) is not None:
                 target.update(*key, set={"state": "deleted", "deleted_at": t["at"]}, remove=["received_at"])
+            else:  # registered after the backup: a deleted stub keeps the id claimed, so a fresh retry gets 410
+                target.put({"PK": key[0], "SK": key[1], "state": "deleted", "deleted_at": t["at"]})
         elif t["kind"] == "share":
             key = ("SHARE#" + t["ref"], "SHARE")
             if target.get(*key) is not None:
