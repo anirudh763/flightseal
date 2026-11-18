@@ -296,7 +296,7 @@ function App() {
   </div>;
   const protectDone = protectMode === 'embedded' ? !!protectSealed : manifestSealed;
   useEffect(() => { // old receipts say "open #/app/protect and paste this whole message"
-    if (screen !== 'protect') return undefined;
+    if (screen !== 'protect' || busy) return undefined; // a seal in progress is never cancelled by a paste: ignore it
     const onPaste = (event) => {
       if (event.target?.closest?.('input, textarea, select, [contenteditable]')) return;
       const text = event.clipboardData?.getData('text/plain') || '';
@@ -309,7 +309,7 @@ function App() {
     };
     document.addEventListener('paste', onPaste);
     return () => document.removeEventListener('paste', onPaste);
-  }, [screen]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [screen, busy]); // eslint-disable-line react-hooks/exhaustive-deps
   useEffect(() => { // after the route's own heading focus (one frame later), go on to the next step
     if (screen !== 'verify' || !pasteFocusRef.current) return;
     const id = pasteFocusRef.current; pasteFocusRef.current = '';

@@ -1132,6 +1132,23 @@ try {
     assert.equal(await page.locator('#check-text').inputValue(), '');
     await page.locator('#manifest-check-text').fill('');
     await page.goto(`${url}#/app/protect`); await page.waitForSelector('#seal-what-title');
+    // While a seal runs, a pasted receipt is ignored: no route change, no cancel; the seal still completes.
+    await page.locator('#protect-file').setInputFiles({ name: 'paste-busy.bin', mimeType: 'application/octet-stream', buffer: Buffer.alloc(3 * 1024 * 1024, 5) });
+    const ignored = await page.evaluate(async (text) => {
+      document.getElementById('protect-seal').click();
+      for (let i = 0; i < 50 && !document.getElementById('protect-progress'); i++) await new Promise((r) => setTimeout(r, 0));
+      const data = new DataTransfer(); data.setData('text/plain', text);
+      const event = new ClipboardEvent('paste', { clipboardData: data, bubbles: true, cancelable: true });
+      document.body.dispatchEvent(event);
+      return { prevented: event.defaultPrevented, running: !!document.getElementById('protect-progress') };
+    }, oldReceipt);
+    assert.deepEqual(ignored, { prevented: false, running: true }, `the paste was ignored while sealing ${JSON.stringify(ignored)}`);
+    await page.waitForSelector('#handover-text', { timeout: 60000 });
+    assert.match(page.url(), /#\/app\/protect/);
+    assert.equal(await page.locator('.seal-summary').innerText(), 'Sealed · 1 file', 'the seal finished on Seal & send');
+    await page.getByRole('button', { name: 'Seal more files' }).click();
+    await page.getByRole('button', { name: 'Discard it' }).click();
+    await page.waitForFunction(() => document.activeElement?.id === 'seal-what-title');
     assert.equal(await page.locator('#check-file').count(), 0);
     // An error is read with its field: focus moves there, and no alert is raised on top.
     await page.locator('#protect-file').setInputFiles({ name: 'empty.bin', mimeType: 'application/octet-stream', buffer: Buffer.alloc(0) });
