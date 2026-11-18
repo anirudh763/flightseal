@@ -84,7 +84,7 @@ export function Handoff({ headingRef, headingId, summary, kind, fileName, unsave
       <li>
         <div className="handoff-step-head"><span className="handoff-step-title">{list ? 'Download the list' : 'Download the sealed file'}</span><code className="wrap">{fileName}</code></div>
         <p className="field-hint">{list ? 'It holds the fingerprints, not your files.' : 'It holds your original file, byte for byte.'}</p>
-        <div className="actions-row"><button type="button" className={`button ${downloaded || started ? 'secondary' : 'primary'}`} aria-label={list ? 'Download sealed list' : 'Download sealed file'} onClick={downloadNow}><Download aria-hidden="true" size={16} />Download</button></div>
+        <div className="actions-row"><button type="button" className={`button ${downloaded || started || asking ? 'secondary' : 'primary'}`} aria-label={list ? 'Download sealed list' : 'Download sealed file'} onClick={downloadNow}><Download aria-hidden="true" size={16} />Download</button></div>
         {confirmNeeded && !asking && <div className="handoff-confirm"><p role="status">Did the download finish?</p><div className="actions-row"><button type="button" className="button primary" onClick={() => { onSaved(); requestAnimationFrame(() => copyRef.current?.focus()); }}>Yes, saved</button></div></div>}
         {list && originals?.length > 0 && <div className="handoff-originals">
           <p>Send these originals separately (not inside the list):</p>
@@ -95,7 +95,7 @@ export function Handoff({ headingRef, headingId, summary, kind, fileName, unsave
       <li>
         <div className="handoff-step-head"><label className="handoff-step-title" htmlFor={handoverId}>Send the receipt message</label></div>
         <textarea id={handoverId} className="mono-input" readOnly rows={list ? 8 : 9} value={handover} />
-        <div className="actions-row"><button ref={copyRef} type="button" className={`button ${downloaded ? 'primary' : 'secondary'}`} onClick={onCopy}><Copy aria-hidden="true" size={16} />Copy message</button>{actions}<button type="button" className="button secondary" onClick={downloadReceipt}><Download aria-hidden="true" size={16} />Download receipt</button></div>
+        <div className="actions-row"><button ref={copyRef} type="button" className={`button ${downloaded && !asking ? 'primary' : 'secondary'}`} onClick={onCopy}><Copy aria-hidden="true" size={16} />Copy message</button>{actions}<button type="button" className="button secondary" onClick={downloadReceipt}><Download aria-hidden="true" size={16} />Download receipt</button></div>
         {receiptStarted && !receiptSaved && !asking && <div className="handoff-confirm-receipt"><p role="status">Did the receipt download finish?</p><div className="actions-row"><button type="button" className="button secondary" onClick={onReceiptSaved}>Yes, receipt saved</button></div></div>}
         {copyStatus && <p className="field-hint" role="status">{copyStatus}</p>}
       </li>

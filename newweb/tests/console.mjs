@@ -1183,6 +1183,7 @@ try {
     assert.equal(await page.locator('#seal-more-ask').innerText(), "You haven't downloaded n3.bin.fseal. Download it first?");
     assert.equal(await page.evaluate(() => document.activeElement?.textContent), 'Download', 'Download has focus');
     assert.deepEqual(await page.locator('.confirm-box .button.primary').allInnerTexts(), ['Download']);
+    assert.deepEqual(await panel.locator('.button.primary').allInnerTexts(), ['Download'], 'one primary on screen: the question\'s, not also the step\'s');
     await page.keyboard.press('Escape');
     await page.waitForFunction(() => !document.getElementById('seal-more-ask') && document.activeElement?.textContent === 'Seal more files');
     assert.equal(await page.locator('#handover-text').count(), 1, 'Escape kept the result');
@@ -1195,6 +1196,7 @@ try {
     await page.keyboard.press('Enter'); // "Yes, saved"
     await page.waitForFunction(() => document.getElementById('seal-more-ask')?.textContent === "You haven't kept the receipt message. Copy it first?" && document.activeElement?.textContent === 'Copy message');
     assert.deepEqual(await page.locator('.confirm-box .button.primary').allInnerTexts(), ['Copy message']);
+    assert.equal(await panel.locator('.button.primary').count(), 1, 'one primary on screen: the question\'s Copy message only');
     await page.keyboard.press('Escape');
     await page.waitForFunction(() => !document.getElementById('seal-more-ask') && document.activeElement?.textContent === 'Seal more files');
     assert.equal(await page.evaluate(() => { const e = new Event('beforeunload', { cancelable: true }); window.dispatchEvent(e); return e.defaultPrevented; }), true, 'an unkept receipt still warns before reload');
@@ -1276,6 +1278,8 @@ try {
     await page.getByRole('button', { name: 'Seal more files' }).click();
     assert.equal(await page.locator('#seal-more-ask').innerText(), "You haven't kept the receipt message. Copy it first?");
     assert.equal(await page.evaluate(() => document.activeElement?.textContent), 'Copy message');
+    assert.deepEqual(await panel.locator('.button.primary').allInnerTexts(), ['Copy message'], 'list: one primary while the receipt question is open');
+    assert.equal(await panel.locator('.confirm-box .button.primary').count(), 1);
     assert.equal(await page.evaluate(() => { const e = new Event('beforeunload', { cancelable: true }); window.dispatchEvent(e); return e.defaultPrevented; }), true, 'the list\'s unkept receipt still warns before reload');
     await page.getByRole('button', { name: 'Discard it' }).click();
     await page.waitForFunction(() => document.activeElement?.id === 'seal-what-title');
