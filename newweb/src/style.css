@@ -1169,10 +1169,6 @@ input[type=datetime-local] { width: 100%; max-width: 320px; min-width: 0; min-he
 .choice-button:has(input:checked) { border: 2px solid var(--forest); padding: 7px 13px; background: var(--mint); }
 .choice-button:has(input:checked) .choice-mark { visibility: visible; }
 .choice-button:has(input:focus-visible) { outline: 3px solid var(--forest); outline-offset: 2px; }
-@media (forced-colors: active) {
-  .choice-button:has(input:checked) { background: Highlight; color: HighlightText; border-color: Highlight; }
-  .choice-button:has(input:checked) .choice-mark { color: HighlightText; }
-}
 .verify-link .link-row { display: flex; flex-wrap: wrap; gap: 8px; }
 .verify-link .link-row input { flex: 1 1 24ch; min-width: 0; }
 .inline-notice { margin: 0 0 16px; padding: 12px 14px; border: 1px solid var(--line); border-radius: 8px; background: var(--surface); color: var(--ink); }
@@ -1232,3 +1228,14 @@ input[type=datetime-local] { width: 100%; max-width: 320px; min-width: 0; min-he
 .verdict-headline .status-shape.warn, .compare-wrap .status-shape.warn { clip-path: none; background: none; border: 2px solid currentColor; border-radius: 0; transform: rotate(45deg); width: 11px; height: 11px; }
 .verdict-headline .status-shape.bad, .compare-wrap .status-shape.bad { border-radius: 0; transform: none; }
 .compare-wrap .status-label .status-shape.warn { width: 8px; height: 8px; }
+/* Forced colours: the chosen tab keeps system text colour; a thick Highlight border and the check mark show the choice. */
+@media (forced-colors: active) {
+  .choice-button:has(input:checked) { background: Canvas; color: CanvasText; border: 4px solid Highlight; padding: 5px 11px; forced-color-adjust: none; }
+  .choice-button:has(input:checked) .choice-mark { color: Highlight; }
+  .button.primary:disabled { forced-color-adjust: auto; color: GrayText; border-color: GrayText; }
+}
+/* A disabled main action looks disabled: muted fill, no brand colour, no hover lift. */
+.button.primary:disabled, .button.primary:disabled:hover { background: #dfe5e1; border-color: #c4cdc7; color: #5d6b63; box-shadow: none; transform: none; cursor: not-allowed; }
+.verdict-downloads { width: 100%; }
+.verdict-downloads > summary { justify-content: flex-start; width: fit-content; border: 1px solid var(--line); border-radius: 8px; padding: 0 14px; background: var(--surface); }
+.verdict-downloads > .actions-row { padding-top: 8px; }

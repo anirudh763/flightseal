@@ -12,14 +12,28 @@ export function StatusChip({ status }) {
   return <span className={`status-label ${kind}`}><span className={`status-shape ${kind}`} aria-hidden="true" />{MANIFEST_STATUS[status]}</span>;
 }
 
-/** result: verdict() output. focusKey: changes once per finished check, so the headline takes focus once (focus table). */
-export function VerdictBlock({ result, focusKey, lines, trustHref, onTrust, onReport, children }) {
+// Results whose headline already took focus: focus moves to the headline once, when a check has just finished, never
+// again when the same result is shown after a trip to another page (focus table).
+const focusedResults = new WeakSet();
+
+/**
+ * result: verdict() output. focusKey: an object that is new for each finished check. downloads: [[label, run]], the
+ * one report entry point (formats behind "Download report"); every report starts with the headline's Result line.
+ */
+export function VerdictBlock({ result, focusKey, lines, trustHref, onTrust, downloads = [], children }) {
   const ref = useRef(null);
-  useEffect(() => { ref.current?.focus(); }, [focusKey]);
+  useEffect(() => {
+    if (!focusKey || focusedResults.has(focusKey)) return;
+    focusedResults.add(focusKey);
+    ref.current?.focus();
+  }, [focusKey]);
   const { text, action } = result.next;
+  const menu = downloads.length > 0 && <details className="report-details verdict-downloads"><summary><Download aria-hidden="true" size={16} />Download report</summary>
+    <div className="actions-row">{downloads.map(([label, run]) => <button key={label} className="button secondary" type="button" onClick={run}><Download aria-hidden="true" size={16} />{label}</button>)}</div>
+  </details>;
   const next = action === 'trust' ? <a className="button secondary" href={trustHref} onClick={onTrust}>{text}</a>
     : action === 'originals' ? <button className="button secondary" type="button" onClick={() => document.getElementById('check-originals')?.focus()}>{text}</button>
-    : action === 'report' && onReport ? <button className="button secondary" type="button" onClick={onReport}><Download aria-hidden="true" size={16} />{text}</button>
+    : action === 'report' && menu ? menu
     : <p><strong>Next step:</strong> {text}</p>;
   return <div className={`verdict ${result.kind}`} data-verdict={result.key}>
     <h3 id="verdict-heading" ref={ref} tabIndex={-1} className="verdict-headline"><span className={`status-shape ${result.kind}`} aria-hidden="true" />{result.headline}</h3>
@@ -27,6 +41,7 @@ export function VerdictBlock({ result, focusKey, lines, trustHref, onTrust, onRe
     <div className="verdict-next">{next}</div>
     <dl className="verdict-lines">{lines.map(([label, value]) => <div key={label}><dt>{label}</dt><dd>{value}</dd></div>)}</dl>
     {children}
+    {action !== 'report' && menu}
   </div>;
 }
 

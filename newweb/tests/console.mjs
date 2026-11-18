@@ -1021,7 +1021,6 @@ try {
     await page.locator('#check-text').fill(handover.split('\n').flatMap((line) => line.match(/.{1,72}/g) || ['']).map((line) => `> ${line}`).join('\n'));
     assert.equal(await page.locator('#check-originals').count(), 0, 'a sealed file holds its own bytes: no Originals field');
     await page.getByRole('button', { name: 'Check files' }).click();
-    await waitResult(page, 'Intact');
     // The guest's one-time key: the file matches, but who sealed it is not confirmed, so the headline is not green.
     await page.waitForFunction(() => document.querySelector('#verdict-heading')?.textContent === 'Files match · signer not confirmed', null, { timeout: 30000 })
       .catch(async () => assert.fail(`verdict: ${await page.locator('.verify-check').innerText()}`));
@@ -1029,7 +1028,31 @@ try {
     assert.equal(await page.locator('.verdict.warn').count(), 1);
     assert.match(await page.locator('.verdict-lines').innerText(), /Signature\s+Valid[\s\S]*Files\s+1 match · 0 differ · 0 missing · 0 not in the list[\s\S]*Receipt coverage\s+All items covered/);
     assert.equal(await page.locator('.verdict-next a').innerText(), "Confirm the company's fingerprint on Trust");
-    assert.equal(await page.locator('#result-heading [role=status]').count(), 0, 'the verdict is read once, from its focused headline');
+    // One headline and one report entry point: no second (green "Intact") result panel, and every report starts with
+    // the headline's Result line.
+    const reportsOf = async () => {
+      const menu = page.locator('.verify-files .verdict-downloads');
+      assert.equal(await menu.count(), 1, 'one "Download report" entry point');
+      await menu.evaluate((d) => { d.open = true; });
+      const read = async (name) => { const [d] = await Promise.all([page.waitForEvent('download'), menu.getByRole('button', { name, exact: true }).click()]); return readFileSync(await d.path(), 'utf8'); };
+      return { text: await read('Download text report'), markdown: await read('Download Markdown report'), json: JSON.parse(await read('Download JSON')) };
+    };
+    const assertOneHeadline = async (headline) => {
+      const shown = await page.locator('main').innerText();
+      assert.doesNotMatch(shown, /\bIntact\b/, `${headline}: no "Intact" on the page`);
+      assert.equal(await page.locator('main .result-panel').count(), 0, `${headline}: no second result panel`);
+      if (headline !== 'Verified') assert.equal(await page.locator('main .verdict.ok, main .trust-line.ok, main #result-heading').count(), 0, `${headline}: nothing green`);
+      const reports = await reportsOf();
+      for (const kind of ['text', 'markdown']) assert.equal(reports[kind].split('\n')[0], `Result: ${headline}. ${await page.locator('.verdict-sentence').innerText()}`, `${headline}: ${kind} report's first line`);
+      assert.ok(reports.json.result.startsWith(`Result: ${headline}. `), `${headline}: JSON result`);
+      return reports;
+    };
+    await assertOneHeadline('Files match · signer not confirmed');
+    // Focus table: the headline takes focus when a check has just finished, not again after a trip to another page.
+    await route(page, 'help'); await route(page, 'verify');
+    await page.waitForFunction(() => document.querySelector('#verdict-heading')?.textContent === 'Files match · signer not confirmed');
+    await page.evaluate(() => new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r))));
+    assert.notEqual(await page.evaluate(() => document.activeElement?.id), 'verdict-heading', 'no refocus on route return');
     await page.waitForSelector('.restored', { timeout: 30000 });
     assert.match(await page.locator('.restored h3').textContent(), /Original file recovered/);
     const [originalDownload] = await Promise.all([page.waitForEvent('download'), page.getByRole('button', { name: 'Download original file' }).click()]);
@@ -1040,7 +1063,7 @@ try {
 
     // Recipient trust: not in the list until the sender's fingerprint is pinned; times say where they come from.
     const untrusted = "Valid signature, but this key isn't in your trusted list — confirm its fingerprint through a channel you already know.";
-    await page.waitForFunction((text) => document.querySelector('.result-panel .trust-line')?.textContent === text, untrusted);
+    await page.waitForFunction((text) => document.querySelector('.verdict .trust-line')?.textContent === text, untrusted);
     const times = await page.locator('.time-fields > div').evaluateAll((divs) => divs.map((d) => [d.querySelector('dt').innerText, d.querySelector('dd span').innerText, d.querySelector('dd small').innerText]));
     assert.deepEqual(times[0], ['Reported landing time', landed.toISOString(), 'operator-entered, not signed, not verified']);
     assert.equal(times[1][0], 'Sealed on this computer at');
@@ -1071,15 +1094,13 @@ try {
     await pinPage.waitForFunction(() => document.querySelector('.company-list')?.textContent.includes('Other Co'));
     await pinPage.close();
     await page.getByRole('button', { name: 'Check files' }).click();
-    await waitResult(page, 'Intact');
     await page.waitForSelector('.restored', { timeout: 30000 });
     await page.waitForFunction(() => document.querySelector('#verdict-heading')?.textContent === 'Verified', null, { timeout: 30000 });
     assert.match(await page.locator('.verdict.ok').innerText(), /Every file matches what was sealed, signed by a company you trust\./);
     assert.deepEqual(await visiblePrimaries(), ['Check files'], 'one main action with a result showing (AC-06)');
-    const [verdictReport] = await Promise.all([page.waitForEvent('download'), page.locator('.verdict').getByRole('button', { name: 'Download report' }).click()]);
-    assert.ok(readFileSync(await verdictReport.path(), 'utf8').startsWith('Result: Verified. Every file matches what was sealed, signed by a company you trust.\n'), 'the small-file report starts with its Result line');
+    assert.ok((await assertOneHeadline('Verified')).text.startsWith('Result: Verified. Every file matches what was sealed, signed by a company you trust.\n'), 'the small-file report starts with its Result line');
     const trusted = 'Signed by a key you trust: Pilot Co (added from phone call with a known contact)';
-    await page.waitForFunction((text) => document.querySelector('.result-panel .trust-line')?.textContent === text, trusted);
+    await page.waitForFunction((text) => document.querySelector('.verdict .trust-line')?.textContent === text, trusted);
     // Trusted company select: companies added on Trust (fingerprint only) are listed; the chosen one must be the signer.
     const checkVerdict = async (company, headline) => {
       await page.locator('#check-company').selectOption(company);
@@ -1091,15 +1112,13 @@ try {
     await checkVerdict('Other Co', 'Not verified');
     assert.match(await page.locator('.verdict.bad').innerText(), /Not signed by Other Co's key/);
     assert.equal(await page.locator('.restored').count(), 0, 'no original offered for the wrong company');
+    assert.match((await assertOneHeadline('Not verified')).text.split('\n')[1], /^Trusted company: not signed by Other Co's key$/);
     await checkVerdict('', 'Verified');
     await page.waitForSelector('.restored', { timeout: 30000 });
     await compare(copyPath, 'Bytes differ');
     await page.waitForFunction(() => document.querySelector('#verdict-heading')?.textContent === 'Files differ'); // your copy differs
-    const [textReport] = await Promise.all([page.waitForEvent('download'), page.getByRole('button', { name: 'Download text report' }).click()]);
-    const report = readFileSync(await textReport.path(), 'utf8');
+    const { text: report, json } = await reportsOf();
     for (const line of [`Key trust: ${trusted}`, 'Key source: phone call with a known contact', `Reported landing time: ${landed.toISOString()} (operator-entered, not signed, not verified)`, 'Sealed on this computer at:', 'Registry acceptance: Not registered', 'Trusted timestamp: None', 'Reported landing-to-seal interval: 1 h ', 'Your copy my-copy.ulg: Bytes differ.', 'not proof of tampering', 'Native chain result:']) assert.ok(report.includes(line), `report: ${line}`);
-    const [jsonReport] = await Promise.all([page.waitForEvent('download'), page.getByRole('button', { name: 'Download JSON' }).click()]);
-    const json = JSON.parse(readFileSync(await jsonReport.path(), 'utf8'));
     assert.equal(json.keyTrust.status, 'trusted');
     assert.equal(json.timeProvenance.fields.length, 5);
     assert.deepEqual(json.fileComparison.items.map((item) => [item.subject, item.status]), [['Recovered file', 'Matches'], ['Your copy', 'Bytes differ']]);
@@ -1123,7 +1142,11 @@ try {
     await page.locator('#check-company option[value="Pilot Co"]').waitFor({ state: 'detached' }); // a compromised company is not offered
     await checkVerdict('Other Co', 'Signed by a key marked compromised');
     assert.match(await page.locator('.verdict.bad').innerText(), /Trusted company\s+Not signed by Other Co's key/);
-    await page.locator('#check-company').selectOption('');
+    await assertOneHeadline('Signed by a key marked compromised');
+    await checkVerdict('', 'Signed by a key marked compromised'); // no company chosen: the rebuilt original exists but is not offered
+    await page.waitForSelector('.restored', { timeout: 30000 });
+    assert.equal(await page.getByRole('button', { name: 'Download original file' }).count(), 0, 'no original offered under a compromised verdict');
+    await assertOneHeadline('Signed by a key marked compromised');
 
     // One changed byte inside a sealed chunk: Tampered, and no original is offered.
     const sealedBytes = readFileSync(sealedPath);
@@ -1133,8 +1156,7 @@ try {
     await page.locator('#check-file').setInputFiles(editedPath);
     await page.locator('#check-text').fill(handover);
     await page.getByRole('button', { name: 'Check files' }).click();
-    await waitResult(page, 'Tampered');
-    await page.waitForFunction(() => document.querySelector('#verdict-heading')?.textContent === 'Not verified');
+    await page.waitForFunction(() => document.querySelector('#verdict-heading')?.textContent === 'Not verified', null, { timeout: 30000 });
     assert.match(await page.locator('.verdict.bad').innerText(), /Next step: Check that you chose the right sealed file, pasted the whole receipt message, and entered the key the sender gave you separately\./);
     assert.equal(await page.locator('.restored').count(), 0);
 
@@ -1151,7 +1173,7 @@ try {
     await page.locator('#check-file').setInputFiles(forgedPath);
     await page.locator('#check-text').fill(handover);
     await page.getByRole('button', { name: 'Check files' }).click();
-    await waitResult(page, 'Tampered');
+    await page.waitForFunction(() => document.querySelector('#verdict-heading')?.textContent === 'Not verified', null, { timeout: 30000 });
     assert.equal(await page.locator('.restored').count(), 0);
 
     // No receipt pasted: refused with a reason rather than a weaker check, read with its field (focus table).

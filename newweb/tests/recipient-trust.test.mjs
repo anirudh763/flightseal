@@ -145,7 +145,7 @@ test('verdict: every row of the table, in order, with its exact words and one ne
   assert.equal(verdict({ signed: true, trust: { status: 'wrong-key' } }).sentence, trustLine({ status: 'wrong-key' }));
   assert.deepEqual(v({ signed: true, trust: TRUSTED, items: [m('match'), m('bytes-differ'), m('missing')] }), ['Files differ', 'warn', 'Ask for the original files']);
   assert.equal(verdict({ signed: true, trust: TRUSTED, items: [m('bytes-differ')] }).sentence, BYTES_DIFFER.text);
-  const incomplete = verdict({ signed: true, trust: TRUSTED, items: [m('match'), m('match'), m('missing')], extras: [m('not-in-manifest')] });
+  const incomplete = verdict({ signed: true, trust: TRUSTED, items: [m('match'), m('match'), { ...m('missing'), name: 'c.bin' }], extras: [m('not-in-manifest')] }); // a named list: an unnamed one reads "Files differ or are missing"
   assert.deepEqual([incomplete.headline, incomplete.kind, incomplete.sentence, incomplete.next.text], ['Incomplete', 'warn', "2 of 3 files were checked. A file that is missing can't be checked.", 'Add the missing originals']);
   assert.equal(verdict({ signed: true, trust: TRUSTED, items: [m('match')], coverage: { covered: 5, total: 8 } }).sentence, 'Receipts cover 5 of 8 items.');
   const extra = verdict({ signed: true, trust: TRUSTED, items: [m('match')], extras: [m('not-in-manifest'), m('not-in-manifest')] });
@@ -186,4 +186,38 @@ test('verdict: a compromised signer outranks a chosen company that did not sign;
   const v = verdict({ signed: true, trust: { status: 'trusted' }, items: ok, company: other });
   assert.deepEqual([v.key, v.headline, v.sentence], ['not-verified', 'Not verified', "Not signed by Other Co's key. Don't rely on this proof."]);
   assert.equal(verdict({ signed: true, trust: { status: 'trusted' }, items: ok, company: { name: 'Pilot Co', matches: true } }).key, 'verified');
+});
+
+import * as trustModule from '../src/recipient-trust.mjs';
+
+test('verdict: an unnamed list with one flipped byte reads "Files differ or are missing", never a guessed pairing', () => {
+  const sealed = { items: [{ id: 1, name: '', bytes: 3, sha256: 'a'.repeat(64) }, { id: 2, name: '', bytes: 4, sha256: 'b'.repeat(64) }] };
+  const chosen = [{ name: 'one.bin', bytes: 3, sha256: 'a'.repeat(64) }, { name: 'two.bin', bytes: 4, sha256: 'c'.repeat(64) }]; // two.bin: one byte flipped
+  const { items, extras } = pairFiles(sealed, chosen);
+  assert.deepEqual(items.map((item) => item.status), ['match', 'missing'], 'not paired by size');
+  const v = verdict({ signed: true, trust: { status: 'trusted' }, items, extras });
+  assert.deepEqual([v.key, v.headline, v.kind, v.next.text], ['differ-or-missing', 'Files differ or are missing', 'warn', 'Ask for the original files']);
+  assert.equal(v.sentence, "1 file you chose doesn't match any item in the list. They may be changed copies or files that weren't sealed.");
+  assert.match(verdict({ signed: true, trust: { status: 'trusted' }, items, extras: [...extras, extras[0]] }).sentence, /^2 files you chose don't match/);
+  // A named list keeps Incomplete / Not in the list, and a compromised or untrusted signer still wins first.
+  assert.equal(verdict({ signed: true, trust: { status: 'trusted' }, items: [{ name: 'a', status: 'missing' }], extras }).key, 'incomplete');
+  assert.equal(verdict({ signed: true, trust: { status: 'compromised' }, items, extras }).key, 'compromised');
+});
+
+test('offersOriginal: the original file is offered only when the signer is acceptable', () => {
+  const offers = (args) => trustModule.offersOriginal?.(verdict({ signed: true, items: [{ status: 'match' }], ...args }));
+  assert.equal(offers({ trust: { status: 'trusted' } }), true);
+  assert.equal(offers({ trust: { status: 'untrusted' } }), true, 'signer not confirmed, files match');
+  assert.equal(offers({ trust: { status: 'compromised' } }), false);
+  assert.equal(offers({ trust: { status: 'trusted' }, company: { name: 'Other Co', matches: false } }), false);
+  assert.equal(trustModule.offersOriginal?.(verdict({ signed: false, reason: 'bad' })), false);
+});
+
+test('manifestReport: every format starts with the Result line', () => {
+  const r = manifestReport({ sealedName: 'x.manifest.fseal', trust: { status: 'compromised', entry: { name: 'Old Co', source: 'contract' } }, items: [{ id: 1, name: 'a', bytes: 1, sha256: 'a'.repeat(64), note: '', status: 'match', local: 0 }], extras: [], locals: [{ name: 'a', sha256: 'a'.repeat(64) }] });
+  const first = 'Result: Signed by a key marked compromised. ';
+  assert.ok(r.text.startsWith(first), r.text.split('\n')[0]);
+  assert.ok(r.markdown.startsWith(first), r.markdown.split('\n')[0]);
+  assert.ok(JSON.parse(r.json).result.startsWith(first));
+  assert.ok(r.pdfLines[0].startsWith(first));
 });

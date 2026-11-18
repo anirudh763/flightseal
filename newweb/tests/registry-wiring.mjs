@@ -118,6 +118,7 @@ async function axe(page, label) {
 const REGISTERED_BASIS = "the registry's clock; the registry's statement, not proof of the files";
 // A downloaded export, with no registry token, JWT or share token in it.
 async function exportOf(page, button, token, scope = page.locator('main')) {
+  await scope.locator('.verdict-downloads').evaluateAll((menus) => menus.forEach((menu) => { menu.open = true; })); // reports sit behind "Download report"
   const [download] = await Promise.all([page.waitForEvent('download'), scope.getByRole('button', { name: button, exact: true }).locator('visible=true').first().click()]);
   const path = await download.path();
   const text = button.includes('PDF') ? await pdfText(path) : readFileSync(path, 'utf8');
@@ -435,6 +436,19 @@ try {
     assert.equal(await reviewer.evaluate(() => document.activeElement?.value), 'files');
     assert.equal(await reviewer.evaluate(() => history.length), historyLength);
     assert.match(reviewer.url(), /[?&]mode=files/);
+    // Forced colours: the chosen tab's words keep a visible system colour and its check mark shows (no Highlight fill
+    // under HighlightText that the browser repaints to Canvas).
+    await reviewer.emulateMedia({ forcedColors: 'active' });
+    const chosen = await reviewer.locator('.choice-button:has(input:checked)').evaluate((label) => {
+      const style = getComputedStyle(label); const mark = getComputedStyle(label.querySelector('.choice-mark'));
+      return { color: style.color, background: style.backgroundColor, mark: mark.color, markShown: mark.visibility, border: parseFloat(style.borderTopWidth) };
+    });
+    assert.notEqual(chosen.color, chosen.background, `forced colours: chosen label text is visible ${JSON.stringify(chosen)}`);
+    assert.notEqual(chosen.mark, chosen.background, `forced colours: check mark visible ${JSON.stringify(chosen)}`);
+    assert.equal(chosen.markShown, 'visible');
+    assert.ok(chosen.border >= 3, `forced colours: a thick border marks the choice ${JSON.stringify(chosen)}`);
+    await reviewer.screenshot({ path: join(OUT, 'chooser-forced-colors.png') });
+    await reviewer.emulateMedia({ forcedColors: 'none' });
     await reviewer.getByLabel('I have a HashWing link').check();
     await reviewer.getByRole('button', { name: 'Check the files' }).click(); // the link's record stays for comparison
     await reviewer.waitForFunction(() => document.activeElement?.id === 'check-file');

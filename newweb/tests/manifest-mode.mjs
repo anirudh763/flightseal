@@ -230,6 +230,8 @@ try {
     if (source) await settings.getByLabel(source, { exact: true }).check();
     await settings.getByRole('button', { name: 'Add company' }).click();
   };
+  // Reports sit behind the verdict's one "Download report" disclosure; every one starts with the headline's Result line.
+  const openReports = (target) => target.locator('.manifest-outcome .verdict-downloads').evaluate((d) => { d.open = true; });
   const trustText = () => page.locator('.manifest-outcome .trust-line').innerText();
   const runCheck = async (key) => {
     await goTo('verify');
@@ -291,7 +293,7 @@ try {
     await runCheck('');
     assert.equal(await trustText(), 'Signed by a key you trust: Acme Survey (added from contract or invoice)');
     assert.equal(await page.locator('.manifest-table').count(), 1);
-    const save = async (name) => { const [d] = await Promise.all([page.waitForEvent('download'), page.getByRole('button', { name, exact: true }).click()]); return readFileSync(await d.path()); };
+    const save = async (name) => { await openReports(page); const [d] = await Promise.all([page.waitForEvent('download'), page.getByRole('button', { name, exact: true }).click()]); return readFileSync(await d.path()); };
     for (const name of ['Download text report', 'Download Markdown report']) {
       const report = (await save(name)).toString('utf8');
       assert.match(report, /Key trust: Signed by a key you trust: Acme Survey \(added from contract or invoice\)/, name);
@@ -313,11 +315,16 @@ try {
     await settings.locator('.confirm-box').getByRole('button', { name: 'Mark as compromised' }).click();
     // The open result re-checks its trust line when a pin changes; no stale "trusted" stays on screen or in exports.
     await page.waitForFunction(() => /marked as compromised: Acme Survey/.test(document.querySelector('.manifest-outcome .trust-line')?.textContent || ''));
+    await openReports(page);
     const [stale] = await Promise.all([page.waitForEvent('download'), page.getByRole('button', { name: 'Download text report', exact: true }).click()]);
     assert.match(readFileSync(await stale.path(), 'utf8'), /Key trust: Signed by a key you marked as compromised: Acme Survey/);
     // The headline row "Signed by a key marked compromised" wins whatever the files show.
     await runCheck('');
     assert.equal(await page.locator('#verdict-heading').innerText(), 'Signed by a key marked compromised');
+    await openReports(page);
+    const [first] = await Promise.all([page.waitForEvent('download'), page.getByRole('button', { name: 'Download text report', exact: true }).click()]);
+    assert.ok(readFileSync(await first.path(), 'utf8').startsWith('Result: Signed by a key marked compromised. '), 'the report starts with the headline');
+    assert.doesNotMatch(await page.locator('main').innerText(), /\bIntact\b/);
     assert.match(await page.locator('.manifest-outcome').innerText(), /This key was reported as compromised\. Don't rely on these files until the company confirms them\.[\s\S]*Next step: Ask the company for a new seal/);
     // A different company chosen never hides a compromised signer: compromised outranks the company mismatch.
     await addCompany('Bystander Co', 'ef'.repeat(32), 'contract or invoice');
@@ -512,7 +519,7 @@ try {
       const line = checker.locator('.manifest-outcome .trust-line');
       await line.waitFor({ timeout: 120000 });
       await checker.waitForFunction(() => /marked as compromised: Late Co/.test(document.querySelector('.manifest-outcome .trust-line')?.textContent || ''), null, { timeout: 5000 });
-      const save = async (name) => { const [d] = await Promise.all([checker.waitForEvent('download'), checker.getByRole('button', { name, exact: true }).click()]); return readFileSync(await d.path()); };
+      const save = async (name) => { await openReports(checker); const [d] = await Promise.all([checker.waitForEvent('download'), checker.getByRole('button', { name, exact: true }).click()]); return readFileSync(await d.path()); };
       for (const name of ['Download text report', 'Download Markdown report']) assert.match((await save(name)).toString('utf8'), /Key trust: Signed by a key you marked as compromised: Late Co/, name);
       assert.equal(JSON.parse((await save('Download JSON')).toString('utf8')).keyTrust.status, 'compromised');
       const pdf = await save('Download PDF');

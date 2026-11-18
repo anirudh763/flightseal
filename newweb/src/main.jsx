@@ -30,7 +30,7 @@ import { createEncryptedProfileBackup, inspectEncryptedProfileBackup, commitBack
 import { createSyncProvider } from './sync-provider.mjs';
 import { PINS_CHANGED, SOURCES, addTrustedCompany, fingerprintHex, formatFingerprint, listTrustedHistory, listTrustedKeys, markCompromised, pinTrustedKey, removeTrustedKey, trustForKey } from './trusted-keys.mjs';
 import { RegistryBarLink, RegistryBoundary, RegistryPanel, RegistryShareNote, RegistrySigningLine, SealedOnDevice, ShareRecordPanel, getRegistry, registryLogout, registryScope, registrySealStart, registrySealed, useRegistryTimeField, useRegistryUnsent } from './registry-ui.jsx';
-import { BYTES_DIFFER, TRUST_KIND, composeNote, countsLine, pairFiles, verdict, landingLine, manifestReport, parseLandingLine, parseNote, parseSealedLine, timeFields, toIsoFromLocal, trustLine } from './recipient-trust.mjs';
+import { BYTES_DIFFER, TRUST_KIND, composeNote, countsLine, offersOriginal, pairFiles, verdict, landingLine, manifestReport, parseLandingLine, parseNote, parseSealedLine, timeFields, toIsoFromLocal, trustLine } from './recipient-trust.mjs';
 
 const syncProvider = createSyncProvider({ supabaseUrl: import.meta.env.VITE_SUPABASE_URL, supabaseAnonKey: import.meta.env.VITE_SUPABASE_ANON_KEY });
 
@@ -699,6 +699,11 @@ function App() {
       loadDemo(route.sample);
       return;
     }
+    if (route.legacy && route.screen === 'verify' && !route.sample) { // an old #/verify opens the empty check form, never a hidden sample
+      history.replaceState(null, '', route.direct ? productHref('verify') : routeHash('verify'));
+      setRoute(parseLocation(location));
+      return;
+    }
     if (route.legacy && !initialLegacyLoadedRef.current && !route.sample) {
       initialLegacyLoadedRef.current = true;
       loadDemo(false);
@@ -1163,6 +1168,8 @@ function App() {
   const runProtectCheck = async () => {
     invalidateCheck(); setProtectResult(null); setRestored(null); setError(''); setCheckError(null); setCompanyMismatch(null);
     if (!checkFile) { failCheck('check-file', 'Choose the sealed file or list you were given.'); return; }
+    // Only the fseal-receipt line is signed. The message's other lines ("Original file", "Files listed", "Sealed")
+    // are unsigned text anyone can edit: never show them as facts (parseSealedLine is shown as the sender's clock only).
     const { receipts, publicKey, keyConflict } = parseHandover(checkText);
     if (keyConflict) { failCheck('check-text', 'This message names more than one public key. Paste only the receipt message you received when the flight was sealed.'); return; }
     if (!receipts || !publicKey) { failCheck('check-text', 'Paste the receipt message you received when the flight was sealed. Without it, a rewritten file cannot be told apart from the original.'); return; }
@@ -1429,10 +1436,18 @@ function App() {
   const smallLines = smallVerdict ? [
     ['Signature', smallChecks.length && smallChecks.every((check) => check === 'ok') ? 'Valid' : 'Not valid'],
     ...(smallMismatch ? [['Trusted company', `Not signed by ${smallMismatch}'s key`]] : []),
-    ...(keyTrust?.for === result ? [['Key trust', <TrustLine trust={keyTrust} />]] : []),
+    // Under a company mismatch the signer's own trust line would read green beside a red headline: shown only when it is bad.
+    ...(keyTrust?.for === result && !(smallMismatch && TRUST_KIND[keyTrust.status] !== 'bad') ? [['Key trust', <TrustLine trust={keyTrust} />]] : []),
     ['Files', <span className="mono-values">{countsLine(smallRows, [])}</span>],
     ['Receipt coverage', smallCovered ? 'All items covered' : `Receipts cover ${fmtBig(result.receiptCoverage.covered)} of ${fmtBig(result.native.records)} records`],
     ...(registryLine ? [['Registry', registryLine.value]] : []),
+  ] : [];
+  // Verify's small-file reports: each starts with the headline's Result line (and the company check, when one was chosen).
+  const smallResultLines = smallVerdict ? [`Result: ${smallVerdict.headline}. ${smallVerdict.sentence}`, ...(smallMismatch ? [`Trusted company: not signed by ${smallMismatch}'s key`] : [])] : [];
+  const smallDownloads = smallVerdict ? [
+    ['Download text report', () => download('hashwing-check-report.txt', `${smallResultLines.join('\n')}\n${reportText}`)],
+    ['Download Markdown report', () => download('hashwing-check-report.md', `${smallResultLines.join('\n\n')}\n\n${reportMarkdown}`, 'text/markdown;charset=utf-8')],
+    ['Download JSON', () => download('hashwing-check-report.json', JSON.stringify({ result: smallResultLines[0], verdict: { key: smallVerdict.key, headline: smallVerdict.headline, sentence: smallVerdict.sentence }, trustedCompany: smallMismatch ? { name: smallMismatch, signed: false } : null, ...JSON.parse(reportJson) }, null, 2), 'application/json')],
   ] : [];
   const comparisonLine = (item) => `${item.subject} ${item.name}: ${item.matches ? 'Matches' : `${BYTES_DIFFER.title}. ${BYTES_DIFFER.text}`} (SHA-256 ${item.sha256}; sealed ${item.expected})`;
   const selectedTelemetryPoint = selectedTelemetryIndex == null ? null : telemetry[selectedTelemetryIndex];
@@ -1685,7 +1700,8 @@ function App() {
       </div>
     </header>
     <section hidden={hideWorkbenchStrip} className="session-strip" aria-label="Current session">
-      <span id="session-file-name" className="session-name" title={selectedFileName || 'Choose a source or sealed log'}>{selectedFileName ? `Selected: ${selectedFileName}` : 'Choose a source or sealed log'}</span>
+      {screen === 'verify' ? checkFile && <span id="session-file-name" className="session-name" title={checkFile.name}>Selected: {checkFile.name}</span> // Verify has its own file field: no source prompt here
+        : <span id="session-file-name" className="session-name" title={selectedFileName || 'Choose a source or sealed log'}>{selectedFileName ? `Selected: ${selectedFileName}` : 'Choose a source or sealed log'}</span>}
       {result && <span className="session-result-name">Checked: {result.label}</span>}
       {result && <button type="button" className="hash-copy" title={`Copy full chain head ${result.native.head}`} onClick={async () => { try { await navigator.clipboard.writeText(result.native.head); setOperationStatus('Chain head copied.'); } catch { setError('Clipboard access is unavailable. Select the full hash in the report.'); } }}><span>Copy hash</span><code>{`${result.native.head.slice(0, 10)}…${result.native.head.slice(-8)}`}</code></button>}
       {hasImportedOutput && <button type="button" className="clear-session" onClick={clearImportedSession}>Clear imported session</button>}
@@ -1810,7 +1826,7 @@ function App() {
             {checkOptions}
             <button className="button primary" type="button" disabled={!checkFile || !checkText.trim() || !!busy} aria-describedby={checkWhy ? 'check-why' : undefined} onClick={runProtectCheck}>Check files</button>
             {checkWhy && <p id="check-why" className="field-hint">{checkWhy}</p>}
-            {smallVerdict && <VerdictBlock result={smallVerdict} focusKey={result} trustHref={workspaceHref('help')} onTrust={toTrust} onReport={() => download('hashwing-verification-report.txt', `Result: ${smallVerdict.headline}. ${smallVerdict.sentence}\n${reportText}`)} lines={smallLines}>
+            {smallVerdict && <VerdictBlock result={smallVerdict} focusKey={result} trustHref={workspaceHref('help')} onTrust={toTrust} downloads={smallDownloads} lines={smallLines}>
               <TimeFields fields={resultTimes} />
               {smallRows.length > 0 && <CompareTable rows={smallRows} label="File compared with the receipt" />}
               <p className="field-hint">This result compares the file with the receipt message you pasted. It means something only if you received that message directly from the pilot or operator when the files were sealed.</p>
@@ -1818,7 +1834,7 @@ function App() {
           {restored && restored !== 'none' && result === protectResult && <div className="restored">
             <h3>{restored.matches ? 'Original file recovered' : BYTES_DIFFER.title}</h3>
             <dl className="detail-grid"><dt>Name</dt><dd className="wrap">{restored.name}</dd><dt>Size</dt><dd>{fmtBytes(restored.bytes)}</dd><dt>SHA-256</dt><dd><code>{restored.actualSha256}</code></dd></dl>
-            {restored.matches ? <button className="button secondary" type="button" onClick={() => download(restored.name, restored.data, 'application/octet-stream')}><Download aria-hidden="true" size={16} />Download original file</button> : <p>{BYTES_DIFFER.text}</p>}
+            {restored.matches ? offersOriginal(smallVerdict) && <button className="button secondary" type="button" onClick={() => download(restored.name, restored.data, 'application/octet-stream')}><Download aria-hidden="true" size={16} />Download original file</button> : <p>{BYTES_DIFFER.text}</p>}
             <details className="report-details protect-options"><summary>More options <ChevronDown size={17} aria-hidden="true" /></summary><div className="manifest-options-body">
               <label className="field-label" htmlFor="compare-copy">Compare with a copy you have</label>
               <input id="compare-copy" type="file" onChange={(e) => compareCopy(e.target.files?.[0] || null)} />
@@ -1828,7 +1844,6 @@ function App() {
           {restored === 'none' && result === protectResult && <p className="field-hint">This log holds decoded flight records rather than a whole sealed file, so there is no original file to download.</p>}
           </>}
         </div></section>
-        {screen === 'verify' && protectView && <ResultPanel result={result} resultTitle={resultTitle} reportText={reportText} onDownloadText={() => download('hashwing-verification-report.txt', reportText)} onDownloadMarkdown={() => download('hashwing-evidence-report.md', reportMarkdown, 'text/markdown;charset=utf-8')} onDownloadJson={() => download('hashwing-verification-report.json', reportJson, 'application/json')} onNavigate={navigate} onShare={() => setShareDialogOpen(true)} trust={shownTrust} live={false} />}
       </div>
       {screen === 'verify' && shownVerifyMode === 'files' && <section className="screen verify-more" aria-label="Other checks">
         <p className="verify-sample"><a className="standalone-link" href={workspaceHref('sandbox', { sample: 'intact' })} onClick={(e) => { if (e.button !== 0 || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return; e.preventDefault(); navigate('sandbox', { sample: 'intact' }); }}>Try a sample</a></p>
@@ -2389,7 +2404,7 @@ function ManifestSeal({ hidden, output, setOutput, carry, common, jobRef, signin
     onDownload={() => download(output.log.name, output.log, 'application/octet-stream')} onSaved={() => markList(output.log, 'file')} onDownloadReceipt={() => download(`${output.base}.receipt.txt`, output.handover)} onReceiptSaved={() => markList(output.log, 'receipt')}
     handoverId="manifest-handover-text" handover={output.handover} onCopy={copy} copyStatus={copyStatus}
     actions={<><button className="button secondary" type="button" onClick={() => download(`${output.base}.public-key.txt`, `${output.publicKey}\n`)}><Download aria-hidden="true" size={16} />Download public key</button></>}
-    details={<>{output.savedKey && <SenderFingerprint fingerprint={output.fingerprint} />}<dl className="detail-grid"><dt>Public key</dt><dd><code className="wrap">{output.publicKey}</code></dd></dl></>}
+    details={<>{output.savedKey && <SenderFingerprint fingerprint={output.fingerprint} />}</>} /* the grouped fingerprint, as for a small file; the raw key is in the message */
     shareNote={shareNote} onSealMore={sealMore} />
     </>;
   return <>{live}<div className="manifest-body">
@@ -2467,11 +2482,11 @@ function ManifestCheck({ sealed, text, anchor, keyConflict, company, companyFing
     try {
       const verified = await verifySealedManifest(sealed, text, anchor); // a weak key returns { verified: false, reason: WEAK_KEY_MESSAGE }
       if (revision !== revisionRef.current) return;
-      if (!verified.verified) { setOutcome({ verified: false, reason: verified.reason, run: revision }); return; }
+      if (!verified.verified) { setOutcome({ verified: false, reason: verified.reason, run: revision, focus: {} }); return; }
       const fingerprint = await fingerprintHex(verified.publicKey);
       if (companyFingerprint && fingerprint !== companyFingerprint) { // never falls back to another key; a compromised signer still reads compromised
         const trust = await trustForKey(verified.publicKey).catch(() => ({ status: 'untrusted' }));
-        if (revision === revisionRef.current) setOutcome({ verified: false, mismatch: company, trust, run: revision });
+        if (revision === revisionRef.current) setOutcome({ verified: false, mismatch: company, trust, run: revision, focus: {} });
         return;
       }
       const hashed = await hashAll(locals, controller.signal, setProgress);
@@ -2482,7 +2497,7 @@ function ManifestCheck({ sealed, text, anchor, keyConflict, company, companyFing
       const trust = await trustForKey(verified.publicKey).catch(() => ({ status: 'untrusted' }));
       if (revision !== revisionRef.current) return;
       const facts = { sealedName: sealed.name, fingerprint, head: verified.head, sealedAt: parseSealedLine(text), comparison, locals: hashed, publicKey: verified.publicKey };
-      setOutcome({ verified: true, run: revision, ...facts, manifest: verified.manifest, trust, pinsVersion: seenPins, report: reportFor(trust, facts), base: sealed.name.replace(/\.manifest\.fseal$|\.fseal$/, '') || 'hashwing-manifest' });
+      setOutcome({ verified: true, run: revision, focus: {}, ...facts, manifest: verified.manifest, trust, pinsVersion: seenPins, report: reportFor(trust, facts), base: sealed.name.replace(/\.manifest\.fseal$|\.fseal$/, '') || 'hashwing-manifest' });
     } catch (cause) {
       if (revision !== revisionRef.current && cause?.name === 'AbortError') return;
       if (cause?.name === 'AbortError') setMessage('Cancelled');
@@ -2491,7 +2506,12 @@ function ManifestCheck({ sealed, text, anchor, keyConflict, company, companyFing
   };
   const comparison = outcome?.verified ? outcome.comparison : null;
   const result = outcome && (outcome.verified ? verdict({ signed: true, trust: outcome.trust, items: comparison.items, extras: comparison.extras }) : (outcome.mismatch ? verdict({ signed: true, trust: outcome.trust, company: { name: outcome.mismatch, matches: false } }) : verdict({ signed: false, reason: outcome.reason })));
-  const downloadText = () => download(`${outcome.base}.check-report.txt`, report.text);
+  const downloads = outcome?.verified ? [
+    ['Download text report', () => download(`${outcome.base}.check-report.txt`, report.text)],
+    ['Download Markdown report', () => download(`${outcome.base}.check-report.md`, report.markdown, 'text/markdown;charset=utf-8')],
+    ['Download JSON', () => download(`${outcome.base}.check-report.json`, report.json, 'application/json')],
+    ['Download PDF', async () => { try { const { createIntegrityPdf } = await import('./report-pdf.mjs'); download(`${outcome.base}.check-report.pdf`, await createIntegrityPdf({ title: 'HashWing manifest check report', lines: report.pdfLines }), 'application/pdf'); } catch (cause) { setMessage(cause?.message || 'Could not create the PDF. Download the text report instead.'); } }],
+  ] : [];
   const showLanding = comparison && new Set(comparison.items.map((entry) => parseNote(entry.note).landing || '')).size > 1;
   const rows = comparison ? [
     ...comparison.items.map((item) => {
@@ -2514,18 +2534,12 @@ function ManifestCheck({ sealed, text, anchor, keyConflict, company, companyFing
     <button className="button primary" type="button" disabled={!sealed || !text.trim() || running} aria-describedby={!text.trim() ? 'check-why' : undefined} onClick={run}>Check files</button>
     {!text.trim() && <p id="check-why" className="field-hint">Paste the receipt message</p>}
     {message && <p className="field-hint" role="status">{message}</p>}
-    {result && <div className="manifest-outcome"><VerdictBlock result={result} focusKey={outcome.run} trustHref={trustHref} onTrust={onTrust} onReport={outcome.verified ? downloadText : null}
-      lines={outcome.mismatch ? [['Signature', 'Valid'], ['Trusted company', `Not signed by ${outcome.mismatch}'s key`], ['Key trust', <TrustLine trust={outcome.trust} />]] : outcome.verified ? [['Signature', 'Valid'], ['Key trust', <TrustLine trust={outcome.trust} />], ['Files', <span className="mono-values">{countsLine(comparison.items, comparison.extras)}</span>], ['Receipt coverage', 'All items covered'], ...(registryLine ? [['Registry', registryLine.value]] : [])] : [['Signature', 'Not valid']]}>
+    {result && <div className="manifest-outcome"><VerdictBlock result={result} focusKey={outcome.focus} trustHref={trustHref} onTrust={onTrust} downloads={outcome.verified ? downloads : []}
+      lines={outcome.mismatch ? [['Signature', 'Valid'], ['Trusted company', `Not signed by ${outcome.mismatch}'s key`], ...(TRUST_KIND[outcome.trust.status] === 'bad' ? [['Key trust', <TrustLine trust={outcome.trust} />]] : [])] : outcome.verified ? [['Signature', 'Valid'], ['Key trust', <TrustLine trust={outcome.trust} />], ['Files', <span className="mono-values">{countsLine(comparison.items, comparison.extras)}</span>], ['Receipt coverage', 'All items covered'], ...(registryLine ? [['Registry', registryLine.value]] : [])] : [['Signature', 'Not valid']]}>
       {outcome.verified && <>
         <TimeFields fields={report.fields} />
         <CompareTable rows={rows} label="Files compared with the list" />
         {comparison.items.some((item) => item.status === 'missing' && !item.name) && <p className="field-hint">Files sealed without a name can only match or be missing.</p>}
-        <div className="actions-row">
-          <button className="button secondary" type="button" onClick={downloadText}><Download aria-hidden="true" size={16} />Download text report</button>
-          <button className="button secondary" type="button" onClick={() => download(`${outcome.base}.check-report.md`, report.markdown, 'text/markdown;charset=utf-8')}><Download aria-hidden="true" size={16} />Download Markdown report</button>
-          <button className="button secondary" type="button" onClick={() => download(`${outcome.base}.check-report.json`, report.json, 'application/json')}><Download aria-hidden="true" size={16} />Download JSON</button>
-          <button className="button secondary" type="button" onClick={async () => { try { const { createIntegrityPdf } = await import('./report-pdf.mjs'); download(`${outcome.base}.check-report.pdf`, await createIntegrityPdf({ title: 'HashWing manifest check report', lines: report.pdfLines }), 'application/pdf'); } catch (cause) { setMessage(cause?.message || 'Could not create the PDF. Download the text report instead.'); } }}><Download aria-hidden="true" size={16} />Download PDF</button>
-        </div>
       </>}
     </VerdictBlock></div>}
   </>;

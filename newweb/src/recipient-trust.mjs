@@ -127,11 +127,17 @@ export function verdict({ signed, reason = '', trust, items = [], extras = [], c
   const count = (s) => items.filter((item) => item.status === s).length;
   if (count('bytes-differ')) return { key: 'differ', headline: 'Files differ', kind: 'warn', sentence: BYTES_DIFFER.text, next: { text: 'Ask for the original files', action: null } };
   const missing = count('missing');
+  // Items sealed without a name pair only by size and SHA-256, so a changed copy reads as missing plus a file not in
+  // the list. HashWing doesn't guess which chosen file was meant to be which item (AC-55).
+  if (extras.length && items.some((item) => item.status === 'missing' && !item.name)) return { key: 'differ-or-missing', headline: 'Files differ or are missing', kind: 'warn', sentence: `${extras.length === 1 ? "1 file you chose doesn't" : `${extras.length} files you chose don't`} match any item in the list. They may be changed copies or files that weren't sealed.`, next: { text: 'Ask for the original files', action: null } };
   if (missing || (coverage && Number(coverage.covered) < Number(coverage.total))) return { key: 'incomplete', headline: 'Incomplete', kind: 'warn', sentence: missing ? `${count('match')} of ${plural(items.length, 'file was', 'files were')} checked. A file that is missing can't be checked.` : `Receipts cover ${coverage.covered} of ${coverage.total} items.`, next: { text: 'Add the missing originals', action: missing ? 'originals' : null } };
   if (extras.length) return { key: 'not-in-list', headline: NOT_IN_LIST, kind: 'warn', sentence: `Every listed file matches. ${extras.length === 1 ? "1 other file you chose isn't in the list and was not checked." : `${extras.length} other files you chose aren't in the list and were not checked.`}`, next: { text: "Remove files that aren't in the list", action: 'originals' } };
   if (VERIFIED_NEEDS_TRUSTED_KEY && status !== 'trusted') return { key: 'signer-not-confirmed', headline: 'Files match · signer not confirmed', kind: 'warn', sentence: "The files match what was sealed, but you haven't confirmed who sealed them.", next: { text: "Confirm the company's fingerprint on Trust", action: 'trust' } };
   return { key: 'verified', headline: 'Verified', kind: 'ok', sentence: status === 'trusted' ? 'Every file matches what was sealed, signed by a company you trust.' : 'Every file matches what was sealed.', next: { text: 'Download report', action: 'report' } };
 }
+
+/** The original file is offered only when the signer is acceptable: never under compromised, Not verified or a company mismatch. */
+export const offersOriginal = (result) => !!result && !['compromised', 'not-verified'].includes(result.key);
 
 /** "12 match · 1 differs · 1 missing · 0 not in the list" */
 export function countsLine(items = [], extras = []) {
@@ -193,9 +199,9 @@ export function manifestReport({ sealedName = '', trust, sources = {}, keyFinger
     ...(item.status === 'bytes-differ' ? [`  ${BYTES_DIFFER.title}: ${BYTES_DIFFER.text}`] : []),
   ]).flat();
   const extraLines = extras.map((extra) => `${NOT_IN_LIST}: ${extra.name} (${extra.bytes} bytes, SHA-256 ${extra.sha256})`);
-  const text = [
-    `HashWing manifest check report: ${sealedName}`,
+  const text = [ // every report starts with the Result line, the same words as the headline on screen
     resultLine,
+    `HashWing manifest check report: ${sealedName}`,
     'Manifest: verified (signature checked)',
     `Key trust: ${line}`,
     ...(entry ? [`Key source: ${sources[entry.source] || entry.source}`] : []),
@@ -211,13 +217,13 @@ export function manifestReport({ sealedName = '', trust, sources = {}, keyFinger
     '',
     'Names, sizes and digests come from the signed manifest. Operator notes and times are what the operator entered; HashWing did not measure them.',
   ].join('\n') + '\n';
-  const markdown = `# HashWing manifest check report\n\n${[
-    `- Sealed list: ${sealedName}`, `- ${resultLine}`, '- Manifest: verified (signature checked)', `- Key trust: ${line}`,
+  const markdown = `${resultLine}\n\n# HashWing manifest check report\n\n${[
+    `- Sealed list: ${sealedName}`, '- Manifest: verified (signature checked)', `- Key trust: ${line}`,
     ...(entry ? [`- Key source: ${sources[entry.source] || entry.source}`] : []), `- Key fingerprint: \`SHA-256 ${groups(keyFingerprint)}\``, `- Chain head: \`${head}\``,
   ].join('\n')}\n\n## Times\n\n${fields.map((field) => `- ${field.label}: ${field.value} (${field.basis})`).join('\n')}\n\n## Files\n\n${[...itemLines, ...extraLines].map((l) => (l.startsWith('  ') ? `  - ${l.trim()}` : `- ${l}`)).join('\n')}\n${differs ? `\n## ${BYTES_DIFFER.title}\n\n${BYTES_DIFFER.text}\n` : ''}`;
   const keyTrust = { status: trust?.status || 'untrusted', line, company: entry?.name ?? null, source: entry?.source ?? null, sourceLabel: entry ? (sources[entry.source] || entry.source) : null, addedAt: entry?.addedAt || null, replacedAt: entry?.replacedAt || null, compromisedAt: entry?.compromisedAt || null, fingerprint: keyFingerprint || null };
   const json = JSON.stringify({
-    kind: 'hashwing-manifest-check', sealedFile: sealedName, verdict: { key: result.key, headline: result.headline, sentence: result.sentence }, manifestVerified: true, head, keyTrust,
+    result: resultLine, kind: 'hashwing-manifest-check', sealedFile: sealedName, verdict: { key: result.key, headline: result.headline, sentence: result.sentence }, manifestVerified: true, head, keyTrust,
     timeProvenance: { fields, intervalMs: reportedInterval(landings.length === 1 ? landings[0] : '', sealedAt).ms },
     fileComparison: {
       items: parsed.map((item) => ({ id: item.id, status: item.status, statusLabel: STATUS[item.status], name: item.name, bytes: item.bytes, sha256: item.sha256, localName: item.local == null ? null : locals[item.local]?.name ?? null, localSha256: item.local == null ? null : locals[item.local]?.sha256 ?? null, reportedLanding: item.landing || null, derivedFrom: item.derivedFrom || null, note: item.note })),
@@ -227,7 +233,7 @@ export function manifestReport({ sealedName = '', trust, sources = {}, keyFinger
     report: text,
   }, null, 2);
   const pdfLines = [
-    `Sealed list: ${sealedName}`, resultLine, 'Manifest: verified (signature checked)', `Key trust: ${line}`,
+    resultLine, `Sealed list: ${sealedName}`, 'Manifest: verified (signature checked)', `Key trust: ${line}`,
     ...(entry ? [`Key source: ${sources[entry.source] || entry.source}`] : []), `Key fingerprint: SHA-256 ${groups(keyFingerprint)}`, `Chain head: ${head}`,
     '## Times', ...fields.map((field) => `${field.label}: ${field.value} (${field.basis})`),
     '## Files', ...itemLines.map((l) => l.trim()), ...extraLines,
