@@ -227,37 +227,56 @@ function App() {
     const safeName = (name) => String(name || 'sealed').replace(/[^A-Za-z0-9._-]+/g, '_').slice(0, 100) || 'sealed';
     const unsent = __REGISTRY_URL__ && registryUnsent ? getRegistry().unsentExport() : null;
     return [
-      ...(sealOutput && !sealOutputAcknowledged ? [{ files: [{ name: 'sealed.fseal', blob: new Blob([sealOutput.log]) }, { name: 'sealed.receipts', bytes: bytes(sealOutput.receipts) }, { name: 'sealed-public-key.txt', bytes: bytes(`${sealOutput.publicKey}\n`) }], markSaved: () => setSealOutputAcknowledged(true) }] : []),
-      ...(protectUnsaved ? [{ files: [{ name: safeName(protectSealed.log.name), blob: protectSealed.log }, { name: `${safeName(protectSealed.name)}.receipt.txt`, bytes: bytes(protectSealed.handover) }], markSaved: () => setProtectSealed((current) => current && { ...current, saved: { receipt: true, file: true } }) }] : []),
+      ...(sealOutput && !sealOutputAcknowledged ? [((so) => ({ files: [{ name: 'sealed.fseal', blob: new Blob([so.log]) }, { name: 'sealed.receipts', bytes: bytes(so.receipts) }, { name: 'sealed-public-key.txt', bytes: bytes(`${so.publicKey}\n`) }], markSaved: () => { if (sealOutputRef.current === so) setSealOutputAcknowledged(true); } }))(sealOutput)] : []),
+      ...(protectUnsaved ? [((log) => ({ files: [{ name: safeName(log.name), blob: log }, { name: `${safeName(protectSealed.name)}.receipt.txt`, bytes: bytes(protectSealed.handover) }], markSaved: () => setProtectSealed((current) => (current?.log === log ? { ...current, saved: { receipt: true, file: true } } : current)) }))(protectSealed.log)] : []),
       ...(manifestUnsaved ? [manifestUnsaved] : []),
       ...(unsent ? [{ files: [{ name: 'hashwing-pending-proofs.json', bytes: bytes(unsent.text) }], markSaved: unsent.markSaved }] : []),
-      ...(rescue ? [{ files: rescue.files, markSaved: () => setRescue(null) }] : []),
+      ...(rescue ? [((kept) => ({ files: kept.files, markSaved: () => setRescue((current) => (current === kept ? null : current)) }))(rescue)] : []),
     ];
+  };
+  const sealOutputRef = useRef(sealOutput);
+  sealOutputRef.current = sealOutput;
+  // The same unique names in the zip and on the per-file buttons, grouped by part so a part is saved only when all of its files are.
+  const listUnsaved = (parts) => {
+    const seen = new Set();
+    return parts.map((part) => ({ part, files: part.files.map((file) => { let name = file.name; for (let n = 2; seen.has(name); n++) name = `${n}-${file.name}`; seen.add(name); return { ...file, name }; }) }));
   };
   const unsavedRef = useRef(unsavedParts);
   unsavedRef.current = unsavedParts;
   const markProtectSaved = (part) => setProtectSealed((current) => current && { ...current, saved: { ...current.saved, [part]: true } });
   const downloadUnsaved = async () => {
-    const parts = unsavedRef.current();
-    if (!parts.length) return;
+    const listed = listUnsaved(unsavedRef.current());
+    if (!listed.length) return;
+    const files = listed.flatMap((p) => p.files);
     try {
-      const seen = new Set();
-      const files = parts.flatMap((part) => part.files).map((file) => { let name = file.name; for (let n = 2; seen.has(name); n++) name = `${n}-${file.name}`; seen.add(name); return { ...file, name }; });
       const zip = await createStoreZip(files, { maxBytes: 1024 * 1024 * 1024 }); // ponytail: one in-memory zip; past 1 GiB the per-file buttons below still work
       const url = URL.createObjectURL(zip); const anchor = document.createElement('a'); anchor.href = url; anchor.download = 'hashwing-unsaved-work.zip'; document.body.append(anchor); anchor.click(); anchor.remove(); setTimeout(() => URL.revokeObjectURL(url), 60000);
-      setUnsavedError(''); setUnsavedAsk(parts); // a started download can still be cancelled or blocked: keep everything until the user says it finished
+      setUnsavedError(''); setUnsavedAsk({ listed, done: new Set(files.map((f) => f.name)) }); // a started download can still be cancelled or blocked: keep everything until the user says it finished
     } catch (cause) {
       setUnsavedError(`Couldn't make one download (${cause?.message || 'unknown error'}). Your work is still here, so download each file on its own.`);
+      setUnsavedAsk({ listed, done: new Set() });
     }
   };
-  const confirmUnsavedSaved = () => { for (const part of unsavedAsk || []) part.markSaved(); setUnsavedAsk(null); setUnsavedError(''); };
+  const downloadOneUnsaved = (file) => {
+    download(file.name, file.blob || file.bytes, 'application/octet-stream');
+    setUnsavedAsk((ask) => ask && { ...ask, done: new Set([...ask.done, file.name]) });
+  };
+  const confirmUnsavedSaved = () => { // only parts whose every file was downloaded
+    for (const p of unsavedAsk?.listed || []) if (p.files.every((f) => unsavedAsk.done.has(f.name))) p.part.markSaved();
+    setUnsavedAsk(null); setUnsavedError('');
+  };
   // One control wherever unsaved work blocks the next step: download, then confirm it finished; per-file buttons if the zip fails.
+  const askFiles = unsavedAsk ? unsavedAsk.listed.flatMap((p) => p.files) : [];
+  const askDone = unsavedAsk ? askFiles.filter((f) => unsavedAsk.done.has(f.name)).length : 0;
+  const askComplete = unsavedAsk ? unsavedAsk.listed.some((p) => p.files.every((f) => unsavedAsk.done.has(f.name))) : false;
   const unsavedControl = <div className="unsaved-download">
     {unsavedError && <><p className="receipt-error" role="alert">{unsavedError}</p>
-      <div className="actions-row">{unsavedParts().flatMap((part) => part.files).map((file) => <button key={file.name} type="button" className="button secondary" onClick={() => { download(file.name, file.blob || file.bytes, 'application/octet-stream'); setUnsavedAsk(unsavedRef.current()); }}>{file.name}</button>)}</div></>}
-    {unsavedAsk ? <><p role="status">Did the download finish?</p>
+      <div className="actions-row">{askFiles.map((file) => <button key={file.name} type="button" className="button secondary" onClick={() => downloadOneUnsaved(file)}>{file.name}</button>)}</div></>}
+    {askDone > 0 && askDone === askFiles.length ? <><p role="status">Did the download finish?</p>
       <div className="actions-row"><button type="button" className="button primary" onClick={confirmUnsavedSaved}>Yes, saved</button><button type="button" className="button secondary" onClick={downloadUnsaved}>Download again</button></div></>
-      : <div className="actions-row"><button type="button" className="button primary" onClick={downloadUnsaved}><Download aria-hidden="true" size={16} />Download unsaved work</button></div>}
+      : askDone > 0 ? <><p role="status">{askDone} of {askFiles.length} files downloaded. Download the rest, then confirm.</p>
+        {askComplete && <div className="actions-row"><button type="button" className="button secondary" onClick={confirmUnsavedSaved}>These finished</button></div>}</>
+      : !unsavedError && <div className="actions-row"><button type="button" className="button primary" onClick={downloadUnsaved}><Download aria-hidden="true" size={16} />Download unsaved work</button></div>}
   </div>;
   updateSafeRef.current = !busy && !manifestSealActive && !manifestCheckActive && !(sealOutput && !sealOutputAcknowledged);
 
@@ -2289,7 +2308,8 @@ function ManifestSeal({ signingKey, onActiveChange, onUnsaved, onSealed }) {
   useEffect(() => () => onActiveChange(false), [onActiveChange]);
   useEffect(() => { // the sealed list and its receipt, until the list is downloaded; kept after this panel unmounts
     if (!output) return;
-    onUnsaved(output.saved ? null : { files: [{ name: output.log.name, blob: output.log }, { name: `${output.base}.receipt.txt`, bytes: new TextEncoder().encode(output.handover) }], markSaved: () => { setOutput((current) => current && { ...current, saved: true }); onUnsaved(null); } });
+    onUnsaved(output.saved ? null : { files: [{ name: output.log.name, blob: output.log }, { name: `${output.base}.receipt.txt`, bytes: new TextEncoder().encode(output.handover) }], markSaved: () => { // only this exact result, never a newer one
+      setOutput((current) => (current?.log === output.log ? { ...current, saved: true } : current)); onUnsaved((current) => (current?.files?.[0]?.blob === output.log ? null : current)); } });
   }, [output, onUnsaved]);
   const reset = () => { controllerRef.current?.abort(); setOutput(null); setMessage(''); setError(''); };
   const choose = (list) => {

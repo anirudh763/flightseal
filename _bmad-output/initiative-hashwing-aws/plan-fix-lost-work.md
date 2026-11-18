@@ -94,6 +94,11 @@ deferred:
 
 ## Review Triage Log
 
+### 2026-11-18 — Recheck of 8c04afe
+- `[major]` `patch` A per-file download plus "Yes, saved" marked every part saved: downloads are tracked per file and a part is saved only when all its files were downloaded; partial shows "N of M files downloaded" with "These finished". Browser check forces the per-file path (fails on 8c04afe).
+- `[minor]` `patch` Confirm acknowledged a newer result: each part's markSaved checks the exact result object it was built for.
+- `[nit]` `patch` Per-file buttons now use the zip's unique names.
+
 ### 2026-11-18 — Independent review of PR #37 (head 9c46754): fix first
 - `[major]` `patch` Rescued work cleared when the download only started: the control now asks "Did the download finish?" ([Yes, saved] / [Download again]) and marks saved only on Yes; Discard confirms "This deletes the only copy of this work." Browser check cancels the download (fails on 9c46754).
 - `[medium]` `patch` Zip failure silent on #/login: one shared control shows the error and per-file buttons wherever unsaved work blocks the next step.

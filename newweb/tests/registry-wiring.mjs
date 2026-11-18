@@ -789,6 +789,40 @@ try {
   });
 
 
+  await check('zip fails: downloading one result\'s files saves only that result; the other stays unsaved and Log out stays locked', async () => {
+    const c = await newContext();
+    try {
+      const a = watch(await c.newPage(), 'per-file');
+      await a.addInitScript(() => { // force the per-file path: the one-zip download cannot start
+        const make = URL.createObjectURL.bind(URL);
+        URL.createObjectURL = (blob) => { if (blob?.type === 'application/zip') throw new Error('blocked in this test'); return make(blob); };
+      });
+      await profileIn(a, 'per-file@example.test');
+      await sealSmall(a, 'part-a.ulg'); // part 1: Seal & send (sealed file + receipt message)
+      await a.getByLabel('Large files (fingerprint only)').check();
+      await a.locator('#manifest-files').setInputFiles([{ name: 'p1.mp4', mimeType: 'video/mp4', buffer: Buffer.from(`p1 ${Date.now()}`) }]);
+      await a.getByRole('button', { name: 'Seal', exact: true }).click();
+      await a.locator('#manifest-handover-text').waitFor({ timeout: 60000 }); // part 2: the sealed list + its receipt
+      const menu = a.locator('.profile-menu');
+      await menu.locator('summary').click();
+      await menu.getByRole('button', { name: 'Download unsaved work' }).click();
+      await menu.getByText(/Couldn't make one download \(blocked in this test\)/).waitFor();
+      await Promise.all([a.waitForEvent('download'), menu.getByRole('button', { name: 'part-a.ulg.fseal', exact: true }).click()]);
+      await menu.getByText('1 of 4 files downloaded. Download the rest, then confirm.').waitFor();
+      assert.equal(await menu.getByRole('button', { name: 'These finished' }).count(), 0, 'no part is complete yet');
+      await Promise.all([a.waitForEvent('download'), menu.getByRole('button', { name: 'part-a.ulg.receipt.txt', exact: true }).click()]);
+      await menu.getByText('2 of 4 files downloaded. Download the rest, then confirm.').waitFor();
+      await menu.getByRole('button', { name: 'These finished' }).click();
+      assert.equal(await menu.getByRole('button', { name: 'Log out', exact: true }).isDisabled(), true, 'the large-file result was never downloaded');
+      assert.equal(await reloadWarns(a), true);
+      await menu.getByRole('button', { name: 'Download unsaved work' }).click();
+      await menu.getByRole('button', { name: /\.manifest\.fseal$/ }).waitFor();
+      const names = await menu.locator('.unsaved-download .actions-row button').allTextContents();
+      assert.equal(names.length, 2, 'only the large-file result is left: ' + names.join(', '));
+      assert.ok(names.every((n) => /^hashwing-\d{8}-\d{6}\.(manifest\.fseal|receipt\.txt)$/.test(n)), names.join(', '));
+    } finally { await c.close(); }
+  });
+
   await check('a large-file result that is not saved warns on reload, survives leaving its page, blocks sign-in until downloaded', async () => {
     const c = await newContext();
     try {

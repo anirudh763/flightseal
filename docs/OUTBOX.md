@@ -54,7 +54,9 @@ What the console does with the flag on:
 - Before anything unsaved is lost, the app asks first. Reloading or closing the tab warns while a Seal & send result,
   a large-file result, a workbench output or a memory-only pending proof is not saved yet. Logging out, switching
   account, signing in or starting the demo waits until "Download unsaved work" (one zip) has saved them and the user
-  answers "Yes, saved" to "Did the download finish?" (a cancelled or blocked download changes nothing). A logout this
+  answers "Yes, saved" to "Did the download finish?" (a cancelled or blocked download changes nothing). If the zip cannot be made, each file gets its own button,
+  and a result counts as saved only once every one of its files was downloaded; the page says "N of M files
+  downloaded" until then. Confirming only ever saves the exact results that were downloaded, never a newer one. A logout this
   tab did not choose (the same profile logged out in another tab, or the workspace server signed out) keeps that work
   in tab memory and offers it as one download; "Discard" first says it deletes the only copy; this tab is signed out of the registry at once. After a
   reload, a file that was chosen but not sealed is no longer selected, and the page says to choose it again. Rows in
@@ -154,7 +156,7 @@ idempotency window. A malformed `token`, or a page without Web Crypto (not a sec
 node --test newweb/tests/outbox.test.mjs newweb/tests/registry-client.test.mjs   # 49 tests, stub fetch + memory store
 node --test newweb/tests/registry-session.test.mjs                                # 12 tests, the console's session store in Node
 node --test newweb/tests/outbox-browser.mjs                                      # 8 tests, Chromium + dev server
-node newweb/tests/registry-wiring.mjs                                            # 28 checks, flag-off scan + flag-on console
+node newweb/tests/registry-wiring.mjs                                            # 29 checks, flag-off scan + flag-on console
 ```
 
 The browser tests start `registry/devserver/server.py` (DEV ONLY; it refuses to bind to anything but loopback),
