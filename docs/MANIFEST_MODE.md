@@ -158,10 +158,13 @@ backup" are explained in a "What is this?" disclosure.
 
 ## Measurements
 
-### Memory gate: 128 MiB extra while hashing (2026-11-17, passes after the fix)
+### Memory gate: 128 MiB extra while hashing (2026-11-17, passes after the fix on one machine)
 
 The target is at most 128 MiB of extra memory while one file larger than 2 GiB is hashed. It was not met before the
-fix (worst run +250.3 MiB) and is met after it (worst run +55.1 MiB), with each path on a freshly loaded page.
+fix (worst run +269.6 MiB) and is met after it: worst run +55.1 MiB with each path on a freshly loaded page, and
++94.0 MiB when Check runs on the same page right after Seal (the earlier set below). Scope: one Apple M1 Pro with
+headless Chrome 158, measured by a manual script that is not a CI check. Other browsers were not measured; a browser
+without `ArrayBuffer.prototype.transfer` keeps the old behaviour.
 
 **Cause.** Each 4 MiB `File.slice().arrayBuffer()` read was a new `ArrayBuffer` that stayed alive until the worker's
 next garbage collection. The Wasm heap did not grow (33,554,432 bytes before and after), there are no `postMessage`
