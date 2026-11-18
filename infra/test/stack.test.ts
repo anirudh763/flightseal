@@ -2,8 +2,9 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { App } from 'aws-cdk-lib';
 import { Match, Template } from 'aws-cdk-lib/assertions';
-import { RegistryStack } from '../lib/stack';
-import { existsSync, readdirSync, statSync } from 'node:fs';
+import { RegistryStack, restoreSettings } from '../lib/stack';
+import { existsSync, mkdtempSync, readdirSync, statSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import { join, sep } from 'node:path';
 
 // Synth with no credentials: an environment-agnostic stack performs no lookups.
@@ -219,4 +220,22 @@ test('Lambda asset holds only the runtime: handler.py and registry/*.py', () => 
     .filter((f) => statSync(join(root, f)).isFile()).map((f) => f.split(sep).join('/')).sort();
   assert.ok(files.includes('handler.py') && files.includes('registry/app.py'));
   for (const f of files) assert.match(f, /^(handler\.py|registry\/[a-z0-9_]+\.py)$/, `unexpected file in asset: ${f}`);
+});
+
+test('prod reads restore settings only from infra/restore.json, so a plain deploy keeps the restore', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'restore-'));
+  const file = join(dir, 'restore.json');
+  const ctx = (m: Record<string, string>) => (k: string) => m[k];
+  const saved = { restoredTableName: 'registry-restored', restoredFrom: 'registry-live', restoreId: 'r-1' };
+  assert.deepEqual(restoreSettings('prod', ctx({}), file), {}, 'no file: never restored');
+  assert.throws(() => restoreSettings('prod', ctx({ restoredTableName: 'x' }), file), /restore\.json, not with -c/);
+  writeFileSync(file, JSON.stringify(saved));
+  const props = restoreSettings('prod', ctx({}), file);
+  Template.fromStack(new RegistryStack(new App(), 'ProdRestored', { stage: 'prod', ...props }))
+    .hasResourceProperties('AWS::Lambda::Function', {
+      Environment: { Variables: { TABLE_NAME: 'registry-restored', RESTORED_FROM: 'registry-live', RESTORE_ID: 'r-1' } },
+    });
+  writeFileSync(file, JSON.stringify({ ...saved, extra: 1 }));
+  assert.throws(() => restoreSettings('prod', ctx({}), file), /unknown keys extra/);
+  assert.deepEqual(restoreSettings('dev', ctx(saved), file), saved, 'dev still takes -c context');
 });

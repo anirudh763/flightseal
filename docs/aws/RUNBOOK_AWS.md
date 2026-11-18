@@ -125,6 +125,11 @@ only there. A source that is not the served table is refused, because its tombst
      -c restoreId=<restore id>
    ```
 
+   That is the dev form. For a `stage=prod` stack the `-c` restore flags are refused: write the three values to
+   `infra/restore.json` (`{"restoredTableName": "<new table>", "restoredFrom": "<served table>", "restoreId":
+   "<restore id>"}`), commit it, and run `npx cdk deploy HashWingRegistry -c stage=prod`. Keep the file committed:
+   every later prod deploy reads it, so a routine deploy cannot point the function back at the old table.
+
    This sets `TABLE_NAME`, `RESTORED_FROM` and `RESTORE_ID`, and moves the function's IAM grant to the new table's
    ARN. The function now answers 503 `restore_pending` everywhere. A marker copied in from the backup does not open
    it: the marker must name this table and this restore ID.

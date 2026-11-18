@@ -5,6 +5,7 @@ import {
   aws_dynamodb as dynamodb, aws_lambda as lambda, aws_logs as logs,
 } from 'aws-cdk-lib';
 import { Construct } from 'constructs';
+import { existsSync, readFileSync } from 'node:fs';
 
 export interface RegistryStackProps extends StackProps {
   /**
@@ -28,6 +29,24 @@ export interface RegistryStackProps extends StackProps {
    * API Gateway answers preflight and adds the headers; credentials (cookies) are never allowed.
    */
   readonly corsOrigins?: string[];
+}
+
+const RESTORE_KEYS = ['restoredTableName', 'restoredFrom', 'restoreId'] as const;
+type RestoreProps = Pick<RegistryStackProps, (typeof RESTORE_KEYS)[number]>;
+
+/**
+ * Restore settings. dev: from -c context. prod: only from the committed file (absent = never restored), because
+ * free context is forgotten by the next routine deploy, which would serve the original table with the gate open.
+ */
+export function restoreSettings(stage: unknown, context: (key: string) => unknown, file: string): RestoreProps {
+  if (stage !== 'prod') return Object.fromEntries(RESTORE_KEYS.map((k) => [k, context(k)])) as RestoreProps;
+  const given = RESTORE_KEYS.filter((k) => context(k) !== undefined);
+  if (given.length) throw new Error(`stage=prod: set ${given.join(', ')} in infra/restore.json, not with -c`);
+  if (!existsSync(file)) return {};
+  const saved = JSON.parse(readFileSync(file, 'utf8'));
+  const extra = Object.keys(saved).filter((k) => !(RESTORE_KEYS as readonly string[]).includes(k));
+  if (extra.length) throw new Error(`infra/restore.json: unknown keys ${extra.join(', ')}`);
+  return saved;
 }
 
 export const DEFAULT_CORS_ORIGINS = ['https://anirudh763.github.io'];
