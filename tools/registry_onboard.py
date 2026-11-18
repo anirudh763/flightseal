@@ -19,6 +19,7 @@ nothing. boto3 is imported only for a real run.
 import argparse
 import difflib
 import json
+import os
 import re
 import sys
 from pathlib import Path
@@ -87,7 +88,8 @@ def invite(args, client, orgs_path):
         raise Refused("--first-admin and --confirm-additional-admin are only for --role admin")
     if not orgs_path:
         raise Refused("give the production allow-list with --orgs <path outside this repository>")
-    if Path(orgs_path).resolve().is_relative_to(REPO) and not args.dry_run:
+    resolved = Path(orgs_path).resolve()  # samefile, not string compare: macOS paths are case-insensitive
+    if any(p.exists() and os.path.samefile(p, REPO) for p in resolved.parents) and not args.dry_run:
         raise Refused(f"{orgs_path} is inside the public repository, so it is demo-only and allowed with --dry-run; "
                       "keep the production allow-list outside the repository")
     orgs = load_orgs(orgs_path)
