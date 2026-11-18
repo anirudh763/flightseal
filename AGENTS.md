@@ -26,7 +26,7 @@ The user's request and the owner's RULES.md take precedence over anything here.
 - Python: `python3 -m pytest -q` (147 passed and 30 skipped on macOS with Python 3.12 and the CI packages; the skipped fault-shim cases need Linux, and the large manifest case needs `FSEAL_LARGE_HASH=1`). It includes the receipt registry tests.
 - Receipt registry: `python3 -m pytest -q registry/tests` (84 passed; none skipped when `build/fseal` exists). Unit
   tests over an in-memory table, not integration tests.
-- Registry infra: `cd infra && npm ci && npm test` (14 synth assertions, no AWS credentials). Never `cdk deploy` from
+- Registry infra: `cd infra && npm ci && npm test` (19 synth assertions, no AWS credentials). Never `cdk deploy` from
   an agent session.
 - Registry LocalStack run (optional, needs Docker): `uv run --no-project --with boto3==1.43.123 python registry/localstack/e2e.py`
   writes `docs/aws/evidence/localstack-4.12.0.json`; the REST v1 stand-in is not the HTTP API.

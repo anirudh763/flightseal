@@ -5,9 +5,15 @@ import {
   aws_dynamodb as dynamodb, aws_lambda as lambda, aws_logs as logs,
 } from 'aws-cdk-lib';
 import { Construct } from 'constructs';
+import { existsSync, readFileSync } from 'node:fs';
 
 export interface RegistryStackProps extends StackProps {
-  /** DynamoDB point-in-time recovery. Off by default: it is billed per GB-month (see docs/aws/COST.md). */
+  /**
+   * 'prod' keeps the data: PITR on with a 35-day window, deletion protection, and RETAIN on the table, user pool
+   * and log group. 'dev' (the default) is disposable. Choosing prod here does not authorize a deploy.
+   */
+  readonly stage?: 'dev' | 'prod';
+  /** DynamoDB point-in-time recovery in dev. Off by default: it is billed per GB-month (see docs/aws/COST.md). */
   readonly pitr?: boolean;
   /**
    * Serve a table restored from a backup (always a new table, outside this stack) instead of the stack's table.
@@ -23,6 +29,55 @@ export interface RegistryStackProps extends StackProps {
    * API Gateway answers preflight and adds the headers; credentials (cookies) are never allowed.
    */
   readonly corsOrigins?: string[];
+}
+
+const RESTORE_KEYS = ['restoredTableName', 'restoredFrom', 'restoreId'] as const;
+type RestoreProps = Pick<RegistryStackProps, (typeof RESTORE_KEYS)[number]>;
+
+/** Production gets its own stack ID, so a deploy that forgot `-c stage=prod` can never update it. */
+export function stackId(stage: unknown): string {
+  return stage === 'prod' ? 'HashWingRegistry-prod' : 'HashWingRegistry';
+}
+
+/** infra/restore.json: `{}` (never restored) or all three keys as non-empty strings. */
+function readRestoreFile(file: string): RestoreProps {
+  const name = 'infra/restore.json';
+  let saved: unknown;
+  try {
+    saved = JSON.parse(readFileSync(file, 'utf8'));
+  } catch (e) {
+    throw new Error(`${name}: cannot read it as JSON (${(e as Error).message})`);
+  }
+  if (typeof saved !== 'object' || saved === null || Array.isArray(saved)) {
+    throw new Error(`${name}: must be a JSON object: {} or the three restore settings`);
+  }
+  const keys = Object.keys(saved);
+  const extra = keys.filter((k) => !(RESTORE_KEYS as readonly string[]).includes(k));
+  if (extra.length) throw new Error(`${name}: unknown keys ${extra.join(', ')} (expected ${RESTORE_KEYS.join(', ')})`);
+  if (keys.length === 0) return {};
+  const values = saved as Record<string, unknown>;
+  const bad = RESTORE_KEYS.filter((k) => typeof values[k] !== 'string' || (values[k] as string).trim() === '');
+  if (bad.length) throw new Error(`${name}: ${bad.join(', ')} must be non-empty strings (or use {} for no restore)`);
+  return values as RestoreProps;
+}
+
+/**
+ * Restore settings. dev: from -c context. prod: only from the committed infra/restore.json, which must exist
+ * (`{}` = never restored): free context is forgotten by the next routine deploy, which would serve the original
+ * table with the gate open. A restore recorded in the file is refused outside prod.
+ */
+export function restoreSettings(stage: unknown, context: (key: string) => unknown, file: string): RestoreProps {
+  const saved = existsSync(file) ? readRestoreFile(file) : undefined;
+  if (stage !== 'prod') {
+    if (saved && Object.keys(saved).length) {
+      throw new Error('infra/restore.json records a production restore: synth it with -c stage=prod');
+    }
+    return Object.fromEntries(RESTORE_KEYS.map((k) => [k, context(k)])) as RestoreProps;
+  }
+  const given = RESTORE_KEYS.filter((k) => context(k) !== undefined);
+  if (given.length) throw new Error(`stage=prod: set ${given.join(', ')} in infra/restore.json, not with -c`);
+  if (!saved) throw new Error('stage=prod needs infra/restore.json: commit {} if the table was never restored');
+  return saved;
 }
 
 export const DEFAULT_CORS_ORIGINS = ['https://anirudh763.github.io'];
@@ -52,18 +107,31 @@ export const STAGE_THROTTLE = { rate: 2, burst: 5 };
 export class RegistryStack extends Stack {
   constructor(scope: Construct, id: string, props: RegistryStackProps = {}) {
     super(scope, id, props);
+    if (props.stage !== undefined && props.stage !== 'dev' && props.stage !== 'prod') {
+      throw new Error(`stage: ${JSON.stringify(props.stage)} is not 'dev' or 'prod'`);
+    }
+    const prod = props.stage === 'prod';
+    const removalPolicy = prod ? RemovalPolicy.RETAIN : RemovalPolicy.DESTROY;
+    // undefined, not false, in dev: the dev template stays as it was before the switch existed.
+    const deletionProtection = prod || undefined;
 
     const table = new dynamodb.Table(this, 'Table', {
       partitionKey: { name: 'PK', type: dynamodb.AttributeType.STRING },
       sortKey: { name: 'SK', type: dynamodb.AttributeType.STRING },
       billingMode: dynamodb.BillingMode.PAY_PER_REQUEST,
       timeToLiveAttribute: 'ttl',
-      pointInTimeRecoverySpecification: { pointInTimeRecoveryEnabled: props.pitr ?? false },
-      removalPolicy: RemovalPolicy.DESTROY,
+      pointInTimeRecoverySpecification: prod
+        ? { pointInTimeRecoveryEnabled: true, recoveryPeriodInDays: 35 }
+        : { pointInTimeRecoveryEnabled: props.pitr ?? false },
+      deletionProtection,
+      removalPolicy,
     });
 
     if (!props.restoredTableName !== !props.restoredFrom || !props.restoredTableName !== !props.restoreId) {
       throw new Error('restoredTableName, restoredFrom and restoreId must be set together');
+    }
+    if (props.restoredTableName && props.restoredTableName === props.restoredFrom) {
+      throw new Error('restoredFrom must name the table served before the restore, not the restored table');
     }
     const served = props.restoredTableName
       ? dynamodb.Table.fromTableName(this, 'RestoredTable', props.restoredTableName)
@@ -74,7 +142,7 @@ export class RegistryStack extends Stack {
 
     const logGroup = new logs.LogGroup(this, 'FunctionLogs', {
       retention: logs.RetentionDays.ONE_WEEK,
-      removalPolicy: RemovalPolicy.DESTROY,
+      removalPolicy,
     });
 
     const fn = new lambda.Function(this, 'Function', {
@@ -95,11 +163,20 @@ export class RegistryStack extends Stack {
       featurePlan: cognito.FeaturePlan.LITE,
       selfSignUpEnabled: false,
       signInAliases: { email: true },
+      // A@x.com and a@x.com are one user, not two.
+      signInCaseSensitive: false,
+      // Invitations (admin-created users' temporary passwords) expire after 3 days. The rest restates Cognito's
+      // default policy: once Policies is written, an omitted Require* flag means false in CloudFormation.
+      passwordPolicy: {
+        tempPasswordValidity: Duration.days(3),
+        minLength: 8, requireLowercase: true, requireUppercase: true, requireDigits: true, requireSymbols: true,
+      },
       customAttributes: {
         org_id: new cognito.StringAttribute({ minLen: 1, maxLen: 64, mutable: false }),
         role: new cognito.StringAttribute({ minLen: 1, maxLen: 16, mutable: true }),
       },
-      removalPolicy: RemovalPolicy.DESTROY,
+      deletionProtection,
+      removalPolicy,
     });
     const client = userPool.addClient('WebClient', {
       authFlows: { userSrp: true },
@@ -114,6 +191,9 @@ export class RegistryStack extends Stack {
       idTokenValidity: Duration.minutes(15),
       accessTokenValidity: Duration.minutes(15),
     });
+    // registry/identity.py checks the token's issuer and client against these; without them it answers 401.
+    fn.addEnvironment('COGNITO_ISSUER', `https://cognito-idp.${this.region}.amazonaws.com/${userPool.userPoolId}`);
+    fn.addEnvironment('COGNITO_CLIENT_ID', client.userPoolClientId);
 
     const corsOrigins = props.corsOrigins ?? DEFAULT_CORS_ORIGINS;
     if (corsOrigins.length === 0) throw new Error('corsOrigins: give at least one origin (omit it for the default)');

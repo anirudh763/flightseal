@@ -63,7 +63,7 @@ request, billed at 0.125 GB.
 | DynamoDB writes | envelopes 1,000 × 1 + registrations 1,000 × 3 items × 2 + shares 1,000 × 2 items × 2 = 11,000 WRU | $0.0069 |
 | DynamoDB reads (strongly consistent) | registrations 4,000 + envelopes 1,000 + shares 1,000 + checks 10,000 + other 1,000 = 17,000 RRU | $0.0021 |
 | DynamoDB storage | under 0.01 GB (inside the 25 GB free storage tier in the price list) | $0.0000 |
-| PITR (only if `-c pitr=true`) | under 0.01 GB | under $0.0020 |
+| PITR (only with `-c stage=prod` or `-c pitr=true`) | under 0.01 GB | under $0.0020 |
 | CloudWatch Logs | about 350 bytes per invocation (one app line plus the platform lines): 3 MB ingested, 7 days kept | $0.0015 |
 | Cognito Lite | 5 MAU | $0.0275 |
 | Data out | about 500 bytes per response: 4 MB | $0.0004 |
