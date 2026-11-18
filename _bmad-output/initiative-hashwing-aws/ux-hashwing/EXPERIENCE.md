@@ -106,7 +106,7 @@ Chip text comes from the outbox's own labels (`stateLabel()`, `registrationLabel
 
 | Outbox state | Chip text | Detail line | Single action |
 |---|---|---|---|
-| `sealed_local` | Sealed locally | "Sealed on this device. Not sent to the registry yet." | none (sending starts automatically when signed in) |
+| `sealed_local` | Sealed locally | Sealed while signed in: "Sealed on this device. Not sent to the registry yet." Sealed while signed out: "Sealed while signed out, so it isn't assigned to a company yet." | Signed out: none (sign in to assign it, or export it). Signed in: "Assign to <org>" for a proof sealed while signed out; it is never sent by itself. |
 | `waiting_for_connection` | Waiting for connection | "Saved on this device. It will register when you're back online. You can close this tab." | "Try now" (secondary) |
 | `registering` | Registering | "Sending the receipt to the registry…" | none |
 | `registered`, disposition `active` | Registered | "Registered at {received_at}. This is the registry's statement, not proof of the files." | "Make a share link" |
@@ -226,7 +226,7 @@ Every error shows one sentence saying what happened and one action. Raw codes ap
 |---|---|---|---|
 | Network error, timeout, 503, throttling 429, other 5xx, `bad_response` | Waiting for connection | "Saved on this device. It will register when you're back online." (503: "The registry is busy right now. It will try again by itself.") | "Try now" |
 | 401 (row stays queued, `needsSignIn`) | unchanged | List notice: "Sign in to the company registry to send these." | "Sign in" (opens Trust → Company registry) |
-| 403 `key_not_enrolled` | Needs attention | "This signing key isn't enrolled for your company yet. Ask your admin to enroll it on the Trust page, then try again." | "Try again" |
+| 403 `key_not_enrolled` | Needs attention | "This signing key isn't enrolled for your company yet. Ask your company's registry admin to enroll this key's fingerprint, then try again." The row shows the key fingerprint. | "Try again" |
 | 403 `key_not_active` | Needs attention | "This signing key was replaced or marked compromised, so the registry won't accept new receipts from it. Seal again with your company's current key." | "Open Trust" |
 | 422 `envelope_expired` | Needs attention | "This saved request was waiting too long and has expired. Try again to send it with a fresh request; the proof itself is unchanged." | "Try again" |
 | 422 `epoch_mismatch` | Needs attention | "Your company reset its registry requests since this was saved. Try again to send it with a fresh request." | "Try again" |
@@ -334,7 +334,6 @@ These were chosen by the builder and are built, but the owner has not confirmed 
 ## Open
 
 - **Trust shows the Verify workbench strip.** The Trust page currently shows the strip that belongs to Verify: "Choose a source or sealed log", the demo status, "Copy hash" and "Source and report actions". It should appear only on Verify. To be fixed in the Seal & send / Verify restructure, which is pending owner sign-off.
-- **"Enroll it on the Trust page" has no control yet.** The `key_not_enrolled` message sends the user to Trust, but "Your company's keys" (AC-38..AC-40) is not built, so there is nothing to press there.
 - **Verify chooser not built.** The "Check what you were sent" panel with "I have a link" and "I have files" (Information Architecture above, AC-09) is not built yet.
 
 ## Acceptance checklist

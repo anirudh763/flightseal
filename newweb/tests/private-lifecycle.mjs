@@ -275,6 +275,23 @@ try {
     assert.equal(await page.getByRole('button', { name: 'Cancel mapping', exact: true }).count(), 0);
     assert.equal(await page.locator('input[type=file]').evaluateAll(inputs => inputs.every(input => input.files.length === 0)), true);
   });
+  await check('server logout keeps unsaved sealed output in this tab for one download, then clears it', async ({ page, downloads }) => {
+    await page.getByLabel('Choose source or sealed log').setInputFiles({ name: 'kept-source.tsv', mimeType: 'text/plain', buffer: Buffer.from('1000\tkept source\n2000\tkept source\n') });
+    await page.getByRole('button', { name: 'Seal and verify', exact: true }).click();
+    await page.locator('.seal-outputs').waitFor();
+    await serverLogout(page);
+    const notice = page.locator('.rescue-notice');
+    await notice.getByText('Your workspace session ended. This tab kept work that was not saved yet.').waitFor();
+    assert.equal(await page.locator('.seal-outputs').count(), 0, 'the old output is cleared from the workspace');
+    const before = downloads.length;
+    await notice.getByRole('button', { name: 'Download unsaved work', exact: true }).click();
+    await notice.getByRole('button', { name: 'Yes, saved', exact: true }).click();
+    await page.waitForFunction(() => !document.querySelector('.rescue-notice'));
+    assert.equal(downloads.length, before + 1);
+    assert.equal(downloads.at(-1).suggestedFilename(), 'hashwing-unsaved-work.zip');
+    const zip = Buffer.from(await bytes(downloads.at(-1))).toString('latin1');
+    for (const name of ['sealed.fseal', 'sealed.receipts', 'sealed-public-key.txt']) assert.ok(zip.includes(name), 'zip has ' + name);
+  });
   await check('held real native-share capability outcome under denied policy cannot initiate old clipboard fallback after logout', async ({ page }) => {
     await uploadVerified(page); await page.getByRole('navigation', { name: 'Primary navigation' }).getByRole('link', { name: 'Reports', exact: true }).click(); await page.getByRole('button', { name: 'Share summary', exact: true }).first().click();
     assert.equal(await page.evaluate(() => document.featurePolicy.allowsFeature('web-share')), false, 'Controlled browser policy must deny native sharing');

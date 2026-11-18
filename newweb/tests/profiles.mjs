@@ -109,14 +109,14 @@ try {
 
   await check('guest import is explicit and profile A restores only its own saved view', async () => {
     await page.goto(url);
-    await page.getByRole('button', { name: /Try Live Demo/ }).last().click(); await waitResult(page);
+    await page.locator('.landing-persistent-actions').getByRole('button', { name: 'Launch Workspace' }).click(); await waitResult(page);
     await page.locator('.profile-menu summary').click();
     await page.getByRole('button', { name: 'Create local account' }).click();
     const importBox = page.getByLabel(/Import this guest session/);
     assert.equal(await importBox.isChecked(), false);
     await signup(page, 'pilot@example.test', 'pilot password safe 42', true); await waitResult(page);
     await page.getByRole('navigation', { name: 'Primary navigation' }).getByRole('link', { name: 'Records' }).click();
-    await page.locator('.pagination').getByRole('button', { name: 'First' }).click();
+    const first = page.locator('.pagination').getByRole('button', { name: 'First' }); if (await first.isEnabled()) await first.click();
     await page.locator('.record-list li').nth(24).getByRole('button').click();
     await page.locator('.profile-menu summary').click();
     await page.getByRole('button', { name: 'Save included-sample view' }).click();
@@ -130,14 +130,14 @@ try {
     assert.equal(JSON.stringify(storage).includes('public-key.txt'), false);
     assert.equal(JSON.stringify(storage).includes('pilot password safe 42'), false);
     await logout(page);
-    await page.locator('.landing-navigation').getByRole('link', { name: 'Log in' }).click(); await login(page, 'pilot@example.test');
+    await page.locator('.landing-persistent-actions').getByRole('link', { name: 'Log in' }).click(); await login(page, 'pilot@example.test');
     await page.waitForFunction(() => location.hash === '#/app/records?sample=intact&record=24', null, { timeout: 30000 });
     await page.waitForFunction(() => document.querySelector('#record-detail-title')?.textContent === 'Record 24', null, { timeout: 30000 });
     await waitResult(page);
     await logout(page);
-    await page.locator('.landing-navigation').getByRole('link', { name: 'Log in' }).click(); await login(page, 'pilot@example.test', 'wrong password 1234');
+    await page.locator('.landing-persistent-actions').getByRole('link', { name: 'Log in' }).click(); await login(page, 'pilot@example.test', 'wrong password 1234');
     assert.match(await page.getByRole('alert').innerText(), /does not match/);
-    await page.getByRole('link', { name: 'Create account' }).click();
+    await page.locator('#auth-main').getByRole('link', { name: 'Create account' }).click();
     await signup(page, 'pilot@example.test');
     assert.match(await page.getByRole('alert').innerText(), /already uses/);
     await page.getByLabel('Email').fill('reviewer@example.test');
@@ -151,7 +151,7 @@ try {
     assert.equal(registry.includes('pilot password safe 42'), false);
     assert.equal(registry.includes('reviewer password safe 42'), false);
     await logout(page);
-    await page.locator('.landing-navigation').getByRole('link', { name: 'Log in' }).click(); await login(page, 'pilot@example.test');
+    await page.locator('.landing-persistent-actions').getByRole('link', { name: 'Log in' }).click(); await login(page, 'pilot@example.test');
     await page.waitForFunction(() => location.hash === '#/app/records?sample=intact&record=24');
     await page.waitForFunction(() => document.querySelector('#record-detail-title')?.textContent === 'Record 24', null, { timeout: 30000 });
     await page.screenshot({ path: join(EVIDENCE, 'saved-view-restored-1440x900.png'), fullPage: true });
@@ -162,7 +162,7 @@ try {
     await page.waitForSelector('.receipt-overview');
     assert.equal(await page.locator('.commandbar h1').innerText(), 'Receipts');
     assert.equal(new URL(page.url()).search, ''); assert.match(await page.evaluate(() => location.hash), /sample=intact&record=19/); await assertNoOverflow(page, 'legacy receipts route');
-    await page.goto(url); await page.locator('.landing-navigation').getByRole('link', { name: 'Create account' }).click();
+    await page.goto(url); await page.locator('.landing-persistent-actions').getByRole('link', { name: 'Create account' }).click();
     await signup(page, 'route@example.test', 'route password safe 42');
     await page.waitForFunction(() => location.hash.startsWith('#/app/sandbox'));
     await logout(page);
@@ -187,7 +187,7 @@ try {
   await check('cross-tab logout clears active profile state', async () => {
     const cancelContext = await browser.newContext({ serviceWorkers: 'block' });
     const pendingPage = await cancelContext.newPage();
-    await pendingPage.goto(url); await pendingPage.locator('.landing-navigation').getByRole('link', { name: 'Create account' }).click();
+    await pendingPage.goto(url); await pendingPage.locator('.landing-persistent-actions').getByRole('link', { name: 'Create account' }).click();
     await signup(pendingPage, 'tabs@example.test', 'tabs password safe 42');
     await pendingPage.waitForFunction(() => location.hash.startsWith('#/app/sandbox'));
     const secondTab = await cancelContext.newPage(); await secondTab.goto(`${url}#/login`); await login(secondTab, 'tabs@example.test', 'tabs password safe 42');

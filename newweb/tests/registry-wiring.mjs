@@ -23,7 +23,7 @@ mkdirSync(OUT, { recursive: true });
 const require = createRequire(join(ROOT, 'package.json'));
 const { chromium } = require('playwright');
 const AXE = readFileSync(require.resolve('axe-core/axe.min.js'), 'utf8');
-const FORBIDDEN = ['Company registry', 'Test sign-in', 'Sealed on this device', 'hashwing-outbox', '/v1/envelopes', '/v1/shares', 'registry-test-secret', 'dev-hs256',
+const FORBIDDEN = ['Company registry', 'Test sign-in', 'Sealed on this device', 'hashwing-outbox', 'hashwing-pending', 'hashwing-registry-signouts', '/v1/envelopes', '/v1/shares', 'registry-test-secret', 'dev-hs256',
   'REGISTRY_URL', 'execute-api', 'amazonaws.com', '__dev/token'];
 const JWT = /eyJ[\w-]+\.eyJ[\w-]+\./; // any signed token (a pasted dev token is an HS256 JWT)
 const LINK_DEAD = "This link doesn't open. It may have been withdrawn or expired, or it was copied incompletely. Ask the sender for a new link.";
@@ -80,6 +80,14 @@ async function sealSmall(page, name, body = `${name} ${Date.now()} ${Math.random
   await page.locator('#protect-file').setInputFiles({ name, mimeType: 'application/octet-stream', buffer: Buffer.from(body) });
   await page.getByRole('button', { name: 'Seal this log' }).click();
   await page.waitForSelector('#handover-text', { timeout: 60000 });
+}
+// An unassigned proof (sealed while signed out) is sent only after an explicit "Assign to <org>".
+async function assignRow(page, name, org = 'orgA') {
+  const row = await openRow(page, name);
+  await row.getByRole('button', { name: `Assign to ${org}` }).click();
+  await row.getByText("Sealed while signed out, so it isn't assigned to a company yet.").waitFor({ state: 'detached' }).catch(() => {});
+  // Assign binds the row at once; wait until the outbox row (not the pending one) is the only row of that name.
+  await page.waitForFunction((n) => { const rows = [...document.querySelectorAll('.registry-row')].filter((r) => r.querySelector('.registry-name')?.textContent === n); return rows.length === 1 && rows[0].querySelector(':scope > summary .status-label')?.textContent !== 'Sealed locally'; }, name, { timeout: 30000 });
 }
 async function signIn(page, sub, role, ttl) {
   await go(page, 'help');
@@ -218,15 +226,16 @@ try {
   const page = watch(await ctx.newPage(), 'flag-on');
   await page.goto(`${flagOn.url}#/app/protect`);
   await page.locator('#page-protect').waitFor();
-  let shareUrl;
+  let shareUrl, localFingerprint;
 
   await check('signed out: a seal shows "Sealed locally" and the list notice "Sign in to the company registry to send these.", whose Sign in opens Trust', async () => {
     await page.getByRole('heading', { name: 'Sealed on this device' }).waitFor();
     await page.getByText('Nothing sealed on this device yet.').waitFor();
     await sealSmall(page, 'local-flight.ulg');
+    localFingerprint = await page.locator('.handover .fingerprint').innerText();
     await chipIs(page, 'local-flight.ulg', 'Sealed locally');
     const row = await openRow(page, 'local-flight.ulg');
-    await row.getByText('Sealed on this device. Not sent to the registry yet.').waitFor();
+    await row.getByText("Sealed while signed out, so it isn't assigned to a company yet. Sign in to the company registry to assign it, or export it.").waitFor();
     assert.match(await page.locator('.registry-summary').innerText(), /^0 registered · 1 not yet registered$/);
     const notice = page.locator('.registry-list .registry-notice', { hasText: 'Sign in to the company registry to send these.' });
     await notice.getByRole('button', { name: 'Sign in' }).click();
@@ -236,14 +245,22 @@ try {
     assert.equal(await page.locator('#registry-token').getAttribute('type'), 'password');
   });
 
-  await check('sign in: the pending ephemeral-key receipt is sent and needs attention (key not enrolled), with Try again', async () => {
+  await check('sign in: the signed-out seal stays unassigned until "Assign to orgA"; then it is sent and needs attention (key not enrolled), with Try again', async () => {
+    const before = (await registerLog('pilot-1')).length;
     await signIn(page, 'pilot-1', 'pilot');
     assert.ok(await page.evaluate(() => sessionStorage.getItem('hashwing-registry-token')));
     assert.equal(await page.evaluate(() => Object.keys(localStorage).filter((k) => /registry/.test(k)).length), 0);
     await go(page, 'protect');
+    const unassigned = await openRow(page, 'local-flight.ulg');
+    await unassigned.getByText("Sealed while signed out, so it isn't assigned to a company yet.").waitFor();
+    await sleep(1500);
+    assert.equal((await registerLog('pilot-1')).length, before, 'never sent by itself under whoever signs in');
+    await assignRow(page, 'local-flight.ulg');
     await chipIs(page, 'local-flight.ulg', 'Needs attention');
     const row = await openRow(page, 'local-flight.ulg');
-    await row.getByText("This signing key isn't enrolled for your company yet. Ask your admin to enroll it on the Trust page, then try again.").waitFor();
+    await row.getByText("This signing key isn't enrolled for your company yet. Ask your company's registry admin to enroll this key's fingerprint, then try again.").waitFor();
+    assert.ok(!(await row.innerText()).includes('Trust page'), 'no enroll control exists, so the copy names none');
+    assert.equal(await row.locator('.registry-fingerprint .fingerprint').innerText(), localFingerprint, "the row shows this key's fingerprint for the admin");
     await row.getByRole('button', { name: 'Try again' }).waitFor();
     await row.locator('.registry-tech summary').click();
     await row.getByText('Technical details: key_not_enrolled').waitFor();
@@ -478,6 +495,7 @@ try {
     try {
       await signIn(page, 'pilot-1', 'pilot');
       await go(page, 'protect');
+      await assignRow(page, 'flight-off.ulg');
       await chipIs(page, 'flight-off.ulg', 'Waiting for connection');
       await page.getByText("You're offline. Sealing and checking still work. Registrations will send when you reconnect.").waitFor();
       const row = await openRow(page, 'flight-off.ulg');
@@ -650,6 +668,209 @@ try {
       await chipIs(b, 'tab-b.ulg', 'Sealed locally');
       await sleep(3000);
       assert.equal((await registerLog('tab-pilot')).length, sends, 'tab B sent nothing after the sign-out in tab A');
+    } finally { await c.close(); }
+  });
+
+
+  // Lost work. A local profile in two tabs of one browser shares localStorage; each tab has its own session.
+  const profileIn = async (page, email, mode = 'signup') => {
+    await page.goto(`${flagOn.url}#/${mode}`);
+    await page.getByLabel('Email').fill(email);
+    await page.getByLabel('Password', { exact: true }).fill('lost work password 42');
+    if (mode === 'signup') await page.getByLabel('Confirm password').fill('lost work password 42');
+    await page.locator('#auth-main').getByRole('button', { name: mode === 'signup' ? 'Create account' : 'Log in', exact: true }).click();
+    await page.waitForFunction(() => location.hash.startsWith('#/app/'));
+  };
+  const appLogout = async (page) => {
+    const menu = page.locator('.profile-menu');
+    if (!(await menu.evaluate((d) => d.open))) await menu.locator('summary').click();
+    await menu.getByRole('button', { name: 'Log out', exact: true }).click();
+    await page.waitForFunction(() => location.hash === '#/');
+  };
+  const reloadWarns = (page) => page.evaluate(() => { const event = new Event('beforeunload', { cancelable: true }); window.dispatchEvent(event); return event.defaultPrevented; });
+
+  await check('reload: an unsaved Seal & send result or an unsent proof warns first; once saved and exported, no warning', async () => {
+    const c = await newContext();
+    try {
+      const a = watch(await c.newPage(), 'reload');
+      await a.goto(`${flagOn.url}#/app/protect`);
+      await sealSmall(a, 'reload-flight.ulg');
+      assert.equal(await reloadWarns(a), true, 'a fresh seal warns before reload');
+      await Promise.all([a.waitForEvent('download'), a.getByRole('button', { name: 'Download receipt' }).click()]);
+      await Promise.all([a.waitForEvent('download'), a.getByRole('button', { name: 'Download sealed file' }).click()]);
+      assert.equal(await reloadWarns(a), false, 'the unsent proof is saved on this device, so nothing is left to lose');
+      await a.reload();
+      await a.locator('#page-protect').waitFor();
+      await chipIs(a, 'Sealed item', 'Sealed locally'); // the file name is memory only; the proof is kept
+      await a.getByText('This tab was reloaded, so the files you had chosen are no longer selected. Choose them again.').waitFor();
+    } finally { await c.close(); }
+  });
+
+  await check('another tab logs this profile out: this tab keeps its unsaved result and unsent proof for one download', async () => {
+    const c = await newContext();
+    try {
+      const a = watch(await c.newPage(), 'lost-a'), b = watch(await c.newPage(), 'lost-b');
+      await profileIn(a, 'lost-a@example.test');
+      await sealSmall(a, 'kept-flight.ulg');
+      await profileIn(b, 'lost-a@example.test', 'login');
+      await appLogout(b);
+      await a.waitForFunction(() => location.hash === '#/');
+      const notice = a.locator('.rescue-notice');
+      await notice.getByText('You were logged out in another tab. This tab kept work that was not saved yet.').waitFor();
+      for (const width of [320, 1440]) {
+        await a.setViewportSize({ width, height: 900 });
+        await axe(a, `rescue notice ${width}`);
+        assert.ok(await a.evaluate(() => document.documentElement.scrollWidth <= innerWidth), `no horizontal scroll at ${width}`);
+      }
+      // A cancelled or blocked download never clears the only copy: the notice stays until the user says it finished.
+      const [cancelled] = await Promise.all([a.waitForEvent('download'), notice.getByRole('button', { name: 'Download unsaved work' }).click()]);
+      await cancelled.cancel();
+      await notice.getByText('Did the download finish?').waitFor();
+      assert.equal(await notice.count(), 1, 'the kept work is still here after a cancelled download');
+      assert.equal(await reloadWarns(a), true, 'and reload still warns');
+      await notice.getByRole('button', { name: 'Discard' }).click();
+      await notice.getByText('This deletes the only copy of this work.').waitFor();
+      await notice.getByRole('button', { name: 'Keep it' }).click();
+      const [download] = await Promise.all([a.waitForEvent('download'), notice.getByRole('button', { name: 'Download again' }).click()]);
+      assert.equal(download.suggestedFilename(), 'hashwing-unsaved-work.zip');
+      const zip = readFileSync(await download.path()).toString('latin1');
+      for (const name of ['kept-flight.ulg.fseal', 'kept-flight.ulg.receipt.txt']) assert.ok(zip.includes(name), `zip has ${name}`);
+      await notice.getByRole('button', { name: 'Yes, saved' }).click();
+      await notice.waitFor({ state: 'detached' });
+      assert.equal(await reloadWarns(a), false);
+      assert.equal(await a.evaluate(() => sessionStorage.getItem('hashwing-registry-token')), null);
+      await profileIn(a, 'lost-a@example.test', 'login'); // the unsent proof was saved for this profile, not thrown away
+      await a.evaluate(() => { location.hash = '/app/protect'; });
+      await chipIs(a, 'Sealed item', 'Sealed locally');
+    } finally { await c.close(); }
+  });
+
+  await check('another profile signing in, starting the demo or logging out leaves this tab\'s unsent proof and sign-in alone', async () => {
+    const c = await newContext();
+    try {
+      const a = watch(await c.newPage(), 'other-a'), b = watch(await c.newPage(), 'other-b'), d = watch(await c.newPage(), 'other-d');
+      await profileIn(a, 'keep-a@example.test');
+      await sealSmall(a, 'other-flight.ulg');
+      await chipIs(a, 'other-flight.ulg', 'Sealed locally');
+      await profileIn(d, 'keep-a@example.test', 'login'); // the same profile, signed in to the registry in another tab
+      await signIn(d, 'keep-pilot', 'pilot');
+      await profileIn(b, 'keep-b@example.test'); // app sign-in
+      await appLogout(b); // logout of another profile
+      await b.locator('.landing-persistent-actions').getByRole('button', { name: 'Launch Workspace' }).click(); // demo entry
+      await b.locator('#page-sandbox').waitFor();
+      await profileIn(b, 'keep-b@example.test', 'login'); // account switch from the demo
+      await sleep(500);
+      assert.ok((await a.evaluate(() => location.hash)).startsWith('#/app/protect'), 'tab A is still in its workspace');
+      await chipIs(a, 'other-flight.ulg', 'Sealed locally');
+      assert.equal(await a.locator('#handover-text').count(), 1, 'the Seal & send result is still on screen');
+      assert.ok(await d.evaluate(() => sessionStorage.getItem('hashwing-registry-token')), 'the registry sign-in in tab D is kept');
+      await d.locator('#company-registry').getByText('Signed in to the company registry as keep-pilot').waitFor();
+    } finally { await c.close(); }
+  });
+
+  await check('local logout with unsaved work is held until it is downloaded', async () => {
+    const c = await newContext();
+    try {
+      const a = watch(await c.newPage(), 'held');
+      await profileIn(a, 'held@example.test');
+      await sealSmall(a, 'held-flight.ulg');
+      const menu = a.locator('.profile-menu');
+      await menu.locator('summary').click();
+      assert.equal(await menu.getByRole('button', { name: 'Log out', exact: true }).isDisabled(), true);
+      const [started] = await Promise.all([a.waitForEvent('download'), menu.getByRole('button', { name: 'Download unsaved work' }).click()]);
+      await started.cancel();
+      assert.equal(await menu.getByRole('button', { name: 'Log out', exact: true }).isDisabled(), true, 'a started download alone does not unlock Log out');
+      await menu.getByRole('button', { name: 'Yes, saved' }).click();
+      await menu.getByRole('button', { name: 'Log out', exact: true }).click();
+      await a.waitForFunction(() => location.hash === '#/');
+      await a.goto(`${flagOn.url}#/app/protect`);
+      assert.equal(await a.locator('#handover-text').count(), 0, 'the next session does not see the last one\'s result');
+    } finally { await c.close(); }
+  });
+
+
+  await check('zip fails: downloading one result\'s files saves only that result; the other stays unsaved and Log out stays locked', async () => {
+    const c = await newContext();
+    try {
+      const a = watch(await c.newPage(), 'per-file');
+      await a.addInitScript(() => { // force the per-file path: the one-zip download cannot start
+        const make = URL.createObjectURL.bind(URL);
+        URL.createObjectURL = (blob) => { if (blob?.type === 'application/zip') throw new Error('blocked in this test'); return make(blob); };
+      });
+      await profileIn(a, 'per-file@example.test');
+      await sealSmall(a, 'part-a.ulg'); // part 1: Seal & send (sealed file + receipt message)
+      await a.getByLabel('Large files (fingerprint only)').check();
+      await a.locator('#manifest-files').setInputFiles([{ name: 'p1.mp4', mimeType: 'video/mp4', buffer: Buffer.from(`p1 ${Date.now()}`) }]);
+      await a.getByRole('button', { name: 'Seal', exact: true }).click();
+      await a.locator('#manifest-handover-text').waitFor({ timeout: 60000 }); // part 2: the sealed list + its receipt
+      const menu = a.locator('.profile-menu');
+      await menu.locator('summary').click();
+      await menu.getByRole('button', { name: 'Download unsaved work' }).click();
+      await menu.getByText(/Couldn't make one download \(blocked in this test\)/).waitFor();
+      await Promise.all([a.waitForEvent('download'), menu.getByRole('button', { name: 'part-a.ulg.fseal', exact: true }).click()]);
+      await menu.getByText('1 of 4 files downloaded. Download the rest, then confirm.').waitFor();
+      assert.equal(await menu.getByRole('button', { name: 'These finished' }).count(), 0, 'no part is complete yet');
+      await Promise.all([a.waitForEvent('download'), menu.getByRole('button', { name: 'part-a.ulg.receipt.txt', exact: true }).click()]);
+      await menu.getByText('2 of 4 files downloaded. Download the rest, then confirm.').waitFor();
+      await menu.getByRole('button', { name: 'These finished' }).click();
+      assert.equal(await menu.getByRole('button', { name: 'Log out', exact: true }).isDisabled(), true, 'the large-file result was never downloaded');
+      assert.equal(await reloadWarns(a), true);
+      await menu.getByRole('button', { name: 'Download unsaved work' }).click();
+      await menu.getByRole('button', { name: /\.manifest\.fseal$/ }).waitFor();
+      const names = await menu.locator('.unsaved-download .actions-row button').allTextContents();
+      assert.equal(names.length, 2, 'only the large-file result is left: ' + names.join(', '));
+      assert.ok(names.every((n) => /^hashwing-\d{8}-\d{6}\.(manifest\.fseal|receipt\.txt)$/.test(n)), names.join(', '));
+    } finally { await c.close(); }
+  });
+
+  await check('a large-file result that is not saved warns on reload, survives leaving its page, blocks sign-in until downloaded', async () => {
+    const c = await newContext();
+    try {
+      const a = watch(await c.newPage(), 'manifest-kept');
+      await a.goto(`${flagOn.url}#/app/protect`);
+      await a.locator('#page-protect').waitFor();
+      await a.getByLabel('Large files (fingerprint only)').check();
+      await a.locator('#manifest-files').setInputFiles([{ name: 'k1.mp4', mimeType: 'video/mp4', buffer: Buffer.from(`k1 ${Date.now()}`) }]);
+      await a.getByRole('button', { name: 'Seal', exact: true }).click();
+      await a.locator('#manifest-handover-text').waitFor({ timeout: 60000 });
+      assert.equal(await reloadWarns(a), true, 'an unsaved sealed list warns before reload');
+      await a.evaluate(() => { location.hash = '/login'; }); // the panel unmounts; the result must not be dropped with it
+      await a.locator('#auth-main').waitFor();
+      assert.equal(await a.locator('#auth-main').getByRole('button', { name: 'Log in', exact: true }).isDisabled(), true, 'sign-in waits');
+      const [download] = await Promise.all([a.waitForEvent('download'), a.locator('#auth-main').getByRole('button', { name: 'Download unsaved work' }).click()]);
+      const zip = readFileSync(await download.path()).toString('latin1');
+      assert.match(zip, /hashwing-\d{8}-\d{6}\.manifest\.fseal/, 'the zip holds the sealed list');
+      assert.match(zip, /hashwing-\d{8}-\d{6}\.receipt\.txt/, 'and its receipt message');
+      await a.locator('#auth-main').getByRole('button', { name: 'Yes, saved' }).click();
+      await a.waitForFunction(() => !document.querySelector('.auth-output-warning'));
+      assert.equal(await reloadWarns(a), false);
+    } finally { await c.close(); }
+  });
+
+  await check('a frozen tab that missed the sign-out, and a restored tab with an older saved token, stay signed out', async () => {
+    const c = await newContext();
+    try {
+      const a = watch(await c.newPage(), 'freeze-a');
+      await a.goto(`${flagOn.url}#/app/help`);
+      await signIn(a, 'freeze-pilot', 'pilot');
+      const tok = await a.evaluate(() => sessionStorage.getItem('hashwing-registry-token'));
+      const [b] = await Promise.all([c.waitForEvent('page'), a.evaluate((u) => { window.open(u); }, `${flagOn.url}#/app/help`)]);
+      watch(b, 'freeze-b');
+      await b.locator('#company-registry').getByText('Signed in to the company registry as freeze-pilot').waitFor({ timeout: 30000 });
+      const cdp = await c.newCDPSession(b);
+      await cdp.send('Page.setWebLifecycleState', { state: 'frozen' });
+      await a.locator('#company-registry').getByRole('button', { name: 'Sign out' }).click();
+      await sleep(500);
+      await cdp.send('Page.setWebLifecycleState', { state: 'active' });
+      await b.bringToFront();
+      await b.locator('#registry-token').waitFor({ timeout: 10000 });
+      assert.equal(await b.evaluate(() => sessionStorage.getItem('hashwing-registry-token')), null, 'the frozen tab signed out on waking');
+      const d = watch(await c.newPage(), 'restored');
+      await d.addInitScript((t) => { sessionStorage.setItem('hashwing-registry-token', t); sessionStorage.setItem('hashwing-registry-token-at', '1'); }, tok);
+      await d.goto(`${flagOn.url}#/app/help`);
+      await d.locator('#registry-token').waitFor({ timeout: 10000 });
+      await sleep(500);
+      assert.equal(await d.locator('#company-registry').getByText('Signed in to the company registry').count(), 0, 'an older saved token is not used after a sign-out');
     } finally { await c.close(); }
   });
 
