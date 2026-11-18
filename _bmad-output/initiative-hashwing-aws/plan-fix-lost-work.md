@@ -90,6 +90,8 @@ deferred:
 
 ## Plan Change Log
 
+- 2026-11-17 — owner brief Phase C/E (via coordinator) replaced "send no-owner proofs on next sign-in" and "logout clears in-memory proofs": pending proofs are now persisted per local scope in IndexedDB (`newweb/src/pending-store.mjs`, receipt/owner/at only, max 200) and never deleted by sign-out or logout; an unassigned proof is sent only after an explicit "Assign to <org>"; the signout message carries `at` (delayed messages ignored) and a bounded localStorage sign-out marker stops frozen or restored tabs reusing an older token; a reload notice asks to choose files again. New checks: registry-session (rewritten, 9), registry-wiring (frozen/restored tab, large-file kept work; 28), private-lifecycle (server logout keeps unsaved output; 20).
+
 ## Review Triage Log
 
 ### 2026-11-17 — Review pass
@@ -121,6 +123,6 @@ deferred:
 - Summary: unsaved work (Seal & send result, large-file result, workbench output, unsent in-memory proofs) is warned about on reload, held before logout/switch/sign-in/demo until one "Download unsaved work" zip, and kept for one download after a forced logout; the every-tab registry logout message is gone; unsent proofs are owner-tagged; key_not_enrolled copy fixed with the fingerprint shown; profiles.mjs selectors repaired.
 - Files: newweb/src/main.jsx, newweb/src/registry-ui.jsx, newweb/src/style.css (rescue notice), newweb/tests/{registry-session.test.mjs,registry-wiring.mjs,profiles.mjs}, docs/OUTBOX.md, AGENTS.md, spine AD-17 + Deferred + .memlog.md, EXPERIENCE.md copy row, deferred-work.md, docs/console rebuild.
 - Review: 8 patched (high 1, medium 5, low 2), 1 deferred, 3 rejected as false (reviewed diff predated the docs commit).
-- Follow-up review recommended: true (a high was patched: the rescue zip failure path); unverified risk: the per-file fallback buttons after a zip failure are not driven by a test.
+- Follow-up review recommended: true (a high was patched: the rescue zip failure path; the pending-store rework landed after the review pass and was not re-reviewed); unverified risks: the per-file fallback buttons after a zip failure, and IndexedDB quota/denied failures of the pending store, are not driven by a test.
 - Verification: see PR body for commands and counts.
 - Implemented in the main session (subagents here launch only in the background); the review lens ran as a context-free subagent.

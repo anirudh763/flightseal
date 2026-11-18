@@ -106,7 +106,7 @@ Chip text comes from the outbox's own labels (`stateLabel()`, `registrationLabel
 
 | Outbox state | Chip text | Detail line | Single action |
 |---|---|---|---|
-| `sealed_local` | Sealed locally | "Sealed on this device. Not sent to the registry yet." | none (sending starts automatically when signed in) |
+| `sealed_local` | Sealed locally | Sealed while signed in: "Sealed on this device. Not sent to the registry yet." Sealed while signed out: "Sealed while signed out, so it isn't assigned to a company yet." | Signed out: none (sign in to assign it, or export it). Signed in: "Assign to <org>" for a proof sealed while signed out; it is never sent by itself. |
 | `waiting_for_connection` | Waiting for connection | "Saved on this device. It will register when you're back online. You can close this tab." | "Try now" (secondary) |
 | `registering` | Registering | "Sending the receipt to the registry…" | none |
 | `registered`, disposition `active` | Registered | "Registered at {received_at}. This is the registry's statement, not proof of the files." | "Make a share link" |

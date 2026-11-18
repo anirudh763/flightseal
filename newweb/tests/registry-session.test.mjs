@@ -13,6 +13,7 @@ const URL_ = 'http://127.0.0.1:9';
 const store = new Map();
 globalThis.sessionStorage = { getItem: (k) => store.get(k) ?? null, setItem: (k, v) => store.set(k, String(v)), removeItem: (k) => store.delete(k) };
 globalThis.addEventListener ??= () => {};
+globalThis.localStorage ??= { getItem: () => null, setItem: () => {}, removeItem: () => {} };
 globalThis.removeEventListener ??= () => {};
 globalThis.fetch = async () => { throw new TypeError('offline in this test'); };
 globalThis.__REGISTRY_URL__ = URL_;
@@ -31,27 +32,32 @@ const tokenFor = (sub) => `${b64({ alg: 'none' })}.${b64({ org_id: 'orgA', sub, 
 const hex = (n, c) => c.repeat(n);
 const receipt = (count) => `fseal-receipt v1 count=${count} head=${hex(64, 'a')} key=${hex(64, 'b')} sig=${hex(128, 'c')}`;
 
-test('logout during the sign-in flush does not put the previous user\'s proofs back', async () => {
+test('a proof sealed while signed out stays unassigned after sign-in, and is sent only when assigned', async () => {
   const r = getRegistry();
-  await r.sealed(receipt(1), 'one.ulg'); // signed out: kept in the in-memory list
-  assert.equal(r.snapshot().pending.length, 1);
-  let done = false;
-  const off = r.subscribe(() => { if (!done && r.snapshot().outbox) { done = true; r.logout(); } }); // the outbox just opened
-  await r.signIn(tokenFor('u1'));
-  off();
-  assert.ok(done);
+  await r.setScope('guest');
+  await r.sealed(receipt(1), 'one.ulg'); // signed out: unassigned local work
+  assert.deepEqual(r.snapshot().pending.map((p) => [p.receipt, p.owner]), [[receipt(1), null]]);
+  assert.ok(await r.signIn(tokenFor('u1')));
+  assert.deepEqual(r.snapshot().pending.map((p) => p.owner), [null], 'never sent by itself under whoever signs in');
+  assert.ok(!(await r.snapshot().outbox.list()).some((row) => row.receipt === receipt(1)));
+  assert.equal(await r.assign(receipt(1)), true);
   assert.deepEqual(r.snapshot().pending, []);
-  assert.equal(r.snapshot().outbox, null);
+  assert.ok((await r.snapshot().outbox.list()).some((row) => row.receipt === receipt(1)));
+  r.logout();
 });
 
-test('logout while a seal is being saved drops it instead of keeping it for the next user', async () => {
+test('logout clears the sign-in and file names but keeps the profile\'s saved pending proofs', async () => {
   const r = getRegistry();
+  await r.sealed(receipt(2), 'two.ulg');
   assert.ok(await r.signIn(tokenFor('u2')));
-  const saving = r.sealed(receipt(2), 'two.ulg');
   r.logout();
-  await saving;
-  assert.deepEqual(r.snapshot().pending, []);
+  assert.equal(r.snapshot().owner, null);
+  assert.equal(r.snapshot().token, '');
   assert.equal(r.names.size, 0);
+  assert.deepEqual(r.snapshot().pending.map((p) => p.receipt), [receipt(2)], 'sign-out never deletes saved pending proofs');
+  await r.setScope('profile:other'); // another local profile never sees them
+  assert.deepEqual(r.snapshot().pending, []);
+  await r.setScope('guest');
 });
 
 test('signing out and in as another owner forgets the previous owner\'s file names', async () => {
@@ -65,7 +71,7 @@ test('signing out and in as another owner forgets the previous owner\'s file nam
   r.logout();
 });
 
-test('sign-out tells the other tabs which owner left, never the token; an app logout stays in this tab', async () => {
+test('sign-out tells the other tabs which owner left and when, never the token; an app logout stays in this tab', async () => {
   const r = getRegistry();
   const [channel] = channels;
   assert.equal(channel?.name, 'hashwing-registry');
@@ -74,21 +80,24 @@ test('sign-out tells the other tabs which owner left, never the token; an app lo
   channel.posted.length = 0;
   r.signOut();
   r.logout();
-  assert.deepEqual(channel.posted, [{ type: 'signout', owner: 'orgA/u5' }], 'the profile logout message (local-auth) reaches only that profile\'s tabs');
+  assert.deepEqual(channel.posted.map(({ type, owner }) => ({ type, owner })), [{ type: 'signout', owner: 'orgA/u5' }], 'the profile logout message (local-auth) reaches only that profile\'s tabs');
+  assert.ok(Number.isFinite(channel.posted[0].at));
   assert.ok(!JSON.stringify(channel.posted).includes(tok.split('.')[1]));
 });
 
-test('another tab\'s messages: a sign-out for this owner signs out, another owner\'s is ignored, an old every-tab logout is ignored', async () => {
+test('another tab\'s messages: this owner\'s sign-out signs out; another owner\'s, a delayed one from before this sign-in, and an old every-tab logout are ignored', async () => {
   const r = getRegistry();
   const [channel] = channels;
+  const before = Date.now() - 1;
   assert.ok(await r.signIn(tokenFor('u6')));
-  channel.deliver({ type: 'signout', owner: 'orgA/someone-else' });
+  channel.deliver({ type: 'signout', owner: 'orgA/someone-else', at: Date.now() });
   assert.equal(r.snapshot().owner, 'orgA/u6');
-  channel.deliver({ type: 'signout', owner: 'orgA/u6' });
+  channel.deliver({ type: 'signout', owner: 'orgA/u6', at: before }); // delayed: sent before this sign-in began
+  assert.equal(r.snapshot().owner, 'orgA/u6');
+  channel.deliver({ type: 'signout', owner: 'orgA/u6', at: Date.now() + 1 });
   assert.equal(r.snapshot().owner, null);
   assert.equal(r.snapshot().token, '');
   assert.equal(sessionStorage.getItem('hashwing-registry-token'), null);
-  await r.sealed(receipt(6), 'kept-here.ulg'); // signed out: in this tab's memory list
   assert.ok(await r.signIn(tokenFor('u7')));
   channel.posted.length = 0;
   channel.deliver({ type: 'logout' }); // sent by older tabs on any sign-in, switch or demo start: never wipes this tab
@@ -99,30 +108,33 @@ test('another tab\'s messages: a sign-out for this owner signs out, another owne
 
 test('an unsent proof keeps the registry owner it was sealed under and is never sent under another owner', async () => {
   const r = getRegistry();
+  await r.setScope('profile:full');
   assert.ok(await r.signIn(tokenFor('u8')));
   for (let i = 0; i < 200; i++) await r.sealed(receipt(1000 + i)); // fill this owner's queue
   const held = receipt(2000);
-  await r.sealed(held, 'held-flight.ulg'); // queue full: kept in memory, tagged orgA/u8
+  await r.sealed(held, 'held-flight.ulg'); // queue full: kept, tagged orgA/u8
   assert.deepEqual(r.snapshot().pending.map((p) => [p.receipt, p.owner]), [[held, 'orgA/u8']]);
   r.signOut();
   assert.ok(await r.signIn(tokenFor('u9')));
   assert.deepEqual(r.snapshot().pending.map((p) => p.owner), ['orgA/u8'], 'held, not queued under orgA/u9');
+  assert.equal(await r.assign(held), false, 'only unassigned proofs can be assigned');
   assert.ok(!(await r.snapshot().outbox.list()).some((row) => row.receipt === held));
   assert.equal(r.names.has(held), false, 'another owner never sees its file name');
   const out = await r.exportPending();
   assert.ok(out.ok && JSON.parse(out.text).receipts.includes(held), 'it can still be exported');
   r.logout();
+  await r.setScope('guest');
 });
 
-test('a proof sealed while signed out has no owner and is sent under the next sign-in', async () => {
+test('without IndexedDB the pending list is memory only and counts as unsaved until exported', async () => {
   const r = getRegistry();
-  const free = receipt(3000);
-  await r.sealed(free, 'free.ulg');
-  assert.deepEqual(r.snapshot().pending.map((p) => p.owner), [null]);
-  assert.ok(await r.signIn(tokenFor('u10')));
-  assert.deepEqual(r.snapshot().pending, []);
-  assert.ok((await r.snapshot().outbox.list()).some((row) => row.receipt === free));
-  r.logout();
+  await r.sealed(receipt(3000), 'memory.ulg');
+  assert.equal(r.snapshot().pendingStorage, 'memory');
+  assert.ok(r.unsavedCount() >= 1);
+  const out = r.unsentExport();
+  assert.ok(out && JSON.parse(out.text).receipts.includes(receipt(3000)));
+  out.markSaved();
+  assert.equal(r.unsavedCount(), 0);
 });
 
 test('the Verify time row for each state of this device\'s outbox row', () => {

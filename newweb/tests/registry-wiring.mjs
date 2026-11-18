@@ -23,7 +23,7 @@ mkdirSync(OUT, { recursive: true });
 const require = createRequire(join(ROOT, 'package.json'));
 const { chromium } = require('playwright');
 const AXE = readFileSync(require.resolve('axe-core/axe.min.js'), 'utf8');
-const FORBIDDEN = ['Company registry', 'Test sign-in', 'Sealed on this device', 'hashwing-outbox', '/v1/envelopes', '/v1/shares', 'registry-test-secret', 'dev-hs256',
+const FORBIDDEN = ['Company registry', 'Test sign-in', 'Sealed on this device', 'hashwing-outbox', 'hashwing-pending', 'hashwing-registry-signouts', '/v1/envelopes', '/v1/shares', 'registry-test-secret', 'dev-hs256',
   'REGISTRY_URL', 'execute-api', 'amazonaws.com', '__dev/token'];
 const JWT = /eyJ[\w-]+\.eyJ[\w-]+\./; // any signed token (a pasted dev token is an HS256 JWT)
 const LINK_DEAD = "This link doesn't open. It may have been withdrawn or expired, or it was copied incompletely. Ask the sender for a new link.";
@@ -80,6 +80,13 @@ async function sealSmall(page, name, body = `${name} ${Date.now()} ${Math.random
   await page.locator('#protect-file').setInputFiles({ name, mimeType: 'application/octet-stream', buffer: Buffer.from(body) });
   await page.getByRole('button', { name: 'Seal this log' }).click();
   await page.waitForSelector('#handover-text', { timeout: 60000 });
+}
+// An unassigned proof (sealed while signed out) is sent only after an explicit "Assign to <org>".
+async function assignRow(page, name, org = 'orgA') {
+  const row = await openRow(page, name);
+  await row.getByRole('button', { name: `Assign to ${org}` }).click();
+  await row.getByText("Sealed while signed out, so it isn't assigned to a company yet.").waitFor({ state: 'detached' }).catch(() => {});
+  await page.waitForFunction((n) => [...document.querySelectorAll('.registry-row .registry-name')].filter((e) => e.textContent === n).length === 1 && ![...document.querySelectorAll('.registry-row')].some((r) => r.querySelector('.registry-name')?.textContent === n && /Assign to/.test(r.textContent)), name, { timeout: 30000 });
 }
 async function signIn(page, sub, role, ttl) {
   await go(page, 'help');
@@ -227,7 +234,7 @@ try {
     localFingerprint = await page.locator('.handover .fingerprint').innerText();
     await chipIs(page, 'local-flight.ulg', 'Sealed locally');
     const row = await openRow(page, 'local-flight.ulg');
-    await row.getByText('Sealed on this device. Not sent to the registry yet.').waitFor();
+    await row.getByText("Sealed while signed out, so it isn't assigned to a company yet. Sign in to the company registry to assign it, or export it.").waitFor();
     assert.match(await page.locator('.registry-summary').innerText(), /^0 registered · 1 not yet registered$/);
     const notice = page.locator('.registry-list .registry-notice', { hasText: 'Sign in to the company registry to send these.' });
     await notice.getByRole('button', { name: 'Sign in' }).click();
@@ -237,11 +244,17 @@ try {
     assert.equal(await page.locator('#registry-token').getAttribute('type'), 'password');
   });
 
-  await check('sign in: the pending ephemeral-key receipt is sent and needs attention (key not enrolled), with Try again', async () => {
+  await check('sign in: the signed-out seal stays unassigned until "Assign to orgA"; then it is sent and needs attention (key not enrolled), with Try again', async () => {
+    const before = (await registerLog('pilot-1')).length;
     await signIn(page, 'pilot-1', 'pilot');
     assert.ok(await page.evaluate(() => sessionStorage.getItem('hashwing-registry-token')));
     assert.equal(await page.evaluate(() => Object.keys(localStorage).filter((k) => /registry/.test(k)).length), 0);
     await go(page, 'protect');
+    const unassigned = await openRow(page, 'local-flight.ulg');
+    await unassigned.getByText("Sealed while signed out, so it isn't assigned to a company yet.").waitFor();
+    await sleep(1500);
+    assert.equal((await registerLog('pilot-1')).length, before, 'never sent by itself under whoever signs in');
+    await assignRow(page, 'local-flight.ulg');
     await chipIs(page, 'local-flight.ulg', 'Needs attention');
     const row = await openRow(page, 'local-flight.ulg');
     await row.getByText("This signing key isn't enrolled for your company yet. Ask your company's registry admin to enroll this key's fingerprint, then try again.").waitFor();
@@ -481,6 +494,7 @@ try {
     try {
       await signIn(page, 'pilot-1', 'pilot');
       await go(page, 'protect');
+      await assignRow(page, 'flight-off.ulg');
       await chipIs(page, 'flight-off.ulg', 'Waiting for connection');
       await page.getByText("You're offline. Sealing and checking still work. Registrations will send when you reconnect.").waitFor();
       const row = await openRow(page, 'flight-off.ulg');
@@ -683,10 +697,11 @@ try {
       assert.equal(await reloadWarns(a), true, 'a fresh seal warns before reload');
       await Promise.all([a.waitForEvent('download'), a.getByRole('button', { name: 'Download receipt' }).click()]);
       await Promise.all([a.waitForEvent('download'), a.getByRole('button', { name: 'Download sealed file' }).click()]);
-      assert.equal(await reloadWarns(a), true, 'the unsent proof still warns (it lives in this tab only)');
-      await a.locator('.registry-more > summary').click();
-      await Promise.all([a.waitForEvent('download'), a.getByRole('button', { name: 'Export pending proofs' }).click()]);
-      assert.equal(await reloadWarns(a), false, 'saved and exported: nothing left to lose');
+      assert.equal(await reloadWarns(a), false, 'the unsent proof is saved on this device, so nothing is left to lose');
+      await a.reload();
+      await a.locator('#page-protect').waitFor();
+      await chipIs(a, 'Sealed item', 'Sealed locally'); // the file name is memory only; the proof is kept
+      await a.getByText('This tab was reloaded, so the files you had chosen are no longer selected. Choose them again.').waitFor();
     } finally { await c.close(); }
   });
 
@@ -709,10 +724,13 @@ try {
       const [download] = await Promise.all([a.waitForEvent('download'), notice.getByRole('button', { name: 'Download unsaved work' }).click()]);
       assert.equal(download.suggestedFilename(), 'hashwing-unsaved-work.zip');
       const zip = readFileSync(await download.path()).toString('latin1');
-      for (const name of ['kept-flight.ulg.fseal', 'kept-flight.ulg.receipt.txt', 'hashwing-pending-proofs.json']) assert.ok(zip.includes(name), `zip has ${name}`);
+      for (const name of ['kept-flight.ulg.fseal', 'kept-flight.ulg.receipt.txt']) assert.ok(zip.includes(name), `zip has ${name}`);
       await notice.waitFor({ state: 'detached' });
       assert.equal(await reloadWarns(a), false);
       assert.equal(await a.evaluate(() => sessionStorage.getItem('hashwing-registry-token')), null);
+      await profileIn(a, 'lost-a@example.test', 'login'); // the unsent proof was saved for this profile, not thrown away
+      await a.evaluate(() => { location.hash = '/app/protect'; });
+      await chipIs(a, 'Sealed item', 'Sealed locally');
     } finally { await c.close(); }
   });
 
@@ -725,10 +743,11 @@ try {
       await chipIs(a, 'other-flight.ulg', 'Sealed locally');
       await profileIn(d, 'keep-a@example.test', 'login'); // the same profile, signed in to the registry in another tab
       await signIn(d, 'keep-pilot', 'pilot');
-      await profileIn(b, 'keep-b@example.test');
-      await b.goto(`${flagOn.url}#/`);
-      await b.locator('.landing-persistent-actions').getByRole('button', { name: 'Launch Workspace' }).click();
-      await appLogout(b);
+      await profileIn(b, 'keep-b@example.test'); // app sign-in
+      await appLogout(b); // logout of another profile
+      await b.locator('.landing-persistent-actions').getByRole('button', { name: 'Launch Workspace' }).click(); // demo entry
+      await b.locator('#page-sandbox').waitFor();
+      await profileIn(b, 'keep-b@example.test', 'login'); // account switch from the demo
       await sleep(500);
       assert.ok((await a.evaluate(() => location.hash)).startsWith('#/app/protect'), 'tab A is still in its workspace');
       await chipIs(a, 'other-flight.ulg', 'Sealed locally');
@@ -752,6 +771,57 @@ try {
       await a.waitForFunction(() => location.hash === '#/');
       await a.goto(`${flagOn.url}#/app/protect`);
       assert.equal(await a.locator('#handover-text').count(), 0, 'the next session does not see the last one\'s result');
+    } finally { await c.close(); }
+  });
+
+
+  await check('a large-file result that is not saved warns on reload, survives leaving its page, blocks sign-in until downloaded', async () => {
+    const c = await newContext();
+    try {
+      const a = watch(await c.newPage(), 'manifest-kept');
+      await a.goto(`${flagOn.url}#/app/protect`);
+      await a.locator('#page-protect').waitFor();
+      await a.getByLabel('Large files (fingerprint only)').check();
+      await a.locator('#manifest-files').setInputFiles([{ name: 'k1.mp4', mimeType: 'video/mp4', buffer: Buffer.from(`k1 ${Date.now()}`) }]);
+      await a.getByRole('button', { name: 'Seal', exact: true }).click();
+      await a.locator('#manifest-handover-text').waitFor({ timeout: 60000 });
+      assert.equal(await reloadWarns(a), true, 'an unsaved sealed list warns before reload');
+      await a.evaluate(() => { location.hash = '/login'; }); // the panel unmounts; the result must not be dropped with it
+      await a.locator('#auth-main').waitFor();
+      assert.equal(await a.locator('#auth-main').getByRole('button', { name: 'Log in', exact: true }).isDisabled(), true, 'sign-in waits');
+      const [download] = await Promise.all([a.waitForEvent('download'), a.locator('#auth-main').getByRole('button', { name: 'Download unsaved work' }).click()]);
+      const zip = readFileSync(await download.path()).toString('latin1');
+      assert.match(zip, /hashwing-\d{8}-\d{6}\.manifest\.fseal/, 'the zip holds the sealed list');
+      assert.match(zip, /hashwing-\d{8}-\d{6}\.receipt\.txt/, 'and its receipt message');
+      await a.waitForFunction(() => !document.querySelector('.auth-output-warning'));
+      assert.equal(await reloadWarns(a), false);
+    } finally { await c.close(); }
+  });
+
+  await check('a frozen tab that missed the sign-out, and a restored tab with an older saved token, stay signed out', async () => {
+    const c = await newContext();
+    try {
+      const a = watch(await c.newPage(), 'freeze-a');
+      await a.goto(`${flagOn.url}#/app/help`);
+      await signIn(a, 'freeze-pilot', 'pilot');
+      const tok = await a.evaluate(() => sessionStorage.getItem('hashwing-registry-token'));
+      const [b] = await Promise.all([c.waitForEvent('page'), a.evaluate((u) => { window.open(u); }, `${flagOn.url}#/app/help`)]);
+      watch(b, 'freeze-b');
+      await b.locator('#company-registry').getByText('Signed in to the company registry as freeze-pilot').waitFor({ timeout: 30000 });
+      const cdp = await c.newCDPSession(b);
+      await cdp.send('Page.setWebLifecycleState', { state: 'frozen' });
+      await a.locator('#company-registry').getByRole('button', { name: 'Sign out' }).click();
+      await sleep(500);
+      await cdp.send('Page.setWebLifecycleState', { state: 'active' });
+      await b.bringToFront();
+      await b.locator('#registry-token').waitFor({ timeout: 10000 });
+      assert.equal(await b.evaluate(() => sessionStorage.getItem('hashwing-registry-token')), null, 'the frozen tab signed out on waking');
+      const d = watch(await c.newPage(), 'restored');
+      await d.addInitScript((t) => { sessionStorage.setItem('hashwing-registry-token', t); sessionStorage.setItem('hashwing-registry-token-at', '1'); }, tok);
+      await d.goto(`${flagOn.url}#/app/help`);
+      await d.locator('#registry-token').waitFor({ timeout: 10000 });
+      await sleep(500);
+      assert.equal(await d.locator('#company-registry').getByText('Signed in to the company registry').count(), 0, 'an older saved token is not used after a sign-out');
     } finally { await c.close(); }
   });
 

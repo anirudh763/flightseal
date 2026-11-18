@@ -26,7 +26,7 @@ import { deliverEarlyAccessRequest } from './early-access.mjs';
 import { createEncryptedProfileBackup, inspectEncryptedProfileBackup, commitBackupRestore, previewBackupRestore } from './profile-backup.mjs';
 import { createSyncProvider } from './sync-provider.mjs';
 import { PINS_CHANGED, SOURCES, addTrustedCompany, fingerprintHex, formatFingerprint, listTrustedHistory, listTrustedKeys, markCompromised, pinTrustedKey, removeTrustedKey, trustForKey } from './trusted-keys.mjs';
-import { RegistryBoundary, RegistryPanel, SealedOnDevice, ShareRecordPanel, getRegistry, registryLogout, registrySealed, useRegistryTimeField, useRegistryUnsent } from './registry-ui.jsx';
+import { RegistryBoundary, RegistryPanel, SealedOnDevice, ShareRecordPanel, getRegistry, registryLogout, registryScope, registrySealed, useRegistryTimeField, useRegistryUnsent } from './registry-ui.jsx';
 import { BYTES_DIFFER, TRUST_KIND, composeNote, landingLine, manifestReport, parseLandingLine, parseNote, parseSealedLine, timeFields, toIsoFromLocal, trustLine } from './recipient-trust.mjs';
 
 const syncProvider = createSyncProvider({ supabaseUrl: import.meta.env.VITE_SUPABASE_URL, supabaseAnonKey: import.meta.env.VITE_SUPABASE_ANON_KEY });
@@ -124,6 +124,7 @@ function App() {
   const [busy, setBusy] = useState('');
   const [error, setError] = useState('');
   const [logFile, setLogFile] = useState(null);
+  const [reloadedWithFiles] = useState(() => { try { return sessionStorage.getItem('hashwing-files-chosen') === '1'; } catch { return false; } });
   const [receiptText, setReceiptText] = useState('');
   const [receiptLoading, setReceiptLoading] = useState(false);
   const [receiptSelected, setReceiptSelected] = useState(false);
@@ -158,6 +159,8 @@ function App() {
   // shows only while the link is open. Never stored or logged.
   const shareToken = __REGISTRY_URL__ && route.screen === 'verify' ? route.params.get('share') : null;
   useEffect(() => { if (__REGISTRY_URL__) getRegistry(); }, []); // resume this tab's registry sign-in, if any
+  // Unsent proofs are saved per local profile (guests share one scope), so a logout never deletes them and another profile never sees them.
+  useEffect(() => { if (__REGISTRY_URL__) registryScope(activeSession ? (activeSession.kind === 'account' ? `profile:${activeSession.userId}` : 'guest') : null); }, [activeSession?.kind, activeSession?.userId]);
   const [copyStatus, setCopyStatus] = useState('');
   const [sealSourceOriginal, setSealSourceOriginal] = useState(null);
   const [csvDraft, setCsvDraft] = useState(null);
@@ -292,6 +295,11 @@ function App() {
   }, [activeSession?.kind, activeSession?.userId]);
 
   useEffect(() => { if (route.kind === 'workspace') workspaceScreenRef.current = route.screen; }, [route.kind, route.screen]);
+
+  useEffect(() => {
+    try { if (protectFile || checkFile || logFile) sessionStorage.setItem('hashwing-files-chosen', '1'); else sessionStorage.removeItem('hashwing-files-chosen'); } catch { /* nothing to tell after a reload */ }
+  }, [protectFile, checkFile, logFile]);
+  useEffect(() => { if (reloadedWithFiles) setOperationStatus('This tab was reloaded, so the files you had chosen are no longer selected. Choose them again.'); }, [reloadedWithFiles]);
 
   useEffect(() => {
     if (!hasUnsavedWork) return undefined;

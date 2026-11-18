@@ -11,5 +11,8 @@
   summary: No browser test of a proof held under another registry owner (it needs a full 200-row queue); covered in Node by registry-session.test.mjs.
   evidence: registry-session.test.mjs "an unsent proof keeps the registry owner it was sealed under".
 - source_plan: `_bmad-output/initiative-hashwing-aws/plan-fix-lost-work.md`
-  summary: The workspace-server sign-out path (`WorkspaceStore` onLogout) keeps unsaved work for one download, but no test drives it.
-  evidence: only reachable with a self-hosted workspace server; not in the console browser suites.
+  summary: private-lifecycle.mjs (which drives `WorkspaceStore.logout`) is not run in CI; it needs the served web app with persistence on. Its new check "server logout keeps unsaved sealed output..." passed locally (20/20) against tools/http_server.py on 127.0.0.1:3911 with this branch's docs/.
+  evidence: `HASHWING_BASE_URL=http://127.0.0.1:3911 node newweb/tests/private-lifecycle.mjs` on fix/lost-work.
+- source_plan: `_bmad-output/initiative-hashwing-aws/plan-fix-lost-work.md`
+  summary: Pending-proof IndexedDB has no Node unit test (no IndexedDB in Node); it is driven in the browser by registry-wiring.mjs (reload keeps the proof, another-tab logout then log back in shows it). A removed local profile's pending database is not deleted; a selected File cannot survive reload (the page now says to choose it again).
+  evidence: registry-wiring.mjs 28/28 on fix/lost-work.
