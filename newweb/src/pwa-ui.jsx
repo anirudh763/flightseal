@@ -85,7 +85,7 @@ export function FeedbackDialog({ open, onClose, route, onDraftOpened }) {
 }
 
 export function FooterLinks({ onFeedback, onInstall, children }) {
-  return <footer>{children}<div className="trust-footer"><nav aria-label="Product information"><a href="#/privacy">Privacy</a><a href="#/terms">Terms of Use</a><a href="#/security">Security &amp; Offline Data</a><button type="button" onClick={onInstall}>Install help</button><button type="button" onClick={onFeedback}><MessageSquareWarning size={15} aria-hidden="true" />Report a bug</button></nav><small>HashWing verifies files locally.</small></div></footer>;
+  return <footer><div className="trust-footer"><nav aria-label="Product information">{children}<a href="#/privacy">Privacy</a><a href="#/terms">Terms of Use</a><a href="#/security">Security &amp; Offline Data</a><button type="button" onClick={onInstall}>Install help</button><button type="button" onClick={onFeedback}><MessageSquareWarning size={15} aria-hidden="true" />Report a bug</button></nav><small>HashWing verifies files locally.</small></div></footer>;
 }
 
 export function LegalPage({ page, onBack, onClearCache, cacheStatus, onFeedback, onInstall, onRestartQuickStart }) {

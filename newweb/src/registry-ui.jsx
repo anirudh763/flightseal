@@ -325,6 +325,11 @@ export function registryLogout() {
 
 // ------------------------------------------------------------------ Trust: Company registry
 
+/** Command bar, flag on: "{company} registry" while signed in. Sign-in and sign-out stay on Trust. */
+export function RegistryBarLink({ href, onOpen }) {
+  const [, s] = useRegistry();
+  return s.claims && !s.needsSignIn ? <a className="registry-bar-link" href={href} onClick={onOpen} aria-label={`Company registry (${s.claims.org})`} title={s.claims.org}>Company registry</a> : null;
+}
 export function RegistryPanel() {
   const [r, s] = useRegistry();
   const [draft, setDraft] = useState('');

@@ -43,6 +43,17 @@ async function signup(page, email, password = 'pilot password safe 42', importGu
   if (await importBox.count()) await importBox.setChecked(importGuest);
   await page.getByRole('button', { name: 'Create account' }).last().click();
 }
+// Records and Samples sit behind the rail's "More tools" disclosure.
+async function clickNav(page, name) {
+  const nav = page.getByRole('navigation', { name: 'Primary navigation' });
+  const link = nav.getByRole('link', { name, exact: true });
+  if (!(await link.isVisible())) await nav.locator('.nav-more summary').click();
+  await link.click();
+}
+async function frontDoorAuth(page, mode) {
+  await page.locator('footer').getByRole('link', { name: 'Use a local profile' }).click();
+  if (mode === 'signup') await page.locator('#auth-main').getByRole('link', { name: 'Create account' }).click();
+}
 async function logout(page) {
   const menu = page.locator('.profile-menu');
   if (!(await menu.locator('summary').evaluate((node) => node.parentElement.open))) await menu.locator('summary').click();
@@ -69,53 +80,51 @@ try {
   page.on('console', (message) => { if (message.type() === 'error') errors.push(`console ${message.text()}`); });
   page.on('requestfailed', (request) => { if (['script', 'stylesheet', 'image', 'font'].includes(request.resourceType()) && !request.failure()?.errorText?.includes('ERR_ABORTED')) errors.push(`asset ${request.url()}`); });
 
-  await check('landing menus, live preview controls, reduced motion and mobile navigation', async () => {
+  // Changed on purpose (AC-51, R13): the editorial landing with mega menus and a timed preview is replaced by the front door.
+  await check('front door: identity, one value line, Seal files, Verify files, Try a sample; nothing on a timer; keyboard and mobile', async () => {
     await page.goto(url);
-    assert.match(await page.locator('#page-landing').innerText(), /Check the log/);
+    const main = page.locator('#main');
+    assert.equal(await page.locator('#page-landing').innerText(), 'HashWing');
+    assert.equal(await page.locator('.front-door-value').innerText(), 'Seal files on this device and let your client check them.');
+    assert.deepEqual(await main.getByRole('link').evaluateAll((links) => links.map((a) => [a.textContent, a.getAttribute('href')])),
+      [['Seal files', '#/app/protect'], ['Verify files', '#/app/verify'], ['Try a sample', '#/app/sandbox?sample=intact'], ['How checking works', '#/app/help']]);
+    assert.equal(await main.locator('.button.primary').count(), 1, 'one primary action');
+    assert.equal(await page.locator('ol, [aria-roledescription=carousel], .preview-stage').count(), 0, 'no numbered steps or preview carousel');
     assert.equal(await page.getByRole('link', { name: 'Pricing' }).count(), 0);
-    await assertNoOverflow(page, 'landing desktop');
-    await axe(page, 'landing 1440x900');
-    const initialPreview = await page.locator('.preview-controls [aria-pressed="true"]').innerText();
-    await page.waitForFunction((before) => document.querySelector('.preview-controls [aria-pressed="true"]')?.textContent !== before, initialPreview, { timeout: 7500 });
-    const features = page.getByRole('button', { name: 'Features' });
-    await features.click();
-    const panel = page.locator('#mega-features');
-    await panel.getByRole('link', { name: /Verify a log/ }).hover();
-    assert.equal(await panel.isVisible(), true, 'pointer movement into menu keeps it open');
-    await page.keyboard.press('Escape');
-    assert.equal(await features.getAttribute('aria-expanded'), 'false');
-    assert.equal(await page.evaluate(() => document.activeElement.textContent.trim()), 'Features');
-    await features.focus(); await page.keyboard.press('ArrowDown');
-    await page.waitForFunction(() => document.activeElement?.textContent.includes('Verify a log'));
-    assert.match(await page.evaluate(() => document.activeElement.innerText), /Verify a log/);
-    await page.keyboard.press('Escape');
-    await page.getByRole('button', { name: 'Show First failure preview' }).click();
-    await page.getByRole('button', { name: 'Pause previews' }).click();
-    await page.locator('.landing-hero-copy h1').click();
-    await page.mouse.move(10, 850);
-    await assert.rejects(page.waitForFunction(() => document.querySelector('.preview-controls [aria-pressed="true"]')?.textContent !== 'First failure', null, { timeout: 6500 }), /Timeout/);
-    assert.equal(await page.getByRole('button', { name: 'Show First failure preview' }).getAttribute('aria-pressed'), 'true');
+    for (const name of ['Privacy', 'Terms of Use', 'Security & Offline Data', 'Source', 'Use a local profile']) assert.equal(await page.getByRole('contentinfo').getByRole('link', { name, exact: true }).count(), 1, `footer keeps ${name}`);
+    const before = await page.locator('body').innerHTML();
+    await page.waitForTimeout(10000);
+    assert.equal(await page.locator('body').innerHTML(), before, 'nothing on the front door changes on a timer');
+    await assertNoOverflow(page, 'front door desktop');
+    await axe(page, 'front door 1440x900');
+    await page.keyboard.press('Tab');
+    assert.equal(await page.evaluate(() => document.activeElement.className), 'skip-link', 'Tab reaches the skip link first');
+    for (const name of ['Seal files', 'Verify files', 'Try a sample']) {
+      await page.keyboard.press('Tab');
+      assert.equal(await page.evaluate(() => document.activeElement.textContent), name);
+      assert.notEqual(await page.evaluate(() => getComputedStyle(document.activeElement).outlineStyle), 'none', `${name} shows its focus ring`);
+    }
+    await page.keyboard.press('Enter');
+    await waitResult(page); // Try a sample opens Samples, which runs the real engine
+    await page.goBack(); await page.waitForSelector('#page-landing');
     await page.screenshot({ path: join(EVIDENCE, 'landing-1440x900.png'), fullPage: true });
     const mobileContext = await browser.newContext({ viewport: { width: 375, height: 812 }, reducedMotion: 'reduce' });
     const mobile = await mobileContext.newPage(); await mobile.goto(url);
-    await assertNoOverflow(mobile, 'landing mobile'); await axe(mobile, 'landing 375x812');
-    assert.equal(await mobile.getByRole('button', { name: 'Autoplay disabled by reduced motion' }).isDisabled(), true);
-    await mobile.getByRole('button', { name: 'Menu' }).click();
-    await mobile.getByRole('button', { name: 'Trust / Docs' }).click();
-    assert.equal(await mobile.getByRole('link', { name: /Trust boundaries/ }).isVisible(), true);
+    await assertNoOverflow(mobile, 'front door mobile'); await axe(mobile, 'front door 375x812');
+    for (const box of await mobile.locator('#main a, footer a, footer button').evaluateAll((els) => els.filter((el) => !el.closest('p')).map((el) => [el.textContent, el.getBoundingClientRect().height]))) assert.ok(box[1] >= 44, `${box[0]} is ${box[1]}px tall`);
     await mobile.screenshot({ path: join(EVIDENCE, 'landing-375x812.png'), fullPage: true });
     await mobileContext.close();
   });
 
   await check('guest import is explicit and profile A restores only its own saved view', async () => {
     await page.goto(url);
-    await page.locator('.landing-persistent-actions').getByRole('button', { name: 'Launch Workspace' }).click(); await waitResult(page);
+    await page.getByRole('link', { name: 'Try a sample' }).click(); await waitResult(page);
     await page.locator('.profile-menu summary').click();
-    await page.getByRole('button', { name: 'Create local account' }).click();
+    await page.getByRole('button', { name: 'Create a local profile' }).click();
     const importBox = page.getByLabel(/Import this guest session/);
     assert.equal(await importBox.isChecked(), false);
     await signup(page, 'pilot@example.test', 'pilot password safe 42', true); await waitResult(page);
-    await page.getByRole('navigation', { name: 'Primary navigation' }).getByRole('link', { name: 'Records' }).click();
+    await clickNav(page, 'Records');
     const first = page.locator('.pagination').getByRole('button', { name: 'First' }); if (await first.isEnabled()) await first.click();
     await page.locator('.record-list li').nth(24).getByRole('button').click();
     await page.locator('.profile-menu summary').click();
@@ -130,12 +139,12 @@ try {
     assert.equal(JSON.stringify(storage).includes('public-key.txt'), false);
     assert.equal(JSON.stringify(storage).includes('pilot password safe 42'), false);
     await logout(page);
-    await page.locator('.landing-persistent-actions').getByRole('link', { name: 'Log in' }).click(); await login(page, 'pilot@example.test');
+    await frontDoorAuth(page, 'login'); await login(page, 'pilot@example.test');
     await page.waitForFunction(() => location.hash === '#/app/records?sample=intact&record=24', null, { timeout: 30000 });
     await page.waitForFunction(() => document.querySelector('#record-detail-title')?.textContent === 'Record 24', null, { timeout: 30000 });
     await waitResult(page);
     await logout(page);
-    await page.locator('.landing-persistent-actions').getByRole('link', { name: 'Log in' }).click(); await login(page, 'pilot@example.test', 'wrong password 1234');
+    await frontDoorAuth(page, 'login'); await login(page, 'pilot@example.test', 'wrong password 1234');
     assert.match(await page.getByRole('alert').innerText(), /does not match/);
     await page.locator('#auth-main').getByRole('link', { name: 'Create account' }).click();
     await signup(page, 'pilot@example.test');
@@ -151,7 +160,7 @@ try {
     assert.equal(registry.includes('pilot password safe 42'), false);
     assert.equal(registry.includes('reviewer password safe 42'), false);
     await logout(page);
-    await page.locator('.landing-persistent-actions').getByRole('link', { name: 'Log in' }).click(); await login(page, 'pilot@example.test');
+    await frontDoorAuth(page, 'login'); await login(page, 'pilot@example.test');
     await page.waitForFunction(() => location.hash === '#/app/records?sample=intact&record=24');
     await page.waitForFunction(() => document.querySelector('#record-detail-title')?.textContent === 'Record 24', null, { timeout: 30000 });
     await page.screenshot({ path: join(EVIDENCE, 'saved-view-restored-1440x900.png'), fullPage: true });
@@ -162,7 +171,7 @@ try {
     await page.waitForSelector('.receipt-overview');
     assert.equal(await page.locator('.commandbar h1').innerText(), 'Receipts');
     assert.equal(new URL(page.url()).search, ''); assert.match(await page.evaluate(() => location.hash), /sample=intact&record=19/); await assertNoOverflow(page, 'legacy receipts route');
-    await page.goto(url); await page.locator('.landing-persistent-actions').getByRole('link', { name: 'Create account' }).click();
+    await page.goto(url); await frontDoorAuth(page, 'signup');
     await signup(page, 'route@example.test', 'route password safe 42');
     await page.waitForFunction(() => location.hash.startsWith('#/app/sandbox'));
     await logout(page);
@@ -187,12 +196,12 @@ try {
   await check('cross-tab logout clears active profile state', async () => {
     const cancelContext = await browser.newContext({ serviceWorkers: 'block' });
     const pendingPage = await cancelContext.newPage();
-    await pendingPage.goto(url); await pendingPage.locator('.landing-persistent-actions').getByRole('link', { name: 'Create account' }).click();
+    await pendingPage.goto(url); await frontDoorAuth(pendingPage, 'signup');
     await signup(pendingPage, 'tabs@example.test', 'tabs password safe 42');
     await pendingPage.waitForFunction(() => location.hash.startsWith('#/app/sandbox'));
     const secondTab = await cancelContext.newPage(); await secondTab.goto(`${url}#/login`); await login(secondTab, 'tabs@example.test', 'tabs password safe 42');
     await secondTab.waitForFunction(() => location.hash.startsWith('#/app/sandbox'));
-    await pendingPage.getByRole('navigation', { name: 'Primary navigation' }).getByRole('link', { name: 'Samples' }).click();
+    await clickNav(pendingPage, 'Samples');
     let releaseFull;
     let startedResolve;
     const started = new Promise((resolve) => { startedResolve = resolve; });

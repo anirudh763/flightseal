@@ -1072,3 +1072,47 @@ input[type=datetime-local] { width: 100%; max-width: 320px; min-width: 0; min-he
 .unsaved-download { display: grid; gap: 8px; justify-items: start; }
 .unsaved-download p { margin: 0; }
 .registry-fingerprint { margin: 4px 0; }
+
+/* Release layout: page shell and front door (EXPERIENCE.md "Release layout, locked"). */
+/* The rail column is painted on the shell, so it reaches the bottom of a page taller than the window; the rail itself stays sticky. */
+@media (min-width: 769px) {
+  .app-shell:not(.canonical-page) { background: linear-gradient(90deg, #eaf0f7 0 219px, var(--line) 219px 220px, var(--canvas) 220px); }
+}
+/* Main column at most 1040px (plus its gutters), aligned with the command bar title. */
+.app-shell:not(.canonical-page) .page-wrap { max-width: calc(1040px + 32px); }
+.landing-page.front-door { display: flex; flex-direction: column; background: var(--canvas); background-image: none; }
+.front-door-main { flex: 1; display: grid; align-content: center; width: min(1040px + 2 * clamp(16px, 4vw, 48px), 100%); margin: 0; padding: 64px clamp(16px, 4vw, 48px); }
+.front-door-hero { display: grid; gap: 16px; justify-items: start; }
+.front-door-identity { display: flex; align-items: center; gap: 12px; }
+.front-door-identity .brand-mark { width: 40px; height: 40px; font-size: 20px; }
+.front-door-identity h1 { margin: 0; color: var(--ink); font-size: clamp(1.7rem, 3vw, 2.2rem); line-height: 1.15; letter-spacing: 0; }
+.front-door-value { max-width: 34em; margin: 0; color: var(--ink); font-size: 1.08rem; line-height: 1.5; }
+.front-door-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; margin-top: 8px; }
+.front-door-actions .button { min-width: 132px; text-decoration: none; }
+.front-door-actions .button:active:not(:disabled) { transform: translateY(1px); }
+.front-door-sample { display: inline-flex; align-items: center; min-height: 44px; min-width: 44px; color: var(--forest); font-weight: 600; text-decoration: underline; text-underline-offset: 3px; }
+.front-door-sample:hover { color: #194393; text-decoration-thickness: 2px; }
+.front-door-note { margin: 0; color: var(--muted); font-size: .86rem; line-height: 1.45; }
+.front-door-note a { color: var(--forest); text-decoration: underline; text-underline-offset: 3px; }
+.front-door .landing-footer { min-height: 0; padding: 4px clamp(16px, 4vw, 48px); border-top: 1px solid var(--line); background: var(--surface); }
+.front-door .landing-footer nav { margin-left: 0; flex-wrap: wrap; }
+.front-door .landing-footer + .trust-footer { padding-top: 0; border-top: 0; }
+@media (max-width: 480px) {
+  .front-door-main { padding: 40px 16px; align-content: start; }
+  .front-door-actions { display: grid; grid-template-columns: 1fr; width: 100%; }
+  .front-door-actions .button { width: 100%; }
+}
+@media (forced-colors: active) { .front-door-actions .button { border: 1px solid ButtonText; } }
+.system-handoff { margin: 16px 0 0; color: var(--muted); font-size: .86rem; }
+.system-handoff a { display: inline-flex; align-items: center; min-height: 44px; color: var(--forest); }
+/* AC-13: shell targets at least 44px. */
+.clear-session, .error-alert .button, .trust-footer nav a, .trust-footer nav button { min-height: 44px; }
+.help-layout .prose a.standalone-link { display: inline-flex; align-items: center; min-height: 44px; }
+.registry-bar-link { display: inline-flex; align-items: center; min-height: 44px; padding: 0 8px; color: var(--forest); font-size: 13px; font-weight: 600; }
+.app-shell:not(.canonical-page) .trust-footer { padding-left: 16px; padding-right: 16px; }
+@media (max-width: 768px) { .app-shell:not(.canonical-page) .trust-footer { padding-left: 10px; padding-right: 10px; } }
+/* The command bar holds only the title and the profile menu, so it stays one row at every width. */
+.app-shell:not(.canonical-page) .topbar.commandbar { flex-wrap: nowrap; }
+.app-shell:not(.canonical-page) .command-actions { display: flex; width: auto; justify-content: flex-end; }
+.registry-bar-link { display: inline-block; max-width: 40vw; line-height: 44px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+@media (forced-colors: active) { .nav a[aria-current=page] { border-left: 4px solid Highlight; font-weight: 700; } }

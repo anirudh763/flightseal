@@ -1,6 +1,6 @@
 import React, { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { createRoot } from 'react-dom/client';
-import { Activity, ArrowRight, Building2, Check, Copy, Download, Gauge, ChevronDown, CircleHelp, FileCheck2, FileLock2, FileUp, KeyRound, Mail, FlaskConical, List, LockKeyhole, LogIn, MapPin, Menu, Pause, Play, ShieldCheck, Stamp, UserRound, Video } from 'lucide-react';
+import { Activity, ArrowRight, Building2, Check, Copy, Download, Gauge, ChevronDown, CircleHelp, FileCheck2, FileLock2, KeyRound, Mail, FlaskConical, List, MapPin, Menu, ShieldCheck, Stamp, UserRound, Video } from 'lucide-react';
 import { hashFile, importFile, IMPORT_MAX_BYTES, VERIFY_MAX_BYTES, verifyFile, sealFile, SEAL_MAX_BYTES, recoverTemporaryOutputs } from '../../docs/wasm/client.mjs';
 import { compareFiles, encodeManifest, MANIFEST_LIMITS, MANIFEST_STATUS, manifestHandoverText, manifestRecordsBlob, newSalt, verifySealedManifest } from '../../docs/manifest.mjs';
 import { WEAK_KEY_MESSAGE, blobSource, checkReceipts, decodeReceipts, parseHex, parseReceipts, readRecord, scanLog, summarize, weakPublicKey } from '../../docs/verifier.js';
@@ -22,11 +22,11 @@ import { convertTelemetryFile, inspectCsvFile } from './telemetry-import.mjs';
 import { fileToRecords, handoverText, parseHandover, recordsToFile, RAW_MAX_BYTES } from '../../docs/rawfile.js';
 import { generateEd25519SigningKey, validateEd25519PrivateKey } from './signing-keys.mjs';
 import { createStoreZip } from './zip-store.mjs';
-import { deliverEarlyAccessRequest } from './early-access.mjs';
+import { FrontDoor, SkipLink } from './front-door.jsx';
 import { createEncryptedProfileBackup, inspectEncryptedProfileBackup, commitBackupRestore, previewBackupRestore } from './profile-backup.mjs';
 import { createSyncProvider } from './sync-provider.mjs';
 import { PINS_CHANGED, SOURCES, addTrustedCompany, fingerprintHex, formatFingerprint, listTrustedHistory, listTrustedKeys, markCompromised, pinTrustedKey, removeTrustedKey, trustForKey } from './trusted-keys.mjs';
-import { RegistryBoundary, RegistryPanel, SealedOnDevice, ShareRecordPanel, getRegistry, registryLogout, registryScope, registrySealStart, registrySealed, useRegistryTimeField, useRegistryUnsent } from './registry-ui.jsx';
+import { RegistryBarLink, RegistryBoundary, RegistryPanel, SealedOnDevice, ShareRecordPanel, getRegistry, registryLogout, registryScope, registrySealStart, registrySealed, useRegistryTimeField, useRegistryUnsent } from './registry-ui.jsx';
 import { BYTES_DIFFER, TRUST_KIND, composeNote, landingLine, manifestReport, parseLandingLine, parseNote, parseSealedLine, timeFields, toIsoFromLocal, trustLine } from './recipient-trust.mjs';
 
 const syncProvider = createSyncProvider({ supabaseUrl: import.meta.env.VITE_SUPABASE_URL, supabaseAnonKey: import.meta.env.VITE_SUPABASE_ANON_KEY });
@@ -38,9 +38,11 @@ function closeDisclosure(event) {
   event.preventDefault(); event.stopPropagation();
   event.currentTarget.open = false; event.currentTarget.querySelector('summary')?.focus();
 }
-const PRIMARY_NAV = [['protect', 'Seal & send', FileLock2], ['verify', 'Verify', ShieldCheck], ['records', 'Records', List], ['receipts', 'Receipts', Stamp], ['help', 'Trust', CircleHelp]];
-const MORE_NAV = [['sandbox', 'Samples', FlaskConical], ['video', 'Video', Video], ['benchmarks', 'Benchmarks', Gauge], ['system', 'System', Activity]];
+// Jobs joins between Verify and Trust when its page lands (plan packet 6).
+const PRIMARY_NAV = [['protect', 'Seal & send', FileLock2], ['verify', 'Verify', ShieldCheck], ['help', 'Trust', CircleHelp]];
+const MORE_NAV = [['records', 'Records', List], ['receipts', 'Receipts', Stamp], ['sandbox', 'Samples', FlaskConical], ['video', 'Video', Video], ['benchmarks', 'Benchmarks', Gauge], ['system', 'System', Activity]];
 const NAV = [...PRIMARY_NAV, ...MORE_NAV];
+const WORKBENCH_SCREENS = new Set(['verify', ...MORE_NAV.map(([key]) => key)]);
 const CANONICAL_NAV = [['overview','Overview',Gauge],['workbench','Workbench',FlaskConical],['reports','Reports',List],['settings','Settings',Activity]];
 const asBig = (value) => typeof value === 'bigint' ? value : BigInt(value ?? 0);
 const csvMappingSummary = (mapping) => Object.entries(mapping || {}).filter(([key, value]) => key.endsWith('Column') && value).map(([key, value]) => {
@@ -1478,7 +1480,7 @@ function App() {
       <div className="actions-row"><button type="button" className="button secondary" onClick={() => { setRescue(null); setDiscardAsk(false); setUnsavedAsk(null); }}>Delete it</button><button type="button" className="button secondary" onClick={() => setDiscardAsk(false)}>Keep it</button></div></>
       : <div className="actions-row"><button type="button" className="button secondary" onClick={() => setDiscardAsk(true)}>Discard</button></div>}
   </section>;
-  if (route.kind === 'landing') return <LandingPage notice={rescueNotice} key={privateResetVersion} onProtect={() => setHashRoute(routeHash('protect'))} onDemo={() => loadDemo(false)} onContinue={() => setHashRoute(routeHash('sandbox', { sample: currentSample || 'intact', record: selectedRecord }))} result={result} busy={busy} error={error} installKind={installKind} onInstall={installApp} onFeedback={() => setFeedbackDialogOpen(true)} installOpen={installDialogOpen} onInstallClose={() => setInstallDialogOpen(false)} feedbackOpen={feedbackDialogOpen} onFeedbackClose={() => setFeedbackDialogOpen(false)} route={route.route} />;
+  if (route.kind === 'landing') return <FrontDoor notice={rescueNotice} key={privateResetVersion} sampleHref={routeHash('sandbox', { sample: currentSample || 'intact' })} installKind={installKind} onInstall={installApp} onFeedback={() => setFeedbackDialogOpen(true)} installOpen={installDialogOpen} onInstallClose={() => setInstallDialogOpen(false)} feedbackOpen={feedbackDialogOpen} onFeedbackClose={() => setFeedbackDialogOpen(false)} route={route.route} />;
   if (route.kind === 'signup' || route.kind === 'login') return <AuthPage
     key={privateResetVersion}
     mode={route.kind}
@@ -1528,6 +1530,8 @@ function App() {
           syncStatus={syncProvider.status}
         />);
 
+  // AC-66: the session strip and source actions belong to Verify and the More tools pages only.
+  const hideWorkbenchStrip = canonicalPage ? canonicalPage !== 'workbench' || screen === 'protect' : !WORKBENCH_SCREENS.has(screen);
   const navLink = ([key, label, Icon]) => <a key={key} href={workspaceHref(key, { sample: currentSample, record: selectedRecord })} aria-current={(productMode ? canonicalPage : screen) === key ? 'page' : undefined} onClick={(e) => { if (e.button !== 0 || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return; e.preventDefault(); navigate(key); }}><Icon size={16} strokeWidth={1.8} aria-hidden="true" />{productMode && key === 'sandbox' ? 'Upload and seal' : label}</a>;
   return <div className={`app-shell${canonicalPage ? ` canonical-page canonical-${canonicalPage}` : ''}`}>
     <a className="skip-link" href="#main" onClick={(event) => { event.preventDefault(); document.getElementById('main')?.focus(); }}>Skip to content</a>
@@ -1545,13 +1549,11 @@ function App() {
     <header className="topbar commandbar">
       <h1 id={`page-${screen}`} tabIndex="-1">{pageTitle}</h1>
       <div className="command-actions">
-        <nav hidden={!!canonicalPage || activeSession?.kind === 'account'} className="workspace-persistent-actions" aria-label="Account and workspace"><a href="#/login">Log in</a><a href="#/signup">Create account</a></nav>
-
+        {__REGISTRY_URL__ && !canonicalPage && <RegistryBoundary><RegistryBarLink href={workspaceHref('help')} onOpen={(e) => { if (e.button !== 0 || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return; e.preventDefault(); navigate('help'); }} /></RegistryBoundary>}
         {!canonicalPage && screen !== 'settings' && profileControls}
-
       </div>
     </header>
-    <section hidden={(!!canonicalPage && canonicalPage!=='workbench') || screen === 'protect'} className="session-strip" aria-label="Current session">
+    <section hidden={hideWorkbenchStrip} className="session-strip" aria-label="Current session">
       <span id="session-file-name" className="session-name" title={selectedFileName || 'Choose a source or sealed log'}>{selectedFileName ? `Selected: ${selectedFileName}` : 'Choose a source or sealed log'}</span>
       {result && <span className="session-result-name">Checked: {result.label}</span>}
       {result && <button type="button" className="hash-copy" title={`Copy full chain head ${result.native.head}`} onClick={async () => { try { await navigator.clipboard.writeText(result.native.head); setOperationStatus('Chain head copied.'); } catch { setError('Clipboard access is unavailable. Select the full hash in the report.'); } }}><span>Copy hash</span><code>{`${result.native.head.slice(0, 10)}…${result.native.head.slice(-8)}`}</code></button>}
@@ -1559,7 +1561,7 @@ function App() {
     </section>
     <main id="main" className="page-wrap" tabIndex="-1">
       {rescueNotice}
-    <details hidden={(!!canonicalPage && canonicalPage!=='workbench') || screen === 'protect'} className="source-actions" open={screen === 'sandbox'} onKeyDown={closeDisclosure}><summary>Source and report actions</summary><div className="source-action-items">
+    <details hidden={hideWorkbenchStrip} className="source-actions" open={screen === 'sandbox'} onKeyDown={closeDisclosure}><summary>Source and report actions</summary><div className="source-action-items">
         <label className="command-file-wrap" htmlFor="workbench-file"><span className="visually-hidden">Choose source or sealed log</span><input id="workbench-file" ref={workbenchFileRef} className="command-file-input" type="file" accept=".fseal,.ulg,.tsv,.txt,.tlog,.csv,.json,application/octet-stream,text/plain,application/json,text/csv" disabled={!!busy} aria-label="Choose source or sealed log" aria-describedby="session-file-name" onChange={(e) => chooseWorkbenchFile(e.target.files?.[0] || null)} /></label>
         <button className="button secondary command-seal" type="button" onClick={() => { if (sealFileInput) runSeal(); else { sealPickerRef.current = true; workbenchFileRef.current?.click(); } }} disabled={!!busy}><FileCheck2 size={16} aria-hidden="true" />Seal new log</button>
         {result && <button className="button primary command-export" type="button" onClick={downloadPdf} disabled={!!busy}>Export PDF</button>}
@@ -1584,7 +1586,7 @@ function App() {
       </section>}
       {screen === 'settings' && <section aria-label="Workspace settings"><server-workspace view="settings" /><details className="report-details"><summary>Browser profiles and encrypted backups</summary>{profileControls}</details><details className="report-details trusted-companies-details"><summary>Trusted companies <ChevronDown size={17} aria-hidden="true" /></summary><TrustedCompanies /></details><SystemPage /></section>}
       {canonicalPage === 'workbench' && <server-workspace view="workbench" />}
-      {screen === 'system' && <SystemPage />}
+      {screen === 'system' && <><SystemPage /><p className="system-handoff">Raw MAVLink v1/v2 streams open in Mavframe, a separate tool. No file is sent. <a href="https://anirudh763.github.io/mavframe/" target="_blank" rel="noreferrer">Open Mavframe</a></p></>}
       {screen === 'benchmarks' && <BenchmarkPage />}
       {screen === 'not-found' && <section className="screen"><section className="panel empty-state" aria-labelledby="not-found-title"><h2 id="not-found-title">Page not found</h2><p>The address does not match a HashWing page.</p><button className="button primary" type="button" onClick={() => navigate('sandbox')}>Return to samples</button></section></section>}
 
@@ -1691,7 +1693,7 @@ function App() {
 
       {screen === 'video' && <section className="screen"><section className="panel"><div className="panel-head"><Video aria-hidden="true" size={18} /><h2>Local clip</h2></div><div className="panel-body video-grid"><label className="field-label" htmlFor="video-input">Video file</label><input id="video-input" type="file" accept="video/*" onChange={(e) => inspectVideo(e.target.files?.[0] || null)} /><video ref={videoRef} src={videoUrl || undefined} controls playsInline aria-label="Selected local video preview" onLoadedMetadata={(e) => { const media = e.currentTarget; const url = videoUrlRef.current; const metadata = { duration: media.duration, width: media.videoWidth, height: media.videoHeight }; if (!url || media.currentSrc !== url) return; setVideoInfo((v) => v && v.url === url ? { ...v, ...metadata, state: 'Browser metadata available. Codec identification is unknown.' } : v); }} onCanPlay={() => setVideoInfo((v) => v && ({ ...v, playable: true }))} onError={() => setVideoInfo((v) => v && ({ ...v, playable: false, state: 'The browser could not read metadata or play this stream. Codec identification is unknown.' }))} />{result && <div className="video-sync-controls"><p className="field-hint">Timestamps may be boot-relative. Alignment is a playback aid, not signed capture-time proof.</p><label className="field-label" htmlFor="video-record-range">Record</label><input id="video-record-range" type="range" min="0" max={Math.max(0, totalRows - 1)} value={Math.min(selectedRecord, Math.max(0, totalRows - 1))} disabled={totalRows < 2} onChange={(e) => { const next = Number(e.target.value); setSelectedRecord(next); setPage(Math.floor(next / PAGE_SIZE)); }} /><p><strong>Selected record {fmtBig(selectedRecord)}</strong>{selectedTelemetryPoint ? ` · telemetry from record ${fmtBig(selectedTelemetryPoint.record)} at ${fmtBig(selectedTelemetryPoint.timestampUs)} µs` : selectedTimestamp == null ? ' · timestamp unavailable' : ` · ${fmtBig(selectedTimestamp)} µs`}{selectedTelemetryPoint?.sourceOffset == null ? '' : ` · source byte ${selectedTelemetryPoint.sourceOffset}`}</p><p>Time base: {firstTimestamp == null ? 'unavailable' : `${fmtBig(firstTimestamp)} µs at first telemetry sample`}</p><label className="field-label" htmlFor="video-offset">Manual offset (seconds)</label><input id="video-offset" type="number" step="any" value={videoOffset} onChange={(e) => setVideoOffset(e.target.value)} /><button className="button primary" type="button" disabled={!videoInfo?.duration || selectedTimestamp == null || firstTimestamp == null} onClick={syncVideo}>Sync to record</button></div>}{videoInfo && <div className="video-meta" role="status"><strong>{videoInfo.name}</strong><span>{fmtBytes(videoInfo.size)}</span>{videoInfo.duration != null && <span>{Number.isFinite(videoInfo.duration) ? `${videoInfo.duration.toFixed(2)} seconds` : 'Duration unavailable'}</span>}{videoInfo.width && <span>{videoInfo.width} × {videoInfo.height} pixels</span>}<p>{videoInfo.state}</p>{videoInfo.syncMessage && <p>{videoInfo.syncMessage}</p>}<p>Video stays local. Codec is not inferred when unavailable.</p></div>}{!result && <p className="muted">Verify a log to align video.</p>}</div></section></section>}
 
-      {screen === 'help' && <section className="screen help-layout"><section className="panel trust-wide"><div className="panel-head"><Building2 aria-hidden="true" size={18} /><h2 id="trusted-companies-title">Trusted companies</h2></div><div className="panel-body"><TrustedCompanies /></div></section><section className="panel trust-wide"><div className="panel-head"><KeyRound aria-hidden="true" size={18} /><h2 id="your-signing-key-title">Your signing key</h2></div><div className="panel-body">{signingKeyControls}</div></section>{__REGISTRY_URL__ && <RegistryBoundary><RegistryPanel /></RegistryBoundary>}<section className="panel"><div className="panel-head"><CircleHelp aria-hidden="true" size={18} /><h2>Trust and limits</h2></div><div className="panel-body prose"><h3>Formats</h3><p>HashWing verifies .fseal logs, FlightSeal receipt v1 files, and supported PX4 ULog captures. Sealed output remains compatible with FlightSeal tools.</p><h3>Integrity and authenticity</h3><p>Sealing happens after download; it does not prove acquisition time or sensor truth. An intact chain confirms internal links only. A supplied public key is not automatically a trusted identity. Receipt v1 has no signed issue time. PX4 samples contain selected decoded records, not every byte of the original ULog. A chain head is not a whole-file SHA-256 digest.</p><h3>Independent witness</h3><p>Coverage reports how many records supplied receipts cover. Detecting a shortened or rebuilt log requires an independent holder to retain those receipts. Confirm the public key with that holder through another channel.</p><h3>Failures</h3><p>Verification stops at the first inconsistent record. A chain break identifies the first bad link, not every changed record. A torn tail may indicate an interrupted write. HashWing does not repair supplied files.</p><h3>Local handling</h3><p>Files are analyzed on this device. Save current run uploads the selected source, checked log, receipts and report to your private server workspace when available. Private signing keys and video are excluded. Exported verification reports contain verdicts, counts and hashes, not record payloads. The C++/OpenSSL WebAssembly engine checks the chain; a separate JavaScript index loads record details. Engine version appears in each report. The app shell and included samples are cached after online setup; the full PX4 sample is fetched separately and may not be available offline. This AI-assisted project requires human review of generated code and documentation.</p><h3>Reports</h3><p>PDF exports carry ordered heading and paragraph tags plus document language, but are not certified PDF/UA. The screen-reader workflow has not been validated; use the text report as the accessible reading alternative or JSON for structured data.</p><p><a href="https://github.com/anirudh763/flightseal" target="_blank" rel="noreferrer">Source and issue tracker</a></p></div></section><section className="panel limits-panel"><div className="panel-head"><h2>Limits</h2></div><div className="panel-body"><dl><dt>Verify file size</dt><dd>{fmtBytes(MAX_UI_BYTES)}</dd><dt>Native import limit</dt><dd>{fmtBytes(IMPORT_MAX_BYTES)}</dd><dt>Seal TSV/TXT source</dt><dd>{fmtBytes(SEAL_MAX_BYTES)}</dd><dt>Seal &amp; send file</dt><dd>{fmtBytes(RAW_MAX_BYTES)}</dd><dt>Manifest items</dt><dd>{MANIFEST_LIMITS.maxItems}</dd><dt>Manifest payload</dt><dd>64 KiB</dd><dt>CSV/JSON/.tlog conversion</dt><dd>16 MiB</dd><dt>Receipt text</dt><dd>4 MiB</dd><dt>Records per page</dt><dd>50</dd><dt>Telemetry plot</dt><dd>1,000 sampled points</dd><dt>Payload display</dt><dd>4 KiB per record</dd></dl></div></section></section>}
+      {screen === 'help' && <section className="screen help-layout"><section className="panel trust-wide"><div className="panel-head"><Building2 aria-hidden="true" size={18} /><h2 id="trusted-companies-title">Trusted companies</h2></div><div className="panel-body"><TrustedCompanies /></div></section><section className="panel trust-wide"><div className="panel-head"><KeyRound aria-hidden="true" size={18} /><h2 id="your-signing-key-title">Your signing key</h2></div><div className="panel-body">{signingKeyControls}</div></section>{__REGISTRY_URL__ && <RegistryBoundary><RegistryPanel /></RegistryBoundary>}<section className="panel"><div className="panel-head"><CircleHelp aria-hidden="true" size={18} /><h2>Trust and limits</h2></div><div className="panel-body prose"><h3>Formats</h3><p>HashWing verifies .fseal logs, FlightSeal receipt v1 files, and supported PX4 ULog captures. Sealed output remains compatible with FlightSeal tools.</p><h3>Integrity and authenticity</h3><p>Sealing happens after download; it does not prove acquisition time or sensor truth. An intact chain confirms internal links only. A supplied public key is not automatically a trusted identity. Receipt v1 has no signed issue time. PX4 samples contain selected decoded records, not every byte of the original ULog. A chain head is not a whole-file SHA-256 digest.</p><h3>Independent witness</h3><p>Coverage reports how many records supplied receipts cover. Detecting a shortened or rebuilt log requires an independent holder to retain those receipts. Confirm the public key with that holder through another channel.</p><h3>Failures</h3><p>Verification stops at the first inconsistent record. A chain break identifies the first bad link, not every changed record. A torn tail may indicate an interrupted write. HashWing does not repair supplied files.</p><h3>Local handling</h3><p>Files are analyzed on this device. Save current run uploads the selected source, checked log, receipts and report to your private server workspace when available. Private signing keys and video are excluded. Exported verification reports contain verdicts, counts and hashes, not record payloads. The C++/OpenSSL WebAssembly engine checks the chain; a separate JavaScript index loads record details. Engine version appears in each report. The app shell and included samples are cached after online setup; the full PX4 sample is fetched separately and may not be available offline. This AI-assisted project requires human review of generated code and documentation.</p><h3>Reports</h3><p>PDF exports carry ordered heading and paragraph tags plus document language, but are not certified PDF/UA. The screen-reader workflow has not been validated; use the text report as the accessible reading alternative or JSON for structured data.</p><p><a className="standalone-link" href="https://github.com/anirudh763/flightseal" target="_blank" rel="noreferrer">Source and issue tracker</a></p></div></section><section className="panel limits-panel"><div className="panel-head"><h2>Limits</h2></div><div className="panel-body"><dl><dt>Verify file size</dt><dd>{fmtBytes(MAX_UI_BYTES)}</dd><dt>Native import limit</dt><dd>{fmtBytes(IMPORT_MAX_BYTES)}</dd><dt>Seal TSV/TXT source</dt><dd>{fmtBytes(SEAL_MAX_BYTES)}</dd><dt>Seal &amp; send file</dt><dd>{fmtBytes(RAW_MAX_BYTES)}</dd><dt>Manifest items</dt><dd>{MANIFEST_LIMITS.maxItems}</dd><dt>Manifest payload</dt><dd>64 KiB</dd><dt>CSV/JSON/.tlog conversion</dt><dd>16 MiB</dd><dt>Receipt text</dt><dd>4 MiB</dd><dt>Records per page</dt><dd>50</dd><dt>Telemetry plot</dt><dd>1,000 sampled points</dd><dt>Payload display</dt><dd>4 KiB per record</dd></dl></div></section></section>}
       {(!canonicalPage || canonicalPage === 'settings') && (offlineStatus || waitingUpdate || installKind !== 'none') && <details className="install-tools" onKeyDown={closeDisclosure}><summary>Offline and installation</summary><section className="offline-controls" aria-label="Offline and installation controls"><p className="offline-note" role="status">{offlineStatus || (offlineReady ? 'Offline verifier is ready on this device.' : 'Offline use needs a one-time online preparation.')}</p><div className="offline-control-actions"><button type="button" className="button secondary" onClick={prepareOffline}>Prepare offline</button>{waitingUpdate && <button type="button" className="button secondary" onClick={activateWaitingUpdate}>Apply safe update</button>}<button type="button" className="button secondary" onClick={installApp}>{installKind === 'ios' ? 'Add to Home Screen help' : installPrompt ? 'Install HashWing' : 'Install help'}</button><button type="button" className="text-action" onClick={() => setFeedbackDialogOpen(true)}>Report a bug</button></div></section></details>}
     </main>
     <FooterLinks onFeedback={() => setFeedbackDialogOpen(true)} onInstall={installApp} />
@@ -1700,172 +1702,6 @@ function App() {
     <ShareDialog key={`share-${privateResetVersion}`} isOwnerCurrent={() => authEpochRef.current === renderedAuthEpoch} open={shareDialogOpen} onClose={() => setShareDialogOpen(false)} summary={shareSummary} shareUrl={shareUrl} onShare={async (data) => { if (!(await invokeNativeShare(data))) throw new Error('Native sharing is unavailable.'); }} />
     </div>
   </div>;
-}
-
-const LANDING_MENUS = [
-  { id: 'features', label: 'Features', columns: [
-    [['Verify a log', 'Check chain integrity and inspect the first failure.', '/app/verify', ShieldCheck], ['Seal after download', 'Create a local hash chain and portable receipts.', '/app/sandbox', FileCheck2]],
-    [['Inspect records', 'Browse indexed records and selected details.', '/app/records', List], ['Review receipts', 'Check signatures and record coverage separately.', '/app/receipts', Stamp]],
-    [['Align local video', 'Use record timestamps as a playback aid.', '/app/video', Video], ['Trust and limits', 'Read what the evidence does and does not establish.', '/app/help', CircleHelp]],
-  ] },
-  { id: 'use-cases', label: 'Use Cases', columns: [
-    [['After a flight', 'Seal a downloaded log without claiming capture-time proof.', '/app/sandbox', FileCheck2], ['Independent review', 'Hand off a log, receipts and public key.', '/app/receipts', Stamp]],
-    [['Changed file', 'Locate the first inconsistent record and byte offset.', '/app/verify', ShieldCheck], ['Local inspection', 'Review selected records and supported telemetry.', '/app/records', MapPin]],
-  ] },
-  { id: 'how-it-works', label: 'How It Works', columns: [
-    [['Choose a source', 'Work with a local .fseal log, ULog or timestamped TSV.', '/app/verify', FileUp], ['Check the chain', 'The browser runs the native C++ verifier locally.', '/app/verify', ShieldCheck]],
-    [['Keep portable evidence', 'Export reports and retain receipts with a separate witness.', '/app/receipts', ArrowRight]],
-  ] },
-  { id: 'trust', label: 'Trust / Docs', columns: [
-    [['Trust boundaries', 'Integrity is separate from sensor truth and key identity.', '/app/help', CircleHelp], ['Source and security', 'Review source, format contracts and reporting guidance.', 'https://github.com/anirudh763/flightseal', LockKeyhole]],
-  ] },
-  { id: 'tools', label: 'More Tools', columns: [SUITE_LINKS.map((tool) => [
-    `${tool.name}${tool.state === 'unavailable' ? ' · currently unavailable (HTTP 404)' : ''}`,
-    tool.state === 'unavailable' ? 'Configured destination; last checked 2026-11-15 and returned 404.' : 'Open this separate tool. No files or account data are transferred.',
-    tool.href,
-    ArrowRight,
-    tool.state,
-  ])] },
-];
-
-function SkipLink({ targetId = 'main' }) {
-  return <a className="skip-link" href={`#${targetId}`} onClick={(event) => { event.preventDefault(); document.getElementById(targetId)?.focus(); }}>{'Skip to content'}</a>;
-}
-
-function LandingPage({ notice, onProtect, onDemo, onContinue, result, busy, error, installKind, onInstall, onFeedback, installOpen, onInstallClose, feedbackOpen, onFeedbackClose, route }) {
-  const [openMenu, setOpenMenu] = useState(null);
-  const [mobileOpen, setMobileOpen] = useState(false);
-  const [slide, setSlide] = useState(0);
-  const [paused, setPaused] = useState(false);
-  const [pointerInside, setPointerInside] = useState(false);
-  const [focusInside, setFocusInside] = useState(false);
-  const [reducedMotion, setReducedMotion] = useState(() => matchMedia('(prefers-reduced-motion: reduce)').matches);
-  const navRef = useRef(null);
-  const menuButtonRefs = useRef(new Map());
-  const clickedMenuRef = useRef(null);
-  const previewRef = useRef(null);
-  const slides = [
-    { title: 'Selected source', text: 'Included 800-record demonstration log', kind: 'source', label: 'intact.fseal', meta: '107 KiB · local file', state: 'Ready to inspect' },
-    { title: 'Separate verdicts', text: 'Integrity, receipt signatures and coverage are distinct checks.', kind: 'verdict', label: 'INTACT', meta: 'Signature checked · 800 covered · 0 uncovered', state: 'Included demonstration fixture' },
-    { title: 'First failure', text: 'A changed file reports the first inconsistent record and byte offset.', kind: 'failure', label: 'First failure', meta: 'Record · offset · expected · actual', state: 'Values come from the selected file' },
-    { title: 'Portable handoff', text: 'Keep the log, receipts and public key together for another reviewer.', kind: 'handoff', label: 'Evidence bundle', meta: 'Log · receipts · public key · text / JSON / PDF', state: 'No cloud custody or legal certification' },
-  ];
-
-  useEffect(() => {
-    const query = matchMedia('(prefers-reduced-motion: reduce)');
-    const update = () => setReducedMotion(query.matches);
-    query.addEventListener?.('change', update);
-    return () => query.removeEventListener?.('change', update);
-  }, []);
-  useEffect(() => {
-    if (paused || pointerInside || focusInside || reducedMotion) return undefined;
-    const timer = setInterval(() => setSlide((current) => (current + 1) % slides.length), 6000);
-    return () => clearInterval(timer);
-  }, [paused, pointerInside, focusInside, reducedMotion, slides.length]);
-  useEffect(() => {
-    const close = (event) => {
-      if (event.key !== 'Escape') return;
-      if (openMenu) {
-        event.preventDefault();
-        const button = menuButtonRefs.current.get(openMenu);
-        setOpenMenu(null);
-        button?.focus();
-      } else if (mobileOpen) {
-        event.preventDefault(); setMobileOpen(false); document.querySelector('.landing-mobile-toggle')?.focus();
-      }
-    };
-    addEventListener('keydown', close);
-    return () => removeEventListener('keydown', close);
-  }, [openMenu, mobileOpen]);
-
-  const renderMenu = (menu) => <div className="landing-nav-item" key={menu.id} onMouseEnter={() => setOpenMenu(menu.id)}>
-    <button ref={(node) => node && menuButtonRefs.current.set(menu.id, node)} type="button" className="landing-nav-trigger" aria-expanded={openMenu === menu.id} aria-controls={`mega-${menu.id}`} onKeyDown={(event) => { if (event.key === 'ArrowDown') { event.preventDefault(); setOpenMenu(menu.id); requestAnimationFrame(() => document.querySelector(`#mega-${menu.id} a`)?.focus()); } }} onClick={() => { if (openMenu === menu.id && clickedMenuRef.current === menu.id) { clickedMenuRef.current = null; setOpenMenu(null); } else { clickedMenuRef.current = menu.id; setOpenMenu(menu.id); } }}>{menu.label}<ChevronDown size={14} aria-hidden="true" /></button>
-    <div id={`mega-${menu.id}`} className="mega-menu" hidden={openMenu !== menu.id}>
-      {menu.columns.map((column, columnIndex) => <div className="mega-column" key={`${menu.id}-${columnIndex}`}>{column.map(([title, description, href, Icon, state]) => { const external = href.startsWith('http'); const target = external ? href : `#${href}`; const unavailable = state === 'unavailable'; return <a key={title} href={target} aria-disabled={unavailable ? 'true' : undefined} target={external && !unavailable ? '_blank' : undefined} rel={external && !unavailable ? 'noreferrer' : undefined} className={`mega-link${unavailable ? ' is-unavailable' : ''}`} onClick={(event) => { if (unavailable) { event.preventDefault(); return; } setOpenMenu(null); setMobileOpen(false); }}><Icon size={17} aria-hidden="true" /><span><strong>{title}</strong><small>{description}</small></span><ArrowRight size={14} aria-hidden="true" /></a>; })}</div>)}
-    </div>
-  </div>;
-
-  return <div className="landing-page">
-    <SkipLink />
-    <header className="landing-header" onMouseLeave={() => { setOpenMenu(null); clickedMenuRef.current = null; }}>
-      <a className="landing-brand" href="#/"><span className="brand-mark" aria-hidden="true">H</span><span>HashWing</span></a>
-      <button className="landing-mobile-toggle" type="button" aria-expanded={mobileOpen} aria-controls="landing-navigation" onClick={() => setMobileOpen((value) => !value)}><Menu size={18} aria-hidden="true" />Menu</button>
-      <nav id="landing-navigation" className={`landing-navigation${mobileOpen ? ' is-open' : ''}`} aria-label="Main navigation" ref={navRef}>
-        <div className="landing-menu-items">{LANDING_MENUS.map(renderMenu)}</div>
-        <div className="landing-actions"><button className="landing-demo" type="button" onClick={onDemo}>Run real verification <ArrowRight size={15} aria-hidden="true" /></button></div>
-      </nav>
-      <nav className="landing-persistent-actions" aria-label="Account and workspace"><a href="#/login">Log in</a><a href="#/signup">Create account</a><button type="button" onClick={onContinue}>Launch Workspace</button></nav>
-    </header>
-    <main id="main" className="landing-main" tabIndex="-1">
-      {notice}
-      <section className="landing-hero" aria-labelledby="page-landing">
-        <div className="landing-hero-copy"><p className="landing-kicker">Local flight log verification</p><h1 id="page-landing" tabIndex="-1">Check the log.<br />Keep the evidence.</h1><p className="landing-lede">Seal a downloaded flight log, verify its chain, and hand off receipts for independent review.</p><div className="landing-hero-actions"><button className="landing-demo" type="button" onClick={onProtect}>Seal a flight log <ArrowRight size={16} aria-hidden="true" /></button><button className="landing-secondary-button" type="button" onClick={onDemo} disabled={!!busy}>Run real verification</button><a href="#/signup" className="landing-secondary">Create account</a><button type="button" className="landing-secondary-button" onClick={onContinue}>Launch Workspace</button></div><p className="landing-local-note"><LockKeyhole size={14} aria-hidden="true" />Files are analyzed locally. Uploads require Save current run; private keys and video stay in this tab.</p></div>
-        {busy && <p role="status" className="hero-verify-status">{busy}</p>}
-        {error && <p role="alert" className="hero-verify-error">{error}</p>}
-        {result && <section className="hero-actual-result" aria-label="Live verification result"><div><span>Actual C++ / OpenSSL / WebAssembly result</span><strong>{humanStatus(result.overallVerdict || result.native.verdict)[0]}</strong></div><dl><div><dt>Chain</dt><dd>{humanStatus(result.native.status)[0]}</dd></div><div><dt>Receipts</dt><dd>{result.needsTrustedKey ? 'Signature unchecked' : result.receiptChecks.length ? 'Checked against bundled demo key' : 'Not supplied'}</dd></div><div><dt>Coverage</dt><dd>{fmtBig(result.receiptCoverage?.covered ?? result.native.covered)} / {fmtBig(result.native.records)}</dd></div></dl><p>Integrity does not establish sensor truth, capture time, identity or independent custody.</p><button className="button secondary" type="button" onClick={onContinue}>Inspect records and export <ArrowRight size={15} aria-hidden="true" /></button></section>}
-        <div className="preview-stage" ref={previewRef} aria-label="HashWing product preview" onMouseEnter={() => setPointerInside(true)} onMouseLeave={() => setPointerInside(false)} onFocusCapture={() => setFocusInside(true)} onBlurCapture={(event) => { if (!event.currentTarget.contains(event.relatedTarget)) setFocusInside(false); }}>
-          <div className="preview-stage-head"><span>Product preview</span><span className="fixture-tag">Included fixture</span></div>
-          <div className="preview-slides">{slides.map((item, index) => <article key={item.kind} className={`preview-slide preview-${item.kind}`} hidden={index !== slide} aria-hidden={index !== slide}>
-            <div className="preview-window"><div className="preview-window-top"><span className="preview-glyph">H</span><span>HashWing <small>/ {item.title}</small></span><span className="preview-local">Local</span></div>
-              {item.kind === 'source' && <div className="preview-source"><div><span>Selected source</span><strong>{item.label}</strong><small>{item.meta}</small></div><span className="preview-source-state"><Check size={14} aria-hidden="true" /> {item.state}</span></div>}
-              {item.kind === 'verdict' && <div className="preview-verdict"><div className="preview-result"><span className="result-check"><Check size={17} aria-hidden="true" /></span><span><strong>{item.label}</strong><small>{item.state}</small></span></div><div className="preview-checks"><div><span>Chain integrity</span><b>Intact</b></div><div><span>Receipt signature</span><b>Checked</b></div><div><span>Receipt coverage</span><b>800 / 800</b></div></div><small className="preview-note">{item.meta}</small></div>}
-              {item.kind === 'failure' && <div className="preview-failure"><span className="preview-alert">First failure</span><p>{item.text}</p><dl><dt>Record</dt><dd>From selected file</dd><dt>Byte offset</dt><dd>From selected file</dd><dt>Expected / actual</dt><dd>Shown in report</dd></dl><small>{item.state}</small></div>}
-              {item.kind === 'handoff' && <div className="preview-handoff"><div className="handoff-mark"><Stamp size={22} aria-hidden="true" /><span>{item.label}</span></div><div className="handoff-files"><span>flight.fseal</span><span>flight.receipts</span><span>public-key.txt</span></div><div className="handoff-actions"><span>Download text</span><span>Download JSON</span><span>Export PDF</span></div><small>{item.state}</small></div>}
-            </div>
-            <p className="preview-caption">{item.text}</p>
-          </article>)}</div>
-          <div className="preview-controls"><div role="group" aria-label="Choose product preview">{slides.map((item, index) => <button key={item.kind} type="button" aria-pressed={slide === index} aria-label={`Show ${item.title} preview`} onClick={() => setSlide(index)}>{item.title}</button>)}</div><button className="preview-pause" type="button" disabled={reducedMotion} aria-label={reducedMotion ? 'Autoplay disabled by reduced motion' : paused ? 'Play previews' : 'Pause previews'} onClick={() => setPaused((value) => !value)}>{paused ? <Play size={14} aria-hidden="true" /> : <Pause size={14} aria-hidden="true" />}{reducedMotion ? 'Reduced motion' : paused ? 'Play' : 'Pause'}</button></div>
-        </div>
-      </section>
-      <section className="landing-proof" aria-label="What HashWing checks"><article><h2>Integrity</h2><p>Verify linked records and locate the first failure.</p></article><article><h2>Receipt signatures</h2><p>Check a supplied signature against a key you trust.</p></article><article><h2>Coverage</h2><p>See which records receipts cover and which remain uncovered.</p></article><article><h2>Handoff</h2><p>Keep portable logs, receipts, keys and readable reports.</p></article></section>
-      <section className="mavframe-handoff" aria-labelledby="mavframe-handoff-title"><div><span className="landing-kicker">Separate tool · no file transfer</span><h2 id="mavframe-handoff-title">Continue with a raw telemetry capture</h2><p>Mavframe accepts .tlog and raw MAVLink v1/v2 streams. HashWing accepts .fseal, PX4 .ulg, timestamped TSV/TXT, CSV, JSON and MAVLink .tlog. These formats are not interchangeable. To inspect a capture in Mavframe, open it there separately; no local file is sent in this link.</p></div><a href="https://anirudh763.github.io/mavframe/" target="_blank" rel="noreferrer">Open Mavframe <ArrowRight size={15} aria-hidden="true" /></a></section>
-      <section className="landing-how" aria-labelledby="how-title"><div><span className="landing-kicker">A local workflow</span><h2 id="how-title">From download to review</h2></div><ol><li><span>Choose</span><p>Open a flight log from this device, or start with the included sample.</p></li><li><span>Verify or seal</span><p>Check an existing chain, or seal a downloaded TSV after the flight.</p></li><li><span>Hand off</span><p>Share the log, receipts and public key with a reviewer through a separate channel.</p></li></ol></section>
-      <section className="landing-trust" aria-labelledby="trust-title"><div><span className="landing-kicker">Trust boundaries</span><h2 id="trust-title">Integrity has a clear limit.</h2></div><p>An intact chain does not prove sensor truth, acquisition time, legal certification or independent custody. A supplied public key is not automatically a trusted identity. HashWing runs locally and has no cloud receipt service.</p><a href="/flightseal/console/#/app/help">Read trust and format details <ArrowRight size={15} aria-hidden="true" /></a></section>
-      <section className="team-access" aria-labelledby="team-access-title"><div><span className="landing-kicker">Optional · prospective service</span><h2 id="team-access-title">Team &amp; Cloud Early Access</h2><p>Local verification remains free. This form is for interest in possible future team workflows; no hosted service or waitlist is active unless a remote endpoint is configured.</p></div><TeamAccessForm /></section>
-    </main>
-    <FooterLinks onFeedback={onFeedback} onInstall={onInstall}>
-    <div className="landing-footer"><a className="landing-brand" href="#/"><span className="brand-mark" aria-hidden="true">H</span><span>HashWing</span></a><span>Free local tools · No paid tiers</span><nav aria-label="Footer links"><a href="#/app/help">Trust and docs</a><a href="https://github.com/anirudh763/flightseal" target="_blank" rel="noreferrer">Source</a><a href="#/login">Log in</a></nav></div>
-    </FooterLinks>
-    <InstallGuide open={installOpen} onClose={onInstallClose} ios={installKind === 'ios'} />
-    <FeedbackDialog open={feedbackOpen} onClose={onFeedbackClose} route={route} />
-  </div>;
-}
-
-function TeamAccessForm() {
-  const [email, setEmail] = useState('');
-  const [teamSize, setTeamSize] = useState('');
-  const [useCase, setUseCase] = useState('');
-  const [status, setStatus] = useState('');
-  const [pending, setPending] = useState(false);
-  const [requestError, setRequestError] = useState('');
-  const endpoint = typeof __EARLY_ACCESS_ENDPOINT__ === 'undefined' ? '' : __EARLY_ACCESS_ENDPOINT__;
-  const submit = async (event) => {
-    event.preventDefault(); setStatus(''); setRequestError('');
-    if (!event.currentTarget.reportValidity()) return;
-    const request = { email: email.trim(), teamSize, useCase: useCase.trim() };
-    if (!endpoint || !navigator.onLine) {
-      try {
-        localStorage.setItem('flightseal_early_access_draft_v1', JSON.stringify({ ...request, savedAt: new Date().toISOString(), delivery: 'local-draft-only' }));
-        setStatus('Local draft saved in this browser. No request was sent or remotely received.');
-      } catch { setRequestError('Could not save this local draft. Browser storage may be blocked or full.'); }
-      return;
-    }
-    setPending(true);
-    try {
-      await deliverEarlyAccessRequest(endpoint, request);
-      setStatus('Request received by the configured endpoint.');
-    } catch (cause) { setRequestError(`${cause?.message || 'Could not reach the configured endpoint.'} Your request was not queued; retry explicitly when online or save a local draft.`); }
-    finally { setPending(false); }
-  };
-  return <form className="team-access-form" onSubmit={submit}>
-    <label htmlFor="team-email">Email</label><input id="team-email" type="email" autoComplete="email" maxLength="254" required value={email} onChange={(event) => setEmail(event.target.value)} />
-    <label htmlFor="team-size">Team size</label><select id="team-size" required value={teamSize} onChange={(event) => setTeamSize(event.target.value)}><option value="">Choose a range</option><option>1–5</option><option>6–20</option><option>21–100</option><option>101+</option></select>
-    <label htmlFor="team-use-case">Use case</label><textarea id="team-use-case" maxLength="1000" rows="3" required value={useCase} onChange={(event) => setUseCase(event.target.value)} />
-    <p className="team-access-privacy">{endpoint ? 'On submit, these three fields go to the configured public form endpoint. No logs or files are sent.' : 'No request endpoint is configured. Submit saves only a draft in this browser; it does not enroll you in a waitlist.'} Analytics are disabled.</p>
-    {status && <p role="status" className="team-access-status">{status}</p>}{requestError && <p role="alert" className="team-access-error">{requestError}</p>}
-    <button className="button secondary" type="submit" disabled={pending}>{pending ? 'Sending request…' : endpoint ? 'Send early access request' : 'Save local draft'}</button>
-    {status && !endpoint && <button className="text-action" type="button" onClick={() => { localStorage.removeItem('flightseal_early_access_draft_v1'); setStatus('Local draft removed.'); }}>Remove local draft</button>}
-  </form>;
 }
 
 function AuthPage({ mode, returnTo, guestCanImport, currentSampleName, outputNeedsAck, unsavedControl, onReturnToWorkspace, expectedEpoch, isCurrent, onAuthAttempt, onLogin, onSignup, onComplete, onDemo, installKind, onInstall, onFeedback, installOpen, onInstallClose, feedbackOpen, onFeedbackClose, route }) {
@@ -2087,7 +1923,7 @@ function EncryptedBackupControls({ profileId, isOwnerCurrent }) {
     <h2>Encrypted backup</h2>
     <label className="field-label" htmlFor="backup-passphrase">Backup passphrase</label>
     <input id="backup-passphrase" type="password" autoComplete="new-password" minLength={12} maxLength={128} value={passphrase} onChange={(event) => { changeInput(); setPassphrase(event.target.value); }} placeholder="12–128 characters" />
-    <button type="button" disabled={busy || !profileId || passphrase.length < 12} onClick={exportBackup}>Download encrypted backup</button>
+    {profileId && <button type="button" disabled={busy || passphrase.length < 12} onClick={exportBackup}>Download encrypted backup</button>}
     <label className="field-label" htmlFor="backup-file">Restore encrypted backup</label>
     <input id="backup-file" type="file" accept="application/vnd.flightseal.profile-backup+json,.json" onChange={(event) => { changeInput(); setFile(event.target.files?.[0] || null); }} />
     <button type="button" disabled={busy || !file || passphrase.length < 12} onClick={inspectBackup}>Check backup and preview</button>
@@ -2099,14 +1935,17 @@ function EncryptedBackupControls({ profileId, isOwnerCurrent }) {
 
 function ProfileMenu({ isCurrent, session, profile, currentSample, savedContext, savedContextError, hasUnacknowledgedOutput, unsavedControl, message, onSave, onRestore, onDeleteSaved, onRemoveProfile, onLogout, onNavigateAuth, syncStatus }) {
   const menuRef = useRef(null);
-  const email = profile?.email || (session?.kind === 'guest' ? 'Demo session' : 'Workspace access');
+  const account = session?.kind === 'account';
+  const email = profile?.email || 'Local profile';
+  // AC-61: one menu, "Profile on this device". It shows the open profile's email; company sign-in lives only on Trust.
   return <details className="profile-menu" ref={menuRef} onKeyDown={closeDisclosure}>
-    <summary aria-label={session?.kind === 'account' ? `Profile menu for ${email}` : email}><UserRound size={15} aria-hidden="true" /><span>{email}</span><ChevronDown size={14} aria-hidden="true" /></summary>
+    <summary aria-label={account ? `Profile on this device: ${email}` : 'Profile on this device'}><UserRound size={15} aria-hidden="true" /><span>{account ? email : 'Profile on this device'}</span><ChevronDown size={14} aria-hidden="true" /></summary>
     <div className="profile-menu-panel">
-      <p className="profile-menu-identity"><strong>{email}</strong><span>{session?.kind === 'account' ? 'Local profile · this device only' : session?.kind === 'guest' ? 'Separate guest session' : 'No active session'}</span></p>
-      <EncryptedBackupControls isOwnerCurrent={isCurrent} profileId={session?.kind === 'account' ? profile?.id : null} />
+      <p className="profile-menu-identity"><strong>{account ? email : session?.kind === 'guest' ? 'Demo session' : 'Guest'}</strong><span>{account ? 'Local profile' : session?.kind === 'guest' ? 'Separate from every local profile' : 'No local profile open'}</span></p>
+      <p className="profile-menu-note">Profiles live in this browser. They are not company accounts.</p>
+      {account && <EncryptedBackupControls isOwnerCurrent={isCurrent} profileId={profile?.id} />}
       <p className="profile-menu-note">Cloud sync: {syncStatus === 'configured' ? 'connector configured; local profiles are not cloud credentials' : 'not configured'}. No local logs or keys are uploaded.</p>
-      {session?.kind === 'account' ? <>
+      {account ? <>
         <button type="button" onClick={onSave} disabled={!currentSample || !!savedContextError}>Save included-sample view</button>
         <button type="button" onClick={onRestore} disabled={!savedContext}>Restore saved view{savedContext ? ` · ${savedContext.screen}` : ''}</button>
         {(savedContext || savedContextError) && <button type="button" onClick={onDeleteSaved}>{savedContextError ? 'Remove damaged saved view' : 'Remove saved view'}</button>}
@@ -2116,11 +1955,11 @@ function ProfileMenu({ isCurrent, session, profile, currentSample, savedContext,
         {message && <p className="profile-menu-message" role="status">{message}</p>}
         <button type="button" className="profile-logout" disabled={hasUnacknowledgedOutput} onClick={onLogout}>Log out</button><button type="button" className="profile-remove" disabled={hasUnacknowledgedOutput} onClick={onRemoveProfile}>Remove local profile and saved view</button>
       </> : <>
-        {session?.kind === 'guest' && <p className="profile-menu-note">Guest state is separate from every local profile.</p>}
-        <button type="button" onClick={() => onNavigateAuth('signup')}>Create local account</button>
-        <button type="button" onClick={() => onNavigateAuth('login')}>Log in</button>
+        <button type="button" onClick={() => onNavigateAuth('login')}>Use a local profile</button>
+        <button type="button" onClick={() => onNavigateAuth('signup')}>Create a local profile</button>
         {session?.kind === 'guest' && hasUnacknowledgedOutput && <><p className="profile-menu-message" role="alert">This tab has work that is not saved yet. Download it before you end the session.</p>{unsavedControl}</>}
         {session?.kind === 'guest' && <button type="button" className="profile-logout" disabled={hasUnacknowledgedOutput} onClick={onLogout}>End demo session</button>}
+        <EncryptedBackupControls isOwnerCurrent={isCurrent} profileId={null} />
       </>}
     </div>
   </details>;
