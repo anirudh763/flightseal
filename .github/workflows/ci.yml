@@ -148,6 +148,17 @@ jobs:
           done
           grep READY /tmp/registry-dev.log
           REGISTRY_DEV_URL=http://127.0.0.1:39102 node --test newweb/tests/outbox-browser.mjs
+      - name: Registry wiring in the console (flag-off bundle scan, then a flag-on build against the DEV ONLY server)
+        run: |
+          python3 registry/devserver/server.py --port 39103 > /tmp/registry-wiring.log 2>&1 &
+          server_pid=$!
+          trap 'kill "$server_pid"; wait "$server_pid" || true' EXIT
+          for attempt in $(seq 1 50); do
+            if grep -q READY /tmp/registry-wiring.log; then break; fi
+            sleep 0.2
+          done
+          grep READY /tmp/registry-wiring.log
+          REGISTRY_DEV_URL=http://127.0.0.1:39103 node newweb/tests/registry-wiring.mjs
       - name: Download the public PX4 sample flight the Seal & send test uses
         run: python3 tools/fetch_sample.py tests/.data
       - name: Console flows, mobile layouts and accessibility

@@ -20,6 +20,19 @@ if (earlyAccessRaw) {
   earlyAccessEndpoint = endpointUrl.href;
   earlyAccessOrigin = endpointUrl.origin;
 }
+// Receipt registry origin (a public URL, not a secret). Empty: no registry code ships and nothing registry-related runs.
+const registryRaw = env.VITE_REGISTRY_URL || '';
+let registryUrl = '';
+let registryOrigin = '';
+if (registryRaw) {
+  const registry = new URL(registryRaw);
+  const local = ['localhost', '127.0.0.1', '[::1]'].includes(registry.hostname);
+  if ((!local && registry.protocol !== 'https:') || !['https:', 'http:'].includes(registry.protocol) || registry.username || registry.password || registry.search || registry.hash) {
+    throw new Error('VITE_REGISTRY_URL must be an HTTPS URL without credentials, a query or a fragment (http on localhost is allowed for local testing).');
+  }
+  registryUrl = registry.href.replace(/\/+$/, '');
+  registryOrigin = registry.origin;
+}
 let supabaseUrl = '';
 let supabaseOrigin = '';
 if (supabaseUrlRaw || supabaseAnonKey) {
@@ -35,7 +48,7 @@ if (supabaseUrlRaw || supabaseAnonKey) {
 export default defineConfig({
   base: '/flightseal/console/',
   publicDir: 'public',
-  define: { __APP_VERSION__: JSON.stringify(appVersion), __EARLY_ACCESS_ENDPOINT__: JSON.stringify(earlyAccessEndpoint), __SUPABASE_URL__: JSON.stringify(supabaseUrl), __SUPABASE_ANON_KEY__: JSON.stringify(supabaseAnonKey) },
+  define: { __APP_VERSION__: JSON.stringify(appVersion), __EARLY_ACCESS_ENDPOINT__: JSON.stringify(earlyAccessEndpoint), __SUPABASE_URL__: JSON.stringify(supabaseUrl), __SUPABASE_ANON_KEY__: JSON.stringify(supabaseAnonKey), __REGISTRY_URL__: JSON.stringify(registryUrl) },
   build: {
     outDir: '../docs/console',
     emptyOutDir: true,
@@ -44,8 +57,8 @@ export default defineConfig({
   plugins: [react(), tailwindcss(), {
     name: 'hashwing-early-access-csp',
     transformIndexHtml(html) {
-      if (!earlyAccessOrigin && !supabaseOrigin) return html;
-      const origins = [earlyAccessOrigin, supabaseOrigin].filter(Boolean).join(' ');
+      const origins = [...new Set([earlyAccessOrigin, supabaseOrigin, registryOrigin].filter(Boolean))].join(' ');
+      if (!origins) return html;
       return html.replace("connect-src 'self';", `connect-src 'self' ${origins};`);
     },
   }, {

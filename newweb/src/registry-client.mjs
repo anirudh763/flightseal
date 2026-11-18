@@ -86,5 +86,7 @@ export function createRegistryClient({ baseUrl = '', getToken, fetch: doFetch = 
       return { ...(await request('POST', '/v1/shares', body, opts)), share };
     },
     withdrawShare: (token, opts) => request('DELETE', `/v1/shares/${encodeURIComponent(token)}`, undefined, opts),
+    getShare: (token, opts) => request('GET', `/v1/shares/${encodeURIComponent(token)}`, undefined, { ...opts, auth: false }), // public: no sign-in
+    deleteRegistration: (id, opts) => request('DELETE', `/v1/registrations/${encodeURIComponent(id)}`, undefined, opts),
   };
 }

@@ -205,6 +205,12 @@ deferred: []
 
 ## Plan Change Log
 
+- 2026-11-17: a mid-build message from agent `a31c00aad518f8ca0` (the sender id matches this worktree's name, so the caller should confirm it) said a parallel PR edits `tokenOwner` and asked for the smallest possible change to `registry-client.mjs`. Following it: `registry-client.mjs` gets only two new lines (`getShare`, `deleteRegistration`). `tokenOwner` is unchanged and there is no exported `tokenClaims`. Display claims (org: `custom:org_id` then `org_id`; role: `custom:role` then `role`; sub; exp) are decoded in `registry-ui.jsx`. The outbox owner still comes from `tokenOwner`.
+- The existing large-file status "Sealed on this device." contained the forbidden bundle string. It now reads "Sealed and checked on this device." The scan was not weakened.
+- Offline, the outbox leaves a new row in `sealed_local` because it doesn't try to send. While `navigator.onLine` is false, the list shows such rows as "Waiting for connection", with the waiting detail line, as the matrix requires.
+- The registry panel signs in only while signed out. Switching owner in the UI means "Sign out", then sign in. The store still closes and reopens on a token for a different owner (for example one resumed from sessionStorage).
+- The service worker is blocked in the tests, so the engine can't load offline. The offline row seals while the registry is unreachable (`page.route` abort), then takes the context offline.
+
 ## Review Triage Log
 
 ## Design Notes
