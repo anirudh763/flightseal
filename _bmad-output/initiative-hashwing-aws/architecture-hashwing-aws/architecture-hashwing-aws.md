@@ -109,7 +109,7 @@ flowchart TD
 
 - **Binds:** R8, `GET /v1/shares/<token>`, console share view
 - **Prevents:** checks behind login, a share view leaking metadata, guessable links
-- **Rule:** `GET /v1/shares/<token>` is the only unauthenticated route. It returns only head, count, key fingerprint and `received_at`, and only for an active, unexpired share on an active registration. Tokens are 256-bit random; only their SHA-256 is stored. Extra disclosure is per field, opt-in by the sharer, and needs an AD amendment before any field is added.
+- **Rule:** `GET /v1/shares/<token>` is the only unauthenticated route. It returns only head, count, key fingerprint and `received_at`, and only for an active, unexpired share on an active registration. The client generates the 256-bit token (`crypto.getRandomValues`, 43 base64url chars) and sends only its SHA-256 with an idempotency key on `POST /v1/shares` (`registry/registry/app.py` `create_share`, `newweb/src/registry-client.mjs`); the server never sees or stores the token. The same (idempotency key, registration id, token hash) returns the same share and its current disposition, a different payload under that key is 409 `idempotency_conflict`, and a replay never reopens a withdrawn or expired share. Share records have no TTL and withdrawal keeps the record (deletion and restore write a permanent withdrawn record too), so a used token hash is never free again. The public route has its own stage throttle, rate 2 and burst 5 (`PUBLIC_THROTTLE` in `infra/lib/stack.ts`, asserted in `infra/test/stack.test.ts`); signed-in routes keep the stage default. Extra disclosure is per field, opt-in by the sharer, and needs an AD amendment before any field is added.
 
 ### AD-10 — Time and retention are separate mechanisms [ADOPTED]
 
@@ -121,13 +121,13 @@ flowchart TD
 
 - **Binds:** R7, R9, envelope and register routes, outbox
 - **Prevents:** unbounded offline replay, a departed pilot registering, runaway writes
-- **Rule:** A registration needs a server-issued envelope (sub, org epoch, default 7-day expiry). `POST /v1/epoch` invalidates outstanding envelopes. An expired envelope blocks new registrations but not the retry of a committed one. Monthly quota per org (`REG_QUOTA_PER_MONTH`, default 2000) returns 429 with nothing written. Request bodies over 4096 bytes are 413.
+- **Rule:** A registration needs a server-issued envelope (sub, org epoch, default 7-day expiry). `POST /v1/epoch` (admin) invalidates outstanding envelopes and `GET /v1/epoch` (any member) reads the current one, so a client can drop stale cached envelopes before sending. An unusable envelope is 422 with a split code: `envelope_expired` (expired or unknown), `sub_mismatch` or `epoch_mismatch` (`_envelope_error` in `app.py`). It blocks new registrations but not the retry of a committed one, which still gets its ack. Monthly quota per org (`REG_QUOTA_PER_MONTH`, default 2000) returns 429 with nothing written. Request bodies over 4096 bytes are 413.
 
 ### AD-12 — AWS envelope: us-east-1, pay-per-use only, $5 is a target [ADOPTED]
 
 - **Binds:** R9, `infra/`, COST.md
 - **Prevents:** a fixed-fee service (WAF, NAT, custom domain, KMS key, provisioned capacity) slipping in, or a doc calling the budget a cap
-- **Rule:** One stack in us-east-1: HTTP API (`$default` stage rate 10, burst 20), Lambda python3.12 arm64 128 MB 5 s, one on-demand DynamoDB table, Cognito Lite, 7-day log retention, optional Budget alert. IAM: item actions on the table ARN only. Adding any service with a monthly fee needs an AD. $5/month is a workload target; budgets and stage throttles notify or slow, they never cap spend. CI holds no AWS credentials and only synthesises; only the owner deploys, after itemized cost approval. Until real customer data, pilot data is disposable (PITR off by default, table `RemovalPolicy.DESTROY`, as the code has it). Proposed, pending owner confirmation: before real data, PITR on, the table RETAIN, and the backup window declared in RUNBOOK_AWS.md with tombstones kept at least that long.
+- **Rule:** One stack in us-east-1: HTTP API (`$default` stage rate 10, burst 20), Lambda python3.12 arm64 128 MB 5 s, one on-demand DynamoDB table, Cognito Lite, 7-day log retention, optional Budget alert. IAM: item actions on the table ARN only. CORS has two layers with one rule (exact origins only, never `*` for signed-in routes, no credentials, headers `authorization`, `content-type`, `idempotency-key`): on the deployed HTTP API, `corsPreflight` in `infra/lib/stack.ts` (`corsOrigins`, default `https://anirudh763.github.io`, validated at synth) is authoritative, because API Gateway answers preflight and overrides integration CORS headers; the Lambda's `CORS_ORIGINS` allowlist in `app.py` is authoritative only where no API Gateway CORS is configured (the dev server and the LocalStack REST stand-in), and the stack does not set it. The Lambda gives the public share view `access-control-allow-origin: *`; on the HTTP API that route is limited to the allowlist. A change to allowed origins or headers updates both layers in the same PR. Adding any service with a monthly fee needs an AD. $5/month is a workload target; budgets and stage throttles notify or slow, they never cap spend. CI holds no AWS credentials and only synthesises; only the owner deploys, after itemized cost approval. Until real customer data, pilot data is disposable (PITR off by default, table `RemovalPolicy.DESTROY`, as the code has it). Proposed, pending owner confirmation: before real data, PITR on, the table RETAIN, and the backup window declared in RUNBOOK_AWS.md with tombstones kept at least that long.
 
 ### AD-13 — Claims match the coverage matrix [ADOPTED]
 
@@ -141,11 +141,11 @@ flowchart TD
 - **Prevents:** a unit presenting registration as proof of company identity, file contents or flight truth
 - **Rule:** An ack or share view says only that a receipt with this head and count, signed by a key enrolled to this org, arrived at `received_at` by the registry's clock. It never claims the registry inspected files, verified the company's real-world identity, or that the log was truthful before sealing. A recipient trusts a fingerprint only after pinning it from an independently known company channel, never from the same message as the receipt. Rotated or compromised key state is shown with its history, not as a verdict on older proofs.
 
-### AD-15 — Client and outbox contract
+### AD-15 — Client and outbox contract [ADOPTED]
 
-- **Binds:** R7, R10, `newweb/src/outbox.mjs` and `newweb/src/registry-client.mjs` (PR #23), console registry UI
+- **Binds:** R7, R10, `newweb/src/outbox.mjs`, `newweb/src/registry-client.mjs`, console registry UI
 - **Prevents:** queued work counted as witnessed, cross-owner dispatch, private data in browser storage, client and server disagreeing on what a response means
-- **Rule:** An outbox row holds only the envelope id, expiry and epoch, receipt v1, one owner/payload-bound idempotency key and retry state; never original media, manifests, salts or signing keys, and none of these go to telemetry. Enqueue and ack-persist are each one transaction. Logout or owner change stops dispatch and drops late results; the token's owner must match the outbox owner before every send. Attempts and storage are bounded, with exponential backoff and jitter. Queued work reads "Not yet registered" until an ack is persisted; after storage eviction the UI never implies the lost queue can still export. Response handling: 410 and a 200 with `disposition: "deleted"` both mean deleted; 429 `quota_exceeded` is terminal for the UTC month; other 429s and 503 back off; API Gateway's own 401 and 429 responses are classified by status alone. Share creation is not retried automatically until it has an idempotency key.
+- **Rule:** An outbox row holds only the envelope id, expiry and epoch, receipt v1, one owner/payload-bound idempotency key and retry state; never original media, manifests, salts or signing keys, and none of these go to telemetry. Enqueue and ack-persist are each one transaction. Logout or owner change stops dispatch and drops late results; the token's owner must match the outbox owner before every send. Attempts and storage are bounded, with exponential backoff and jitter. Queued work reads "Not yet registered" until an ack is persisted; after storage eviction the UI never implies the lost queue can still export. Response handling, as merged in `outbox.mjs`: 429 `quota_exceeded` moves the row to `needs_attention` (reason `quota_exceeded`) and is never retried automatically, only by an explicit `retryNow(id)`; any other 429 (API Gateway throttling), network errors, timeouts, 408 and 5xx back off with exponential delay and jitter until `attempts_exhausted`; the three envelope codes move to `needs_attention` and need a new envelope via `retryNow(id)`; other 4xx codes, including 410 `registration_deleted`, are terminal `needs_attention`. A 200 ack with `disposition: "deleted"` reads "Registered, later deleted". The epoch is read once per open before dispatch. `busy()` reports whether a dispatch pass is running, and callers use it instead of guessing from row states. Share creation reuses one client token, hash and idempotency key per attempt (AD-9).
 
 ## Consistency Conventions
 
@@ -155,10 +155,10 @@ flowchart TD
 | Ids | fingerprints and heads 64 lowercase hex; registration id 32 hex; share token URL-safe, stored as sha256 |
 | Times | ISO 8601 UTC in responses; `expires_at` checked in code on every read |
 | Errors | Lambda errors are exactly `{"error": "<code>"}` with codes from `app.py`; all Lambda 401 bodies identical; one 404 for every non-viewable share; API Gateway's own 401 and 429 bodies differ and are classified by status |
-| Request order | restore 503 → size 413 → route 404 → identity 401/403 → schema 400 → idempotency replay → receipt 400 → signature 422 → envelope 422 (or committed ack) → key state 403 → transaction; nothing reveals whether a registration exists before the signature check |
-| Config | environment variables only (`IDENTITY_ADAPTER`, `TABLE_NAME`, `REG_QUOTA_PER_MONTH`, `DEDUPE_SECONDS`, `ENVELOPE_SECONDS`, `RESTORED_FROM`, `RESTORE_ID`); `DEV_*` never in the stack |
+| Request order | CORS preflight (Lambda layer, before identity) → restore 503 → size 413 → route 404 → identity 401/403 → schema 400 → idempotency replay → receipt 400 → signature 422 → envelope 422 `envelope_expired` / `sub_mismatch` / `epoch_mismatch` (or committed ack) → key state 403 → transaction; nothing reveals whether a registration exists before the signature check |
+| Config | environment variables only (`IDENTITY_ADAPTER`, `TABLE_NAME`, `REG_QUOTA_PER_MONTH`, `DEDUPE_SECONDS`, `ENVELOPE_SECONDS`, `RESTORED_FROM`, `RESTORE_ID`, `CORS_ORIGINS` for the Lambda layer only); `DEV_*` never in the stack |
 | Crypto | stdlib-only Ed25519 in the Lambda; no native wheels |
-| Client labels | "Not yet registered" until an ack is persisted; Sealed locally / Waiting for connection / Registering / Registered / Needs attention; key states are `active`, `rotated`, `compromised` everywhere, with no synonyms such as "replaced" |
+| Client labels | "Not yet registered" until an ack is persisted; Sealed locally / Waiting for connection / Registering / Registered / Needs attention; registry key states are `active`, `rotated`, `compromised` in the API and data; "replaced" is the UI display label for `rotated` (the recipient pin store in `newweb/src/trusted-keys.mjs` uses `replaced` as its own status) |
 
 ## Stack
 
@@ -210,8 +210,10 @@ sequenceDiagram
   O->>R: POST /v1/registrations
   R-->>O: ack (rid, received_at)
   O->>O: persist ack, retire row
-  P->>R: POST /v1/shares
-  R-->>P: token
+  P->>P: make random token, hash it
+  P->>R: POST /v1/shares (token_hash, idempotency_key)
+  R-->>P: rid, expires_at, disposition
+  P-->>V: link with token (company's channel)
   V->>R: GET /v1/shares/token
   R-->>V: head, count, fingerprint, received_at
 ```
@@ -244,7 +246,7 @@ erDiagram
 | R5 time vs retention | docs, console labels | AD-10, AD-14 |
 | R6 withdrawal, deletion, restore | `app.py`, `restore.py`, RUNBOOK_AWS.md | AD-6, AD-7, AD-8 |
 | R7 idempotent retries | `app.py`, outbox | AD-5, AD-11, AD-15 |
-| R8 public check by link | `GET /v1/shares/<token>` | AD-9 |
+| R8 public check by link | `GET /v1/shares/<token>`, `create_share`, public route throttle | AD-9, AD-12 |
 | R9 region and cost envelope | `infra/lib/stack.ts`, COST.md | AD-12, AD-11 |
 | R10 identity adapter | `identity.py`, `infra/` | AD-3 |
 | R11 static hosting | GitHub Pages; Amplify artifacts prepared | AD-1 |
@@ -254,19 +256,17 @@ erDiagram
 | Item | Why it can wait | Revisit when |
 | --- | --- | --- |
 | Real-AWS deployment and validation (IAM, Cognito, JWT authorizer, throttling, TLS, billing, `cdk destroy`) | Needs owner-approved credentials and spend | Owner authorizes a sandbox deploy |
+| CORS on the deployed HTTP API (synthesised and asserted only; the Lambda layer is browser-tested against the dev server) | HTTP API is not in LocalStack community | With the real-AWS sandbox |
 | Cognito end-to-end run | Not available in LocalStack community; designed and synthesised only | Owner-approved real-AWS sandbox (LocalStack proves wiring, not Cognito) |
 | `token_use == "id"` check in the Cognito adapter | Access tokens fail closed today only because they lack `custom:org_id` | Before a real-AWS deploy, or if access tokens gain custom claims |
 | RFC 3161 timestamping | Not built; AD-10 fixes how it must be added | A user needs third-party "existed before T" |
 | S3 Object Lock retention | Not built; retention policy unresolved | Retention policy is decided |
 | Lambda and API persistence across LocalStack restart | Community 4.12.0 drops them; DynamoDB data survives | Owner supplies an auth token for the current `localstack/localstack` image (and `deploy_cdklocal.sh` is re-pinned), or a redeploy script |
-| CORS on the API | Reported in PR #23; console and API are cross-origin. Lean: one owner only, API Gateway `corsPreflight` with an explicit origin list, not Lambda headers | PR #23 follow-up lands; the origin list becomes an AD-12 amendment |
-| Idempotency key on `POST /v1/shares` | Reported in PR #23; a lost response leaves an unwithdrawable share | Same follow-up; it must follow AD-5's pattern |
-| Reading the current epoch; one answer (410) for a deleted registration instead of 200 `deleted` within `DEDUPE_SECONDS`; distinct codes for expired and revoked envelopes | Reported in PR #23; AD-15 makes the client treat both deleted answers alike meanwhile | Same follow-up |
-| CI test that diffs the `app.py` and `stack.ts` route lists | Today only the route count is asserted | Next change to either route list |
-| Offline outbox wiring into the console | Client modules are in PR #23, not yet in `main.jsx` | PR #23 merges and the console owner wires it |
+| One answer for a deleted registration: today an original-key replay within `DEDUPE_SECONDS` is 200 `disposition: "deleted"` (with `received_at`) and any other path is 410 | AD-15 fixes how the client shows each; no data is exposed beyond the original ack | Next change to the register path |
+| CI test that diffs the `app.py` and `stack.ts` route lists | Today only the authorizer split is asserted, not set equality with `app.py` | Next change to either route list |
+| Offline outbox wiring into the console | Client modules are merged but `main.jsx` does not use them yet | The console owner wires them |
 | Data-loss fixes | Named by the owner. One found in review: a backup restore replays only revoking tombstones, so registrations and shares created after the backup are lost while the client shows Registered. Proposed: journal creations as never-expiring TOMB items and re-create them before revocations | Owner lists the defects; fix before PITR or real data |
 | Static hosting on Amplify | Artifacts prepared; Pages is enough while the registry is local | Owner wants custom headers enforced |
 | Per-user rate limits, WAF, custom domain, managed keys (KMS) | Fixed-fee or out of scope under AD-12 | Abuse or a customer requirement appears |
 | Multi-region and disaster recovery (PITR is off by default; Cognito Lite user pools have no point-in-time restore, so org assignments cannot be restored) | Single-company pilot with disposable data (AD-12) | Before real customer data |
 | Python 3.12 Lambda runtime end of support (2028-10-31) | Years away | Next runtime bump, or before 2028-10 |
-| Request-order fix in `docs/aws/ARCHITECTURE_AWS.md` (lists envelope before receipt; the code and this spine check the signature first) | Outside this docs pass's file scope | Next edit of that doc |
