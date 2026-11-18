@@ -235,12 +235,14 @@ function App() {
     const parts = unsavedRef.current();
     if (!parts.length) return;
     try {
-      const zip = await createStoreZip(parts.flatMap((part) => part.files));
+      const seen = new Set();
+      const files = parts.flatMap((part) => part.files).map((file) => { let name = file.name; for (let n = 2; seen.has(name); n++) name = `${n}-${file.name}`; seen.add(name); return { ...file, name }; });
+      const zip = await createStoreZip(files, { maxBytes: 1024 * 1024 * 1024 }); // ponytail: one in-memory zip; past 1 GiB the per-file buttons below still work
       const url = URL.createObjectURL(zip); const anchor = document.createElement('a'); anchor.href = url; anchor.download = 'hashwing-unsaved-work.zip'; document.body.append(anchor); anchor.click(); anchor.remove(); setTimeout(() => URL.revokeObjectURL(url), 0);
       for (const part of parts) part.markSaved();
       setProfileMenuMessage('');
     } catch (cause) {
-      const message = `Couldn't make the download (${cause?.message || 'unknown error'}). Your work is still here, so download each file from its own section.`;
+      const message = `Couldn't make one download (${cause?.message || 'unknown error'}). Your work is still here, so download each file on its own.`;
       setRescue((current) => current && { ...current, error: message });
       setProfileMenuMessage(message);
     }
@@ -1122,7 +1124,7 @@ function App() {
     setCsvDraft(null); setShareDialogOpen(false); setFeedbackDialogOpen(false); setInstallDialogOpen(false);
     setSealOutput(null); setSealOutputAcknowledged(false); setCurrentSample(null); setDemoLabel(''); setError(''); setOperationStatus('');
     setVideoOffset('0'); clearVideo();
-    setProtectFile(null); setProtectSealed(null); setProtectResult(null); setRestored(null); setProtectLanding(''); setProtectTimes(null); setCopyCompare(null); setCopyStatus(''); setCheckFile(null); setCheckText('');
+    setManifestUnsaved(null); setProtectFile(null); setProtectSealed(null); setProtectResult(null); setRestored(null); setProtectLanding(''); setProtectTimes(null); setCopyCompare(null); setCopyStatus(''); setCheckFile(null); setCheckText('');
     receiptInvalidRef.current = false; receiptInvalidMessageRef.current = ''; sealPickerRef.current = false;
     if (receiptInputRef.current) receiptInputRef.current.value = '';
     if (workbenchFileRef.current) workbenchFileRef.current.value = '';
@@ -1130,7 +1132,9 @@ function App() {
   };
   // A logout this tab did not choose (another tab, or the workspace server) keeps the unsaved files in memory for one download.
   const keepUnsavedThenClear = (reason) => {
-    const files = unsavedRef.current().flatMap((part) => part.files);
+    const parts = unsavedRef.current();
+    const files = parts.flatMap((part) => part.files);
+    for (const part of parts) part.markSaved(); // it lives in the rescue now
     clearSensitiveWorkspace();
     if (files.length) setRescue({ reason, files, error: '' });
   };
@@ -1153,7 +1157,7 @@ function App() {
       localProfileFor({ kind: 'account', userId: message?.userId })?.email === authAttemptRef.current.email;
     if (!sameActiveProfile && !removedProfile && !storageWasCleared && !pendingLoginMatches) return;
     authEpochRef.current++;
-    if (!activeSession) { if (__REGISTRY_URL__) registryLogout(); return; }
+    if (!activeSession) { keepUnsavedThenClear('other-tab'); return; }
     clearLocalSession();
     keepUnsavedThenClear('other-tab'); // collects this tab's unsent proofs before clearSensitiveWorkspace signs the registry out
     setActiveSession(null); setLocalProfile(null); setSavedContext(null); setSavedContextError(''); setProfileMenuMessage('');
@@ -1429,12 +1433,13 @@ function App() {
 
   if (route.kind === 'legal') return <><header className="auth-header"><a className="landing-brand" href="#/"><span className="brand-mark" aria-hidden="true">H</span><span>HashWing</span></a><nav className="auth-persistent-actions" aria-label="Account and workspace"><a href="#/login">Log in</a><a href="#/signup">Create account</a><a href="#/app/sandbox">Launch Workspace</a></nav></header><LegalPage page={route.page} onBack={() => setHashRoute('#/')} onClearCache={() => { navigator.serviceWorker?.controller?.postMessage({ type: 'CLEAR_FLIGHTSEAL_CACHES' }); setOfflineReady(false); setOfflineStatus('FlightSeal-owned caches were requested for removal. Other apps’ caches are left alone.'); }} cacheStatus={offlineStatus} onFeedback={() => setFeedbackDialogOpen(true)} onInstall={installApp} onRestartQuickStart={() => { setQuickStartDismissed(false); try { localStorage.removeItem(quickStartStorageKey); } catch {} setHashRoute(routeHash('sandbox')); }} /><InstallGuide open={installDialogOpen} onClose={() => setInstallDialogOpen(false)} ios={installKind === 'ios'} /><FeedbackDialog key={`feedback-${privateResetVersion}`} open={feedbackDialogOpen} onClose={() => setFeedbackDialogOpen(false)} route={route.route} /></>;
 
-  const rescueNotice = rescue && <section className="rescue-notice" aria-labelledby="rescue-title"><h2 id="rescue-title">Unsaved work</h2>
+  const rescueNotice = rescue && <section className="rescue-notice" aria-label="Unsaved work">
     <p role="status">{rescue.reason === 'other-tab' ? 'You were logged out in another tab. This tab kept work that was not saved yet.' : 'Your workspace session ended. This tab kept work that was not saved yet.'} It stays only until you close this tab.</p>
-    {rescue.error && <p className="receipt-error" role="alert">{rescue.error}</p>}
+    {rescue.error && <><p className="receipt-error" role="alert">{rescue.error}</p>
+      <div className="actions-row">{rescue.files.map((file) => <button key={file.name} type="button" className="button secondary" onClick={() => download(file.name, file.blob || file.bytes, 'application/octet-stream')}>{file.name}</button>)}</div></>}
     <div className="actions-row"><button type="button" className="button primary" onClick={downloadUnsaved}><Download aria-hidden="true" size={16} />Download unsaved work</button><button type="button" className="button secondary" onClick={() => setRescue(null)}>Discard</button></div>
   </section>;
-  if (route.kind === 'landing') return <>{rescueNotice}<LandingPage key={privateResetVersion} onProtect={() => setHashRoute(routeHash('protect'))} onDemo={() => loadDemo(false)} onContinue={() => setHashRoute(routeHash('sandbox', { sample: currentSample || 'intact', record: selectedRecord }))} result={result} busy={busy} error={error} installKind={installKind} onInstall={installApp} onFeedback={() => setFeedbackDialogOpen(true)} installOpen={installDialogOpen} onInstallClose={() => setInstallDialogOpen(false)} feedbackOpen={feedbackDialogOpen} onFeedbackClose={() => setFeedbackDialogOpen(false)} route={route.route} /></>;
+  if (route.kind === 'landing') return <LandingPage notice={rescueNotice} key={privateResetVersion} onProtect={() => setHashRoute(routeHash('protect'))} onDemo={() => loadDemo(false)} onContinue={() => setHashRoute(routeHash('sandbox', { sample: currentSample || 'intact', record: selectedRecord }))} result={result} busy={busy} error={error} installKind={installKind} onInstall={installApp} onFeedback={() => setFeedbackDialogOpen(true)} installOpen={installDialogOpen} onInstallClose={() => setInstallDialogOpen(false)} feedbackOpen={feedbackDialogOpen} onFeedbackClose={() => setFeedbackDialogOpen(false)} route={route.route} />;
   if (route.kind === 'signup' || route.kind === 'login') return <AuthPage
     key={privateResetVersion}
     mode={route.kind}
@@ -1514,6 +1519,7 @@ function App() {
       {hasImportedOutput && <button type="button" className="clear-session" onClick={clearImportedSession}>Clear imported session</button>}
     </section>
     <main id="main" className="page-wrap" tabIndex="-1">
+      {rescueNotice}
     <details hidden={(!!canonicalPage && canonicalPage!=='workbench') || screen === 'protect'} className="source-actions" open={screen === 'sandbox'} onKeyDown={closeDisclosure}><summary>Source and report actions</summary><div className="source-action-items">
         <label className="command-file-wrap" htmlFor="workbench-file"><span className="visually-hidden">Choose source or sealed log</span><input id="workbench-file" ref={workbenchFileRef} className="command-file-input" type="file" accept=".fseal,.ulg,.tsv,.txt,.tlog,.csv,.json,application/octet-stream,text/plain,application/json,text/csv" disabled={!!busy} aria-label="Choose source or sealed log" aria-describedby="session-file-name" onChange={(e) => chooseWorkbenchFile(e.target.files?.[0] || null)} /></label>
         <button className="button secondary command-seal" type="button" onClick={() => { if (sealFileInput) runSeal(); else { sealPickerRef.current = true; workbenchFileRef.current?.click(); } }} disabled={!!busy}><FileCheck2 size={16} aria-hidden="true" />Seal new log</button>
@@ -1569,7 +1575,7 @@ function App() {
               <textarea id="handover-text" className="mono-input" readOnly rows={9} value={protectSealed.handover} />
               <div className="actions-row">
                 <button className="button primary" type="button" onClick={copyHandover}><Copy aria-hidden="true" size={16} />Copy message</button>
-                <a className="button secondary" href={`mailto:?subject=${encodeURIComponent(`HashWing receipt for ${protectSealed.name}`)}&body=${encodeURIComponent(protectSealed.handover)}`} onClick={() => markProtectSaved('receipt')}><Mail aria-hidden="true" size={16} />Email it</a>
+                <a className="button secondary" href={`mailto:?subject=${encodeURIComponent(`HashWing receipt for ${protectSealed.name}`)}&body=${encodeURIComponent(protectSealed.handover)}`}><Mail aria-hidden="true" size={16} />Email it</a>
                 <button className="button secondary" type="button" onClick={() => { download(`${protectSealed.name}.receipt.txt`, protectSealed.handover); markProtectSaved('receipt'); }}><Download aria-hidden="true" size={16} />Download receipt</button>
               </div>
               {copyStatus && <p className="field-hint" role="status">{copyStatus}</p>}
@@ -1687,7 +1693,7 @@ function SkipLink({ targetId = 'main' }) {
   return <a className="skip-link" href={`#${targetId}`} onClick={(event) => { event.preventDefault(); document.getElementById(targetId)?.focus(); }}>{'Skip to content'}</a>;
 }
 
-function LandingPage({ onProtect, onDemo, onContinue, result, busy, error, installKind, onInstall, onFeedback, installOpen, onInstallClose, feedbackOpen, onFeedbackClose, route }) {
+function LandingPage({ notice, onProtect, onDemo, onContinue, result, busy, error, installKind, onInstall, onFeedback, installOpen, onInstallClose, feedbackOpen, onFeedbackClose, route }) {
   const [openMenu, setOpenMenu] = useState(null);
   const [mobileOpen, setMobileOpen] = useState(false);
   const [slide, setSlide] = useState(0);
@@ -1752,6 +1758,7 @@ function LandingPage({ onProtect, onDemo, onContinue, result, busy, error, insta
       <nav className="landing-persistent-actions" aria-label="Account and workspace"><a href="#/login">Log in</a><a href="#/signup">Create account</a><button type="button" onClick={onContinue}>Launch Workspace</button></nav>
     </header>
     <main id="main" className="landing-main" tabIndex="-1">
+      {notice}
       <section className="landing-hero" aria-labelledby="page-landing">
         <div className="landing-hero-copy"><p className="landing-kicker">Local flight log verification</p><h1 id="page-landing" tabIndex="-1">Check the log.<br />Keep the evidence.</h1><p className="landing-lede">Seal a downloaded flight log, verify its chain, and hand off receipts for independent review.</p><div className="landing-hero-actions"><button className="landing-demo" type="button" onClick={onProtect}>Seal a flight log <ArrowRight size={16} aria-hidden="true" /></button><button className="landing-secondary-button" type="button" onClick={onDemo} disabled={!!busy}>Run real verification</button><a href="#/signup" className="landing-secondary">Create account</a><button type="button" className="landing-secondary-button" onClick={onContinue}>Launch Workspace</button></div><p className="landing-local-note"><LockKeyhole size={14} aria-hidden="true" />Files are analyzed locally. Uploads require Save current run; private keys and video stay in this tab.</p></div>
         {busy && <p role="status" className="hero-verify-status">{busy}</p>}
@@ -2260,10 +2267,10 @@ function ManifestSeal({ signingKey, onActiveChange, onUnsaved, onSealed }) {
   useEffect(() => () => controllerRef.current?.abort(), []);
   useEffect(() => { onActiveChange(!!phase || (!!output && !output.saved)); }, [phase, output, onActiveChange]);
   useEffect(() => () => onActiveChange(false), [onActiveChange]);
-  useEffect(() => { // the sealed list and its receipt, until the list is downloaded
-    onUnsaved(output && !output.saved ? { files: [{ name: output.log.name, blob: output.log }, { name: `${output.base}.receipt.txt`, bytes: new TextEncoder().encode(output.handover) }], markSaved: () => setOutput((current) => current && { ...current, saved: true }) } : null);
+  useEffect(() => { // the sealed list and its receipt, until the list is downloaded; kept after this panel unmounts
+    if (!output) return;
+    onUnsaved(output.saved ? null : { files: [{ name: output.log.name, blob: output.log }, { name: `${output.base}.receipt.txt`, bytes: new TextEncoder().encode(output.handover) }], markSaved: () => { setOutput((current) => current && { ...current, saved: true }); onUnsaved(null); } });
   }, [output, onUnsaved]);
-  useEffect(() => () => onUnsaved(null), [onUnsaved]);
   const reset = () => { controllerRef.current?.abort(); setOutput(null); setMessage(''); setError(''); };
   const choose = (list) => {
     reset(); setNotes({}); setEdited({}); setDerived({}); setLandingLocal(''); // a landing time belongs to one batch

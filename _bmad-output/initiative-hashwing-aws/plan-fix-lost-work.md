@@ -3,21 +3,35 @@ title: 'Lost-work fixes: unsaved work on logout, reload and expiry; narrow the r
 type: bugfix
 ticket: ''
 created: '2026-11-17'
-status: in-progress
+status: done
 baseline_revision: 'a3f6fe52a4f5e5282ff9b7a551341d9cfbf8a0fd'
 route: full
 route_source: auto
 risk: medium
-review: ''
-review_source: ''
-lenses_ran: []
+review: quick
+review_source: pinned
+lenses_ran: [quick]
 review_loop_iteration: 0
-followup_review_recommended: false
+followup_review_recommended: true
 context:
   - '{project-root}/AGENTS.md'
   - '{project-root}/docs/OUTBOX.md'
 warnings: [multiple-goals]
-deferred: []
+deferred:
+  - summary: >-
+      No browser test of a proof held under another registry owner.
+    evidence: |-
+      Needs 200 queued rows in Chromium; the Node session test covers the store behaviour and the row copy is plain JSX.
+    location: >-
+      newweb/tests/registry-wiring.mjs
+    severity: low
+  - summary: >-
+      Workspace-server sign-out rescue path has no automated test.
+    evidence: |-
+      server-workspace.js clearSession calls bridge.onLogout; only a self-hosted workspace server reaches it.
+    location: >-
+      newweb/src/main.jsx keepUnsavedThenClear('workspace')
+    severity: low
 ---
 
 <intent-contract>
@@ -78,6 +92,22 @@ deferred: []
 
 ## Review Triage Log
 
+### 2026-11-17 — Review pass
+- verdicts: 12 findings — high 1, medium 5, low 3, false 3, maybe-false 0
+- findings:
+  - `[medium]` `patch` Workspace-server sign-out notice never shown (only on landing) — rescue notice now also renders in the workspace main.
+  - `[high]` `patch` Rescued work can be impossible to download when the zip fails (64 MiB cap, names) — cap raised to 1 GiB and a failed zip lists one download button per kept file.
+  - `[medium]` `patch` Large-file result counted twice after a workspace sign-out — parts moved into the rescue are marked saved; zip names are made unique.
+  - `[medium]` `patch` Large-file result lost on in-app navigation (unmount cleared it) — the panel no longer clears its report on unmount; clearSensitiveWorkspace clears it.
+  - `[medium]` `patch` "Email it" counted the receipt as saved — the mailto click no longer marks it saved.
+  - `[medium]` `patch` Rescue notice before the landing h1 and skip link — moved inside each page's main, no heading; axe at 320 and 1440 added to the check.
+  - `[false]` `reject` docs/OUTBOX.md unchanged — the reviewed diff predated the docs commit; OUTBOX.md is updated.
+  - `[false]` `reject` Spine AD-17 and Deferred not updated — same; updated after merging #34.
+  - `[false]` `reject` AGENTS.md counts stale — same; registry-wiring prints 26 checks (the 27th `check(` runs only with REGISTRY_THROTTLE=1).
+  - `[low]` `defer` No browser check for a held proof — needs a 200-row queue; Node test covers it.
+  - `[low]` `patch` "registry sign-in kept" half of a matrix row untested — the check now signs a third tab into the registry and asserts it stays signed in.
+  - `[low]` `patch` A tab without a session dropped unsent proofs on another tab's logout — that branch now keeps them too.
+
 ## Verification
 
 **Commands:**
@@ -85,3 +115,12 @@ deferred: []
 - `npm --prefix newweb run build && node newweb/tests/registry-wiring.mjs` -- all checks pass
 - `node newweb/tests/profiles.mjs` -- 8/8
 - `npm --prefix newweb run test:browser`, `node newweb/tests/edge-matrix.mjs`, `node newweb/tests/private-lifecycle.mjs`, `node --test newweb/tests/outbox.test.mjs newweb/tests/registry-client.test.mjs`, `node --test newweb/tests/outbox-browser.mjs`, `node tests/web/e2e.mjs`, `node tests/web/routes.mjs`, JS gate, pytest -- all pass
+
+## Auto Run Result
+
+- Summary: unsaved work (Seal & send result, large-file result, workbench output, unsent in-memory proofs) is warned about on reload, held before logout/switch/sign-in/demo until one "Download unsaved work" zip, and kept for one download after a forced logout; the every-tab registry logout message is gone; unsent proofs are owner-tagged; key_not_enrolled copy fixed with the fingerprint shown; profiles.mjs selectors repaired.
+- Files: newweb/src/main.jsx, newweb/src/registry-ui.jsx, newweb/src/style.css (rescue notice), newweb/tests/{registry-session.test.mjs,registry-wiring.mjs,profiles.mjs}, docs/OUTBOX.md, AGENTS.md, spine AD-17 + Deferred + .memlog.md, EXPERIENCE.md copy row, deferred-work.md, docs/console rebuild.
+- Review: 8 patched (high 1, medium 5, low 2), 1 deferred, 3 rejected as false (reviewed diff predated the docs commit).
+- Follow-up review recommended: true (a high was patched: the rescue zip failure path); unverified risk: the per-file fallback buttons after a zip failure are not driven by a test.
+- Verification: see PR body for commands and counts.
+- Implemented in the main session (subagents here launch only in the background); the review lens ran as a context-free subagent.

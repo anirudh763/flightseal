@@ -30,14 +30,24 @@ What the console does with the flag on:
   device's list has been read). With the flag off it stays
   "Not registered" / "no registry was used".
 - Sign-out, a token for another owner, and the app's logout paths close the outbox and forget the registry token.
-  Registry sign-out and app logout are also broadcast (`BroadcastChannel('hashwing-registry')`, never carrying a
-  token) to the other open tabs. A sign-out names the owner `<org>/<sub>`, and only that owner's tabs drop their copy of
-  the token (a duplicated tab copies `sessionStorage`) and stop sending; an app logout signs every tab out of the
-  registry. Logging out of the app (and the other paths that send the same message: signing in to the app or switching
-  account, and starting the demo while a session is open) also throws away, in every open tab, the unsent proofs held in memory (those sealed
-  while signed out of the registry, or kept in memory because saving to the outbox failed, for example when it is full) and their file names: they belong to the user who left and are never kept for the
-  next one. Rows already saved in the outbox database stay there, closed, for that user's next sign-in. A new owner
-  neither sees the previous owner's file names nor hears them announced.
+  A registry sign-out is broadcast (`BroadcastChannel('hashwing-registry')`, `{type: 'signout', owner}`, never a token)
+  to the other open tabs; only tabs of that owner `<org>/<sub>` drop their copy of the token (a duplicated tab copies
+  `sessionStorage`) and stop sending. An app logout is not sent on that channel: the app's own logout message names the
+  local profile, so only that profile's other tabs sign out of the registry. Signing in to the app, switching account or
+  starting the demo signs out of the registry in that tab only, and never touches other tabs.
+- Unsent proofs held in this tab's memory (sealed while signed out of the registry, or kept because saving to the outbox
+  failed, for example when it is full) each keep the registry owner they were sealed under, or none if sealed signed
+  out. A sign-in sends only those with no owner or the same owner. A proof sealed under another owner stays held: its row
+  says so and offers "Export pending proofs", and its file name is hidden from the new owner. Nothing sends it under a
+  different owner.
+- Before anything throws those proofs away, the app asks first. Reloading or closing the tab warns while they (or a
+  Seal & send result, a large-file result or a workbench output not yet saved) are in the tab. Logging out, switching
+  account, signing in or starting the demo waits until "Download unsaved work" (one zip with the sealed files, receipt
+  messages and a pending-proofs export) has saved them. A logout this tab did not choose (the same profile logged out in
+  another tab, or the workspace server signed out) keeps that work in tab memory and offers it on the landing page as
+  one download, with "Discard"; this tab is signed out of the registry at once. Rows already saved in the outbox
+  database stay there, closed, for that owner's next sign-in. A new owner neither sees the previous owner's file names
+  nor hears them announced.
 
 ## Owners and storage
 
@@ -120,18 +130,17 @@ idempotency window. A malformed `token`, or a page without Web Crypto (not a sec
 - Cross-tab sign-out reaches only tabs that are running. A tab the browser froze or discarded, or one closed and
   restored with its `sessionStorage`, misses the message and signs back in with its saved token when it wakes; sign out
   there too. Browsers without `BroadcastChannel` sign out only the current tab.
-- **Possible lost work: app logout drops unsent in-memory proofs in every tab.** A proof sealed while signed out of the
-  registry, or one the outbox could not save, waits only in that tab's memory. If anyone logs out of the app in any open tab (or signs in, switches
-  account or starts the demo while a session is open), every tab discards those proofs, and nothing asks first. The sealed files and receipt messages are not affected, but those proofs will not
-  register unless they are sealed again or were exported first ("Export pending proofs").
+- **Memory only.** Unsent in-memory proofs and the unsaved work kept after a forced logout live in tab memory, not in
+  browser storage. A tab that crashes, or a reload the user confirms past the browser's warning, loses them; only an
+  export saved earlier brings them back.
 
 ## Commands
 
 ```sh
 node --test newweb/tests/outbox.test.mjs newweb/tests/registry-client.test.mjs   # 49 tests, stub fetch + memory store
-node --test newweb/tests/registry-session.test.mjs                                # 7 tests, the console's session store in Node
+node --test newweb/tests/registry-session.test.mjs                                # 9 tests, the console's session store in Node
 node --test newweb/tests/outbox-browser.mjs                                      # 8 tests, Chromium + dev server
-node newweb/tests/registry-wiring.mjs                                            # 22 checks, flag-off scan + flag-on console
+node newweb/tests/registry-wiring.mjs                                            # 26 checks, flag-off scan + flag-on console
 ```
 
 The browser tests start `registry/devserver/server.py` (DEV ONLY; it refuses to bind to anything but loopback),

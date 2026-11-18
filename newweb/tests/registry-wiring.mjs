@@ -701,6 +701,11 @@ try {
       await a.waitForFunction(() => location.hash === '#/');
       const notice = a.locator('.rescue-notice');
       await notice.getByText('You were logged out in another tab. This tab kept work that was not saved yet.').waitFor();
+      for (const width of [320, 1440]) {
+        await a.setViewportSize({ width, height: 900 });
+        await axe(a, `rescue notice ${width}`);
+        assert.ok(await a.evaluate(() => document.documentElement.scrollWidth <= innerWidth), `no horizontal scroll at ${width}`);
+      }
       const [download] = await Promise.all([a.waitForEvent('download'), notice.getByRole('button', { name: 'Download unsaved work' }).click()]);
       assert.equal(download.suggestedFilename(), 'hashwing-unsaved-work.zip');
       const zip = readFileSync(await download.path()).toString('latin1');
@@ -714,10 +719,12 @@ try {
   await check('another profile signing in, starting the demo or logging out leaves this tab\'s unsent proof and sign-in alone', async () => {
     const c = await newContext();
     try {
-      const a = watch(await c.newPage(), 'other-a'), b = watch(await c.newPage(), 'other-b');
+      const a = watch(await c.newPage(), 'other-a'), b = watch(await c.newPage(), 'other-b'), d = watch(await c.newPage(), 'other-d');
       await profileIn(a, 'keep-a@example.test');
       await sealSmall(a, 'other-flight.ulg');
       await chipIs(a, 'other-flight.ulg', 'Sealed locally');
+      await profileIn(d, 'keep-a@example.test', 'login'); // the same profile, signed in to the registry in another tab
+      await signIn(d, 'keep-pilot', 'pilot');
       await profileIn(b, 'keep-b@example.test');
       await b.goto(`${flagOn.url}#/`);
       await b.locator('.landing-persistent-actions').getByRole('button', { name: 'Launch Workspace' }).click();
@@ -726,6 +733,8 @@ try {
       assert.ok((await a.evaluate(() => location.hash)).startsWith('#/app/protect'), 'tab A is still in its workspace');
       await chipIs(a, 'other-flight.ulg', 'Sealed locally');
       assert.equal(await a.locator('#handover-text').count(), 1, 'the Seal & send result is still on screen');
+      assert.ok(await d.evaluate(() => sessionStorage.getItem('hashwing-registry-token')), 'the registry sign-in in tab D is kept');
+      await d.locator('#company-registry').getByText('Signed in to the company registry as keep-pilot').waitFor();
     } finally { await c.close(); }
   });
 
