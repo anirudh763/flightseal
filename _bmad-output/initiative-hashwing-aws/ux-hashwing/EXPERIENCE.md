@@ -347,7 +347,7 @@ Build status, checked against the code and tests on `main` at e279032 (2026-11-1
 - **AC-01** `built` No registry URL is configured. No registry chip, "Sealed on this device" list, share link, "Your company's keys" section or registry sign-in appears on any page.
 - **AC-02** `built, partly tested` No registry URL is configured. Sealing and checking a small file and a large-file set make no network request to a registry origin, and no outbox IndexedDB database is created.
 - **AC-03** `built` No registry URL is configured. The Verify time fields show "Registry acceptance", "Not registered", "no registry was used".
-- **AC-04** `built, partly tested` The primary nav shows exactly Seal & send, Verify, Records, Receipts and Trust, in that order. "More tools" contains Samples, Video, Benchmarks and System, and is closed unless one of them is the current page.
+- **AC-04** `built, tested` (changed 2026-11-18, packet 2 shell PR) The primary nav shows exactly Seal & send, Verify and Trust, in that order; Jobs joins between Verify and Trust when its page lands (packet 6). "More tools" contains Records, Receipts, Samples, Video, Benchmarks and System, and is closed unless one of them is the current page. `#/records` and `#/receipts` still load and focus their heading.
 - **AC-05** `built, partly tested` With "More tools" open, Escape closes it and moves focus to its summary.
 - **AC-06** `partial` No Seal & send or Verify step shows more than one `.button.primary` at a time. Not met today: after sealing, "Seal this log" and "Copy message" are both primary; Verify shows "Run Interactive Demo" and "Run check" as primary together.
 - **AC-07** `built, untested` "More options" and "What is this?" are closed on first load of every page.

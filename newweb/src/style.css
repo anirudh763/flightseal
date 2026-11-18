@@ -1076,10 +1076,10 @@ input[type=datetime-local] { width: 100%; max-width: 320px; min-width: 0; min-he
 /* Release layout: page shell and front door (EXPERIENCE.md "Release layout, locked"). */
 /* The rail column is painted on the shell, so it reaches the bottom of a page taller than the window; the rail itself stays sticky. */
 @media (min-width: 769px) {
-  .app-shell { background: linear-gradient(90deg, #eaf0f7 0 219px, var(--line) 219px 220px, var(--canvas) 220px); }
+  .app-shell:not(.canonical-page) { background: linear-gradient(90deg, #eaf0f7 0 219px, var(--line) 219px 220px, var(--canvas) 220px); }
 }
 /* Main column at most 1040px (plus its gutters), aligned with the command bar title. */
-.page-wrap { max-width: calc(1040px + 32px); }
+.app-shell:not(.canonical-page) .page-wrap { max-width: calc(1040px + 32px); }
 .landing-page.front-door { display: flex; flex-direction: column; background: var(--canvas); background-image: none; }
 .front-door-main { flex: 1; display: grid; align-content: center; width: min(1040px + 2 * clamp(16px, 4vw, 48px), 100%); margin: 0; padding: 64px clamp(16px, 4vw, 48px); }
 .front-door-hero { display: grid; gap: 16px; justify-items: start; }
@@ -1109,8 +1109,9 @@ input[type=datetime-local] { width: 100%; max-width: 320px; min-width: 0; min-he
 .clear-session, .error-alert .button, .trust-footer nav a, .trust-footer nav button { min-height: 44px; }
 .help-layout .prose a { display: inline-flex; align-items: center; min-height: 44px; }
 .registry-bar-link { display: inline-flex; align-items: center; min-height: 44px; padding: 0 8px; color: var(--forest); font-size: 13px; font-weight: 600; }
-.workspace .trust-footer { padding-left: 16px; padding-right: 16px; }
-@media (max-width: 768px) { .workspace .trust-footer { padding-left: 10px; padding-right: 10px; } }
+.app-shell:not(.canonical-page) .trust-footer { padding-left: 16px; padding-right: 16px; }
+@media (max-width: 768px) { .app-shell:not(.canonical-page) .trust-footer { padding-left: 10px; padding-right: 10px; } }
 /* The command bar holds only the title and the profile menu, so it stays one row at every width. */
 .app-shell:not(.canonical-page) .topbar.commandbar { flex-wrap: nowrap; }
 .app-shell:not(.canonical-page) .command-actions { display: flex; width: auto; justify-content: flex-end; }
+.registry-bar-link { max-width: 40vw; overflow-wrap: anywhere; }
