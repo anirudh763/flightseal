@@ -3,7 +3,7 @@ import React, { useState } from 'react';
 import { Check } from 'lucide-react';
 
 /**
- * OWNER DECISION 2 (open; provisional choice, coordinator 2026-11-18). Verify opens on "I have files"; with the
+ * OWNER DECISION 2 (decided by the owner 2026-11-18: open on "I have files"). Verify opens on "I have files"; with the
  * registry flag on, "I have a HashWing link" is one click away and is chosen on arrival from a share link. The
  * public Pages build (flag off) has no link choice at all (AC-65), since it cannot open a link. 'link' would make
  * flag-on builds open on the link step instead. This is the one switch.
