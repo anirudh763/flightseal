@@ -122,7 +122,7 @@ idempotency window. A malformed `token`, or a page without Web Crypto (not a sec
 
 ```sh
 node --test newweb/tests/outbox.test.mjs newweb/tests/registry-client.test.mjs   # 49 tests, stub fetch + memory store
-node --test newweb/tests/registry-session.test.mjs                                # 3 tests, the console's session store in Node
+node --test newweb/tests/registry-session.test.mjs                                # 7 tests, the console's session store in Node
 node --test newweb/tests/outbox-browser.mjs                                      # 8 tests, Chromium + dev server
 node newweb/tests/registry-wiring.mjs                                            # 22 checks, flag-off scan + flag-on console
 ```
