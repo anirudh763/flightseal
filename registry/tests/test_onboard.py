@@ -172,5 +172,22 @@ def test_output_never_contains_a_password(orgs, capsys):
     assert "S3cret" not in out.out + out.err
 
 
-def test_committed_allow_list_is_valid():
-    assert isinstance(onboard.load_orgs(onboard.ORGS), set)  # the owner adds real orgs; it must stay loadable
+def test_demo_list_holds_only_example_ids():
+    orgs = onboard.load_orgs(onboard.DEMO_ORGS)
+    assert orgs and all(o.startswith("example-") for o in orgs)  # a public file is never a customer directory
+
+
+def test_a_list_inside_the_repo_is_dry_run_only(capsys):
+    fake = FakeCognito()
+    args = ["invite", "--pool-id", POOL, "--org", "example-company-a", "--email", "p@acme.example",
+            "--orgs", str(onboard.DEMO_ORGS)]
+    assert onboard.main(args, client=fake) == 2 and fake.calls == []
+    assert "inside the public repository" in capsys.readouterr().err
+    assert onboard.main([*args, "--dry-run"], client=fake) == 0 and fake.calls == []
+
+
+def test_no_allow_list_is_refused(capsys):
+    fake = FakeCognito()
+    assert onboard.main(["invite", "--pool-id", POOL, "--org", "acme-air", "--email", "p@acme.example"],
+                        client=fake) == 2 and fake.calls == []
+    assert "--orgs" in capsys.readouterr().err
