@@ -35,8 +35,21 @@ test('Lambda: python3.12, arm64, 128 MB, 5 s, cognito adapter, no DEV_ variables
     Environment: { Variables: { IDENTITY_ADAPTER: 'cognito', TABLE_NAME: Match.anyValue() } },
   });
   const [[, fn]] = resources('AWS::Lambda::Function');
-  assert.deepEqual(Object.keys(fn.Properties.Environment.Variables).sort(), ['IDENTITY_ADAPTER', 'TABLE_NAME']);
+  assert.deepEqual(Object.keys(fn.Properties.Environment.Variables).sort(),
+    ['COGNITO_CLIENT_ID', 'COGNITO_ISSUER', 'IDENTITY_ADAPTER', 'TABLE_NAME']);
   assert.ok(!JSON.stringify(json).includes('DEV_'), 'no DEV_ setting anywhere in the template');
+});
+
+test('Lambda gets COGNITO_ISSUER and COGNITO_CLIENT_ID from the stack\'s own user pool and client, in both stages', () => {
+  const [[poolId]] = resources('AWS::Cognito::UserPool');
+  const [[clientId]] = resources('AWS::Cognito::UserPoolClient');
+  const expected = {
+    COGNITO_ISSUER: { 'Fn::Join': ['', ['https://cognito-idp.', { Ref: 'AWS::Region' }, '.amazonaws.com/', { Ref: poolId }]] },
+    COGNITO_CLIENT_ID: { Ref: clientId },
+  };
+  t.hasResourceProperties('AWS::Lambda::Function', { Environment: { Variables: expected } });
+  Template.fromStack(new RegistryStack(new App(), 'ProdEnv', { stage: 'prod' }))
+    .hasResourceProperties('AWS::Lambda::Function', { Environment: { Variables: expected } });
 });
 
 test('explicit log group with 7-day retention, no LogRetention custom resource', () => {

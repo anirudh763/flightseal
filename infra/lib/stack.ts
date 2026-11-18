@@ -189,6 +189,9 @@ export class RegistryStack extends Stack {
       idTokenValidity: Duration.minutes(15),
       accessTokenValidity: Duration.minutes(15),
     });
+    // registry/identity.py checks the token's issuer and client against these; without them it answers 401.
+    fn.addEnvironment('COGNITO_ISSUER', `https://cognito-idp.${this.region}.amazonaws.com/${userPool.userPoolId}`);
+    fn.addEnvironment('COGNITO_CLIENT_ID', client.userPoolClientId);
 
     const corsOrigins = props.corsOrigins ?? DEFAULT_CORS_ORIGINS;
     if (corsOrigins.length === 0) throw new Error('corsOrigins: give at least one origin (omit it for the default)');

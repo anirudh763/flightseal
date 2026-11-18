@@ -56,6 +56,8 @@ The `org_id` and `role` custom attributes cannot be written by the app client; o
 - `cognito` (the only value the CDK stack sets): reads `requestContext.authorizer.jwt.claims`, which the HTTP API
   JWT authorizer has already verified. The client sends the **ID token**: on the Lite plan the custom attributes are
   in the ID token, not the access token.
+  The stack also sets `COGNITO_ISSUER` (`https://cognito-idp.<region>.amazonaws.com/<user pool id>`) and
+  `COGNITO_CLIENT_ID` (the app client) from its own user pool, in both stages.
 - `dev-hs256`: development and the LocalStack run only. HS256 bearer tokens checked against `DEV_TOKEN_SECRET`
   (at least 32 bytes) with an `exp` check. The stack never sets it or any `DEV_` variable; a synth test enforces this.
 - Unset or anything else: every request is 401, and the function logs a configuration error.
