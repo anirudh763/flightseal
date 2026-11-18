@@ -54,12 +54,13 @@ export function reportedInterval(landingIso, sealedIso) {
 }
 
 export const SEALED_BASIS = "this computer's clock, not verified; from the receipt message, not signed";
-/** Every time a recipient sees, with where it came from. */
-export function timeFields({ landing = '', landingSigned = false, sealedAt = '' } = {}) {
+/** Every time a recipient sees, with where it came from. `registry` ({ value, basis }) replaces the registry row
+ * when the console is built with a registry (registry-ui.jsx registryTimeField); without one, no registry was used. */
+export function timeFields({ landing = '', landingSigned = false, sealedAt = '', registry = null } = {}) {
   return [
     { label: 'Reported landing time', value: landing || 'Not entered', basis: landing ? (landingSigned ? 'operator-entered, signed, not verified' : 'operator-entered, not signed, not verified') : 'not entered by the operator' },
     { label: 'Sealed on this computer at', value: sealedAt || 'Unknown', basis: SEALED_BASIS },
-    { label: 'Registry acceptance', value: 'Not registered', basis: 'no registry was used' },
+    { label: 'Registry acceptance', ...(registry ? { value: registry.value, basis: registry.basis } : { value: 'Not registered', basis: 'no registry was used' }) },
     { label: 'Trusted timestamp', value: 'None', basis: 'receipt v1 has no signed time' },
     { label: 'Reported landing-to-seal interval', value: reportedInterval(landing, sealedAt).text, basis: 'worked out from the two times above; it is only as good as they are' },
   ];
@@ -100,10 +101,10 @@ const groups = (hex) => String(hex || '').match(/.{1,4}/g)?.join(' ') || '';
 const STATUS = { match: 'Matches', 'bytes-differ': 'Bytes differ', missing: 'Missing', 'not-in-manifest': 'Not in manifest' };
 
 /** Report for a verified manifest check. items: compareFiles items; locals: hashed local files. */
-export function manifestReport({ sealedName = '', trust, sources = {}, keyFingerprint = '', head = '', sealedAt = '', items = [], extras = [], locals = [] }) {
+export function manifestReport({ sealedName = '', trust, sources = {}, keyFingerprint = '', head = '', sealedAt = '', items = [], extras = [], locals = [], registry = null }) {
   const parsed = items.map((item) => ({ ...item, ...parseNote(item.note) }));
   const landings = [...new Set(parsed.map((item) => item.landing).filter(Boolean))];
-  const fields = timeFields({ landing: landings.length === 1 ? landings[0] : landings.length ? 'Differs by item (see items)' : '', landingSigned: true, sealedAt });
+  const fields = timeFields({ landing: landings.length === 1 ? landings[0] : landings.length ? 'Differs by item (see items)' : '', landingSigned: true, sealedAt, registry });
   if (landings.length > 1) fields[4] = { ...fields[4], value: 'See items' };
   const line = trustLine(trust, sources);
   const entry = trust?.entry;

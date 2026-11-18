@@ -155,6 +155,10 @@ token. A server-made token could only be recovered by issuing a new one.
   AWS. The
   registry cannot check the randomness of a token it never sees, so a weak token chosen by a member only weakens that
   member's own link. The shipped client always uses 256 random bits.
+- **The raw token is in the path of `GET` and `DELETE /v1/shares/{token}`.** Only `POST /v1/shares` sends just the
+  token's SHA-256; AC-48's "the registry receives only its SHA-256" covers creating a share, not opening or
+  withdrawing one. So API Gateway access logs (none are configured today) must never include `$context.path`,
+  or the request URI.
 
 ### CORS
 

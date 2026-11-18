@@ -18,8 +18,23 @@ What the console does with the flag on:
 - **Shares and delete.** Registered rows can make, copy and withdraw a share link
   (`#/app/verify?share=<token>`, fragment only). Admins can delete the hosted record; the console then calls
   `markDeleted(id)`, which rewrites the saved ack with `disposition: 'deleted'`.
-- **Verify.** A share link shows "The registry's record" from `GET /v1/shares/<token>` with no sign-in.
+- **Verify.** A share link shows "The registry's record" from `GET /v1/shares/<token>` with no sign-in. Every field
+  is checked first (`head` and `key_fingerprint` 64 lowercase hex, `count` a non-negative safe integer, `received_at` a
+  date); anything else, a 429 or a 503 shows "The registry is temporarily unavailable". Each registry panel sits in an
+  error boundary, so one bad panel can't blank the app.
+- **Check results.** The "Registry acceptance" time row of a small-file or manifest check, and the text, Markdown,
+  JSON and PDF reports built from it, read this device's outbox row whose `receipt` equals one of the checked receipt
+  lines: "Registered at `received_at`" (the registry's clock; the registry's statement, not proof of the files), "Not
+  yet registered", "Registered, later deleted", or "Needs attention" with its message. With no matching row it says
+  this device has no registry record for the receipt ("Not signed in" while signed out, "Not available yet" until this
+  device's list has been read). With the flag off it stays
+  "Not registered" / "no registry was used".
 - Sign-out, a token for another owner, and the app's logout paths close the outbox and forget the registry token.
+  Registry sign-out and app logout are also broadcast (`BroadcastChannel('hashwing-registry')`, never carrying a
+  token) to the other open tabs. A sign-out names the owner `<org>/<sub>`, and only that owner's tabs drop their copy of
+  the token (a duplicated tab copies `sessionStorage`) and stop sending; an app logout signs every tab out of the
+  registry. Proofs the logged-out user sealed in this tab are never kept for the next one, and
+  a new owner neither sees the previous owner's file names nor hears them announced.
 
 ## Owners and storage
 
@@ -99,13 +114,17 @@ idempotency window. A malformed `token`, or a page without Web Crypto (not a sec
 - `importProofs(text)` queues the receipt lines from an export file again (anything else is `{ok: false, reason: 'not_an_export'}`). A receipt that was already registered
   gets its original ack back, because the server dedupes by registration id across idempotency keys.
 - After `close()`, timers and listeners stop, the in-flight request is aborted, and any late result is dropped.
+- Cross-tab sign-out reaches only tabs that are running. A tab the browser froze or discarded, or one closed and
+  restored with its `sessionStorage`, misses the message and signs back in with its saved token when it wakes; sign out
+  there too. Browsers without `BroadcastChannel` sign out only the current tab.
 
 ## Commands
 
 ```sh
 node --test newweb/tests/outbox.test.mjs newweb/tests/registry-client.test.mjs   # 49 tests, stub fetch + memory store
+node --test newweb/tests/registry-session.test.mjs                                # 7 tests, the console's session store in Node
 node --test newweb/tests/outbox-browser.mjs                                      # 8 tests, Chromium + dev server
-node newweb/tests/registry-wiring.mjs                                            # 19 checks, flag-off scan + flag-on console
+node newweb/tests/registry-wiring.mjs                                            # 22 checks, flag-off scan + flag-on console
 ```
 
 The browser tests start `registry/devserver/server.py` (DEV ONLY; it refuses to bind to anything but loopback),

@@ -12,6 +12,7 @@ import { fileURLToPath } from 'node:url';
 import assert from 'node:assert/strict';
 import { serve } from '../../tests/web/serve.mjs';
 import { acquireBrowserLock, releaseBrowserLock } from '../../tests/web/browser-lock.mjs';
+import { pdfText } from './pdf-text.mjs';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const ROOT = resolve(HERE, '..');
@@ -95,6 +96,31 @@ async function axe(page, label) {
   await page.evaluate(AXE);
   const results = await page.evaluate(() => window.axe.run(document, { runOnly: { type: 'tag', values: ['wcag2a', 'wcag2aa', 'wcag21a', 'wcag21aa', 'wcag22aa', 'best-practice'] } }));
   assert.equal(results.violations.length, 0, `${label}: ${results.violations.map((v) => `${v.id}: ${v.nodes.map((n) => n.target.join(' ')).join('; ')}`).join(' | ')}`);
+}
+const REGISTERED_BASIS = "the registry's clock; the registry's statement, not proof of the files";
+// A downloaded export, with no registry token, JWT or share token in it.
+async function exportOf(page, button, token, scope = page.locator('main')) {
+  const [download] = await Promise.all([page.waitForEvent('download'), scope.getByRole('button', { name: button, exact: true }).locator('visible=true').first().click()]);
+  const path = await download.path();
+  const text = button.includes('PDF') ? await pdfText(path) : readFileSync(path, 'utf8');
+  assert.ok(!JWT.test(text) && !text.includes(token), `${button}: carries a token`);
+  return text;
+}
+// Check the last small-file seal against its own receipt message; returns the "Registry acceptance" [value, basis].
+async function registryLineOfLastSeal(page, file, want) {
+  const handover = await page.locator('#handover-text').inputValue();
+  const [download] = await Promise.all([page.waitForEvent('download'), page.getByRole('button', { name: 'Download sealed file' }).click()]);
+  const sealedPath = join(OUT, file); await download.saveAs(sealedPath);
+  await page.locator('#check-file').setInputFiles(sealedPath);
+  await page.locator('#check-text').fill(handover);
+  await page.getByRole('button', { name: 'Check this log' }).click();
+  const timeRow = page.locator('[aria-labelledby="check-title"] .time-fields > div', { has: page.locator('dt', { hasText: 'Registry acceptance' }) });
+  // Query afresh each poll: a new result re-renders the time fields, so a handle taken earlier can go stale.
+  await page.waitForFunction(([src, flags]) => [...document.querySelectorAll('[aria-labelledby="check-title"] .time-fields > div')].some((d) => d.querySelector('dt')?.textContent === 'Registry acceptance' && new RegExp(src, flags).test(d.querySelector('dd span')?.textContent || '')), [want.source, want.flags], { timeout: 30000 })
+    .catch(async () => assert.fail(`time row: ${await timeRow.innerText({ timeout: 1000 }).catch(() => '(none)')}`));
+  const main = await page.locator('main').innerText();
+  for (const s of ['Not registered', 'no registry was used']) assert.ok(!main.includes(s), `screen shows ${s}`);
+  return [await timeRow.locator('dd span').innerText(), await timeRow.locator('dd small').innerText()];
 }
 function walk(dir) { return readdirSync(dir).flatMap((f) => { const p = join(dir, f); return statSync(p).isDirectory() ? walk(p) : [p]; }); }
 
@@ -260,12 +286,56 @@ try {
     assert.equal(await row.getByRole('button', { name: 'Delete hosted record' }).count(), 0, 'members see no delete');
   });
 
-  await check('large files: a two-file manifest seal registers as "2 files"', async () => {
+
+  await check('AC-25/AC-26: checking the registered receipt shows "Registered at <received_at>" on screen and in the text, Markdown, JSON and PDF reports', async () => {
+    const row = await openRow(page, 'flight-a.ulg');
+    const receivedAt = /Registered at (\d{4}-\d\d-\d\d) (\d\d:\d\d:\d\d) UTC/.exec(await row.locator('.registry-detail').innerText()).slice(1).join('T') + 'Z';
+    const value = `Registered at ${receivedAt}`;
+    assert.deepEqual(await registryLineOfLastSeal(page, 'flight-a.fseal', new RegExp(`^${value}$`)), [value, REGISTERED_BASIS]);
+    const token = await page.evaluate(() => sessionStorage.getItem('hashwing-registry-token'));
+    const line = `Registry acceptance: ${value} (${REGISTERED_BASIS})`;
+    const outs = { text: await exportOf(page, 'Download text report', token), markdown: await exportOf(page, 'Download Markdown report', token) };
+    const json = JSON.parse(await exportOf(page, 'Download JSON', token));
+    assert.deepEqual(json.timeProvenance.fields.find((f) => f.label === 'Registry acceptance'), { label: 'Registry acceptance', value, basis: REGISTERED_BASIS });
+    outs.json = JSON.stringify(json);
+    await go(page, 'reports');
+    outs.pdf = await exportOf(page, 'Download PDF', token);
+    for (const [name, out] of Object.entries(outs)) {
+      if (name !== 'json') assert.ok(out.replace(/\s+/g, ' ').includes(line), `${name}: ${out.slice(0, 3000)}`); // the PDF wraps long lines
+      for (const s of ['Not registered', 'no registry was used']) assert.ok(!out.includes(s), `${name} says ${s}`);
+    }
+    await go(page, 'protect');
+  });
+
+  await check('large files: a two-file manifest seal registers as "2 files"; checking it reads Registered on screen and in its text, Markdown, JSON and PDF reports', async () => {
     await go(page, 'protect');
     await page.getByLabel('Large files (fingerprint only)').check();
     await page.locator('#manifest-files').setInputFiles([{ name: 'v1.mp4', mimeType: 'video/mp4', buffer: Buffer.from(`one ${Date.now()}`) }, { name: 'v2.mp4', mimeType: 'video/mp4', buffer: Buffer.from(`two ${Date.now()}`) }]);
     await page.getByRole('button', { name: 'Seal', exact: true }).click();
     await chipIs(page, '2 files', 'Registered', 60000);
+    // AC-25/AC-26 on the manifest check: the same receipt reads Registered on screen and in its text report.
+    const handover = await page.locator('#manifest-handover-text').inputValue();
+    const publicKey = /Public key: ([0-9a-f]{64})/.exec(handover)[1];
+    const [download] = await Promise.all([page.waitForEvent('download'), page.getByRole('button', { name: 'Download sealed list' }).click()]);
+    const sealedPath = join(OUT, 'two-files.manifest.fseal'); await download.saveAs(sealedPath);
+    await page.locator('#manifest-check-file').setInputFiles(sealedPath);
+    await page.locator('#manifest-check-text').fill(handover);
+    await page.locator('#manifest-trusted-key').fill(publicKey);
+    await page.getByRole('button', { name: 'Check files' }).click();
+    const timeRow = page.locator('.manifest-outcome .time-fields > div', { has: page.locator('dt', { hasText: 'Registry acceptance' }) });
+    await page.waitForFunction((el) => /^Registered at \d{4}-\d\d-\d\dT\d\d:\d\d:\d\dZ$/.test(el?.querySelector('dd span')?.textContent || ''), await timeRow.elementHandle({ timeout: 30000 }), { timeout: 30000 })
+      .catch(async () => assert.fail(`manifest time row: ${await timeRow.innerText().catch(() => '')}`));
+    assert.equal(await timeRow.locator('dd small').innerText(), REGISTERED_BASIS);
+    const token = await page.evaluate(() => sessionStorage.getItem('hashwing-registry-token'));
+    const value = await timeRow.locator('dd span').innerText();
+    const outcome = page.locator('.manifest-outcome');
+    for (const button of ['Download text report', 'Download Markdown report', 'Download PDF']) {
+      const out = (await exportOf(page, button, token, outcome)).replace(/\s+/g, ' ');
+      assert.ok(out.includes(`Registry acceptance: ${value} (${REGISTERED_BASIS})`), `${button}: ${out.slice(0, 1500)}`);
+      assert.ok(!out.includes('Not registered') && !out.includes('no registry was used'), button);
+    }
+    const json = JSON.parse(await exportOf(page, 'Download JSON', token, outcome));
+    assert.deepEqual(json.timeProvenance.fields[2], { label: 'Registry acceptance', value, basis: REGISTERED_BASIS });
     await page.getByLabel('Small file (seal the whole file, up to 45 MiB)').check();
   });
 
@@ -312,6 +382,31 @@ try {
     await reviewer.locator('#log-input').waitFor();
     assert.equal(await reviewer.locator('.registry-record').count(), 0, 'Verify without a link shows no old record');
     await fresh.close();
+  });
+
+  await check('share view: a malformed record or a 429 shows the one "temporarily unavailable" message, and the app keeps rendering', async () => {
+    const UNAVAILABLE = 'The registry is temporarily unavailable. Try the link again in a few minutes.';
+    const good = { head: 'a'.repeat(64), count: 3, key_fingerprint: 'b'.repeat(64), received_at: '2026-11-17T10:00:00Z' };
+    const answers = [
+      [200, { ...good, count: { a: 1 } }], [200, { ...good, count: -1 }], [200, { ...good, count: '3' }], [200, { ...good, head: '<img src=x>' }],
+      [200, { ...good, head: 'A'.repeat(64) }], [200, { ...good, key_fingerprint: ['x'] }], [200, { ...good, received_at: { t: 1 } }], [200, { ...good, received_at: 'yesterday' }],
+      [429, { message: 'Too Many Requests' }],
+    ];
+    const fresh = await newContext();
+    const reviewer = watch(await fresh.newPage(), 'reviewer-malformed');
+    try {
+      for (const [status, body] of answers) {
+        const answer = (route) => route.fulfill({ status, contentType: 'application/json', headers: { 'access-control-allow-origin': '*' }, body: JSON.stringify(body) });
+        await reviewer.route(`${base}/v1/shares/**`, answer);
+        await reviewer.goto('about:blank');
+        await reviewer.goto(shareUrl);
+        await reviewer.locator('.registry-record').getByText(UNAVAILABLE).waitFor({ timeout: 15000 })
+          .catch(async () => assert.fail(`${status} ${JSON.stringify(body)}: ${await reviewer.locator('#root').innerText().catch(() => '(no root)')}`.slice(0, 600)));
+        await reviewer.locator('#log-input').waitFor(); // the rest of the app still renders
+        assert.equal(await reviewer.locator('.registry-record dl').count(), 0);
+        await reviewer.unroute(`${base}/v1/shares/**`, answer);
+      }
+    } finally { await fresh.close(); }
   });
 
   await check('axe 0 violations and no horizontal scroll on protect (list) and help (registry panel) at 320/768/1440; screenshots', async () => {
@@ -364,6 +459,7 @@ try {
       assert.equal(await row.getByRole('button', { name: 'Try again' }).isVisible(), false, 'Try again is tucked under More options');
       await row.locator('.registry-tech summary').click();
       await row.getByRole('button', { name: 'Try again' }).waitFor();
+      assert.deepEqual(await registryLineOfLastSeal(page, 'flight-q.fseal', /^Needs attention$/), ['Needs attention', "Your company's monthly registration limit is reached; this proof is saved and can be exported"]);
       const seen = posts;
       await sleep(2500);
       assert.equal(posts, seen, 'no automatic retry');
@@ -492,6 +588,7 @@ try {
     await signIn(page, 'admin-1', 'admin');
     await go(page, 'protect');
     assert.equal(await page.locator('.registry-row').count(), 0, 'another owner\'s rows are not shown');
+    assert.equal(await page.locator('.registry-announce').textContent(), '', 'the previous owner\'s announcement is cleared');
     await importSeedA(page);
     await sealSmall(page, 'flight-admin.ulg');
     await chipIs(page, 'flight-admin.ulg', 'Registered');
@@ -511,6 +608,7 @@ try {
     await chipIs(page, 'flight-admin.ulg', 'Registered, later deleted');
     await row.getByText("The registry's record of this receipt was deleted. Links to it no longer open.").waitFor();
     assert.ok(!(await row.locator('.registry-detail').innerText()).includes('Registered at'));
+    assert.deepEqual(await registryLineOfLastSeal(page, 'flight-admin.fseal', /^Registered, later deleted$/), ['Registered, later deleted', "the registry's statement, not proof of the files; its hosted record was deleted"]);
     await sleep(500);
     assert.equal((await registerLog('pilot-1')).length, pilotSends, 'no registration from the previous owner after the switch');
   });
@@ -524,6 +622,7 @@ try {
     await sealSmall(page, 'flight-after.ulg');
     await chipIs(page, 'flight-after.ulg', 'Sealed locally');
     assert.equal(await page.locator('.registry-row').count(), 1, 'the signed-out list shows only this tab\'s unsent seal');
+    assert.deepEqual(await registryLineOfLastSeal(page, 'flight-after.fseal', /^Not yet registered$/), ['Not yet registered', "this device's list: Sealed locally"]);
     await page.locator('.registry-more > summary').click();
     const [download] = await Promise.all([page.waitForEvent('download'), page.getByRole('button', { name: 'Export pending proofs' }).click()]);
     const doc = JSON.parse(readFileSync(await download.path(), 'utf8'));
@@ -534,6 +633,26 @@ try {
   });
 
   await ctx.close();
+  await check('registry sign-out in one tab signs out a duplicated tab of the same owner, which then sends nothing', async () => {
+    const c = await newContext();
+    try {
+      const a = watch(await c.newPage(), 'tab-a');
+      await a.goto(`${flagOn.url}#/app/help`);
+      await signIn(a, 'tab-pilot', 'pilot');
+      const [b] = await Promise.all([c.waitForEvent('page'), a.evaluate((u) => { window.open(u); }, `${flagOn.url}#/app/help`)]);
+      watch(b, 'tab-b');
+      await b.locator('#company-registry').getByText('Signed in to the company registry as tab-pilot').waitFor({ timeout: 30000 });
+      await a.locator('#company-registry').getByRole('button', { name: 'Sign out' }).click();
+      await b.locator('#registry-token').waitFor({ timeout: 10000 });
+      assert.equal(await b.evaluate(() => sessionStorage.getItem('hashwing-registry-token')), null, 'tab B dropped its token');
+      const sends = (await registerLog('tab-pilot')).length;
+      await sealSmall(b, 'tab-b.ulg');
+      await chipIs(b, 'tab-b.ulg', 'Sealed locally');
+      await sleep(3000);
+      assert.equal((await registerLog('tab-pilot')).length, sends, 'tab B sent nothing after the sign-out in tab A');
+    } finally { await c.close(); }
+  });
+
   await check('no console or page errors', async () => { assert.deepEqual(errors, []); });
 } finally {
   await browser?.close();

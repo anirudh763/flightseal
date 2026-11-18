@@ -28,6 +28,11 @@ const REASONS = {
   attempts_exhausted: ["This couldn't be sent after several tries. It is still saved here.", 'retry'],
 };
 const REFUSED = [UNREADABLE, 'export'];
+const hex64 = (v) => typeof v === 'string' && /^[0-9a-f]{64}$/.test(v);
+// A share record is shown only when every field has its exact shape; anything else gets the "unavailable" message.
+const shareRecord = (d) => (d && hex64(d.head) && Number.isSafeInteger(d.count) && d.count >= 0 && hex64(d.key_fingerprint)
+  && typeof d.received_at === 'string' && !Number.isNaN(Date.parse(d.received_at)) ? { head: d.head, count: d.count, key_fingerprint: d.key_fingerprint, received_at: d.received_at } : null);
+const UNAVAILABLE = 'The registry is temporarily unavailable. Try the link again in a few minutes.';
 const LINK_DEAD = "This link doesn't open. It may have been withdrawn or expired, or it was copied incompletely. Ask the sender for a new link.";
 
 // Claims read WITHOUT verification, for display only (the registry verifies). null when unreadable.
@@ -67,12 +72,21 @@ function createRegistry() {
   const names = new Map(); // receipt -> display name; memory only, never persisted
   let token = ''; // the only copy outside sessionStorage
   let gen = 0, seq = 0, unsubscribe = null;
-  let state = { token: '', claims: null, owner: null, outbox: null, rows: [], pending: [], needsSignIn: false,
+  let user = 0; // bumped by logout(): proofs saved for the user who left are never put back for the next one
+  let lastOwner = null; // the owner the display names belong to
+  let state = { token: '', claims: null, owner: null, outbox: null, rows: [], listed: false, pending: [], needsSignIn: false,
     online: navigator.onLine !== false, memory: false, listError: '', enqueueError: '' };
   const set = (patch) => { state = { ...state, ...patch }; for (const fn of listeners) fn(); };
   const client = createRegistryClient({ baseUrl: __REGISTRY_URL__, getToken: async () => token });
   addEventListener('online', () => set({ online: true }));
   addEventListener('offline', () => set({ online: false }));
+  // Other tabs of this browser (a duplicated tab copies sessionStorage, token included) drop their registry sign-in
+  // with this one. The message names the owner, never a token.
+  const channel = typeof BroadcastChannel === 'function' ? new BroadcastChannel('hashwing-registry') : null;
+  channel?.addEventListener('message', ({ data }) => {
+    if (data?.type === 'logout') logoutHere();
+    else if (data?.type === 'signout' && typeof data.owner === 'string' && data.owner === state.owner) signOutHere();
+  });
 
   async function refresh(ob) {
     const n = ++seq;
@@ -80,7 +94,7 @@ function createRegistry() {
       const rows = await ob.list();
       if (n !== seq || state.outbox !== ob) return; // a newer refresh, a close or an owner change won
       const st = ob.status();
-      set({ rows, needsSignIn: st.needsSignIn, memory: st.storage === 'memory' || st.exportOffered, listError: '' });
+      set({ rows, listed: true, needsSignIn: st.needsSignIn, memory: st.storage === 'memory' || st.exportOffered, listError: '' });
     } catch { if (state.outbox === ob) set({ listError: LIST_ERROR }); }
   }
   async function enqueueOn(ob, receipt) {
@@ -96,7 +110,7 @@ function createRegistry() {
     gen += 1; seq += 1;
     unsubscribe?.(); unsubscribe = null;
     state.outbox?.close();
-    set({ outbox: null, rows: [], needsSignIn: false, memory: false, listError: '', enqueueError: '' });
+    set({ outbox: null, rows: [], listed: false, needsSignIn: false, memory: false, listError: '', enqueueError: '' });
   }
   async function signIn(raw) {
     const tok = String(raw || '').trim();
@@ -108,9 +122,13 @@ function createRegistry() {
       return true;
     }
     closeOutbox();
+    if (lastOwner && lastOwner !== owner) { // another owner: forget the last one's file names, except this tab's unsent seals
+      for (const receipt of names.keys()) if (!state.pending.some((p) => p.receipt === receipt)) names.delete(receipt);
+    }
+    lastOwner = owner;
     token = tok; storage.set(tok);
     set({ token: tok, claims, owner });
-    const g = gen;
+    const g = gen, u = user;
     let ob;
     try { ob = await openOutbox({ ownerId: owner, client, getToken: async () => token }); }
     catch { if (g === gen) set({ listError: LIST_ERROR }); return true; }
@@ -120,6 +138,7 @@ function createRegistry() {
     set({ outbox: ob, pending: [] });
     for (let i = 0; i < pending.length; i++) {
       if (await enqueueOn(ob, pending[i].receipt)) continue;
+      if (u !== user) break; // logged out meanwhile: those proofs left with that user
       // never drop an unsent proof: this one and every later one go back to the in-memory list
       const back = pending.slice(i).filter((p) => !state.pending.some((q) => q.receipt === p.receipt));
       set({ pending: [...back, ...state.pending] });
@@ -128,11 +147,12 @@ function createRegistry() {
     if (state.outbox === ob) await refresh(ob);
     return true;
   }
-  function signOut() {
+  function signOutHere() {
     closeOutbox();
     token = ''; storage.set('');
     set({ token: '', claims: null, owner: null });
   }
+  function logoutHere() { user += 1; signOutHere(); names.clear(); set({ pending: [] }); }
 
   const saved = storage.get();
   if (saved) signIn(saved).then((ok) => { if (!ok) storage.set(''); });
@@ -141,11 +161,14 @@ function createRegistry() {
     client, names,
     subscribe(fn) { listeners.add(fn); return () => listeners.delete(fn); },
     snapshot: () => state,
-    signIn, signOut, importProofs,
-    logout() { signOut(); names.clear(); set({ pending: [] }); },
+    signIn, importProofs,
+    signOut() { const owner = state.owner; signOutHere(); if (owner) channel?.postMessage({ type: 'signout', owner }); },
+    logout() { logoutHere(); channel?.postMessage({ type: 'logout' }); },
     async sealed(receipt, name) {
+      const u = user;
       if (name) names.set(receipt, name);
       if (state.outbox && await enqueueOn(state.outbox, receipt)) return; // a failed enqueue (queue full) keeps it in memory below
+      if (u !== user) return; // logged out meanwhile
       if (!state.pending.some((p) => p.receipt === receipt)) set({ pending: [...state.pending, { receipt, at: Date.now() }] });
     },
     async exportPending() {
@@ -164,6 +187,25 @@ export function registrySealed(receipts, name) {
   const receipt = String(receipts || '').split('\n').map((line) => line.trim()).filter(Boolean).pop();
   if (receipt) getRegistry().sealed(receipt, name).catch(() => {}); // a seal never waits on or fails because of the registry
 }
+// The "Registry acceptance" time row for a checked receipt message: this device's outbox row for one of its receipt
+// lines, matched on the stored receipt line. Only these strings reach the screen and the reports, never a row.
+const REGISTERED_BASIS = "the registry's clock; the registry's statement, not proof of the files";
+export function useRegistryTimeField(receipts) { return registryTimeField(useRegistry()[1], receipts); }
+/** The same row from a session snapshot (pure, for tests). */
+export function registryTimeField(s, receipts) {
+  const lines = new Set(String(receipts || '').split('\n').map((line) => line.trim()).filter(Boolean));
+  if (!lines.size) return null;
+  const row = s.rows.find((r) => lines.has(r.receipt));
+  if (row?.state === 'registered' && row.disposition === 'deleted') return { value: 'Registered, later deleted', basis: "the registry's statement, not proof of the files; its hosted record was deleted" };
+  if (row?.state === 'registered') return { value: `Registered at ${row.received_at}`, basis: REGISTERED_BASIS };
+  if (row?.state === 'needs_attention') return { value: 'Needs attention', basis: attentionMessage(row) ?? (REASONS[row.reason] ?? REFUSED)[0] };
+  if (row) return { value: 'Not yet registered', basis: `this device's list: ${s.online || row.state !== 'sealed_local' ? row.label : stateLabel('waiting_for_connection')}` };
+  if (s.pending.some((p) => lines.has(p.receipt))) return { value: 'Not yet registered', basis: "this device's list: Sealed locally" };
+  if (!s.owner) return { value: 'Not signed in', basis: "sign in to the company registry to see this device's record" };
+  if (!s.outbox || !s.listed) return { value: 'Not available yet', basis: "this device's registry list isn't open yet" };
+  return { value: 'No registry record on this device', basis: 'this device has no registry record for this receipt' };
+}
+
 // Called from the app's logout paths: close the outbox and forget the registry token.
 export function registryLogout() {
   if (registry) registry.logout();
@@ -218,6 +260,7 @@ export function SealedOnDevice({ onSignIn }) {
   const importRef = useRef(null);
   const [announce, setAnnounce] = useState('');
   const seen = useRef(null);
+  useEffect(() => { setAnnounce(''); seen.current = null; }, [s.owner]); // a new owner never hears the last one's file names
   // Offline, the outbox leaves a new row in sealed_local (it doesn't try to send); to the user it is waiting for the connection.
   const shown = s.online ? s.rows : s.rows.map((row) => (row.state === 'sealed_local' ? { ...row, state: 'waiting_for_connection', label: stateLabel('waiting_for_connection') } : row));
   const rows = [...shown, ...s.pending.map((p) => ({ id: `pending:${p.receipt}`, receipt: p.receipt, state: 'sealed_local', label: 'Sealed locally', created_at: p.at, pending: true }))];
@@ -400,6 +443,13 @@ function DeleteRecord({ row, client, outbox }) {
   </div>;
 }
 
+// One registry panel that fails to render shows this notice instead of blanking the whole app.
+export class RegistryBoundary extends React.Component {
+  constructor(props) { super(props); this.state = { failed: false }; }
+  static getDerivedStateFromError() { return { failed: true }; }
+  render() { return this.state.failed ? <p className="registry-notice" role="alert">This registry section couldn't be shown. Sealing and checking still work. Reload the page to try again.</p> : this.props.children; }
+}
+
 // ------------------------------------------------------------------ Verify: the recipient's share view
 
 export function ShareRecordPanel({ token }) {
@@ -410,9 +460,10 @@ export function ShareRecordPanel({ token }) {
     setView({ state: 'loading' });
     createRegistryClient({ baseUrl: __REGISTRY_URL__ }).getShare(token).then((res) => {
       if (!live) return;
-      if (res.ok && typeof res.data.head === 'string') setView({ state: 'ok', data: res.data });
+      const record = res.ok ? shareRecord(res.data) : null;
+      if (record) setView({ state: 'ok', data: record });
       else if (res.kind === 'network' || res.kind === 'timeout') setView({ state: 'error', message: "You're offline. Opening a link needs a connection. You can still check files." });
-      else if (res.status === 503) setView({ state: 'error', message: 'The registry is temporarily unavailable. Try the link again in a few minutes.' });
+      else if (res.ok || res.status === 503 || res.status === 429) setView({ state: 'error', message: UNAVAILABLE });
       else setView({ state: 'error', message: LINK_DEAD });
     });
     return () => { live = false; };
