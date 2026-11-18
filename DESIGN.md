@@ -6,6 +6,8 @@ styles: newweb/src/style.css
 
 # FlightSeal workbench
 
+Token values have one canonical map: `_bmad-output/initiative-hashwing-aws/ux-hashwing/DESIGN.md` (front matter), read from the final `:root` layer of `newweb/src/style.css`. This file keeps the product direction. The HashWing release layout (Seal & send, Verify, Jobs, Trust, with More tools) is locked in `_bmad-output/initiative-hashwing-aws/ux-hashwing/EXPERIENCE.md`; it changes the GitHub Pages console nav, not the self-hosted product paths below.
+
 The owner's November 14 workbench direction supersedes the mint folio design. The canonical console is `docs/console/`; root links redirect there with allowlisted sample and selection parameters. Do not maintain a separate Classic UI.
 
 A light-neutral canvas, a 220px desktop session rail and a 48px command bar keep the loaded file and verification context visible. Use hairline pane dividers, small corners and compact typography rather than nested floating cards, compiler badges or a large marketing heading. Navigation uses labelled Lucide icons. The rail shows only known source metadata; unavailable drone IDs or dates are not invented.

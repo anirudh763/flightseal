@@ -1,6 +1,6 @@
 ---
 name: HashWing
-description: Calm, light evidence console for sealing drone flight files and letting an outside reviewer check them. Inherits the repo-root DESIGN.md and the final token layer of newweb/src/style.css; this file restates those tokens by name and adds only the registry-status components.
+description: Calm, light evidence console for sealing drone flight files and letting an outside reviewer check them. This file is the one canonical token map for the console. Its values are read from the final token layer of newweb/src/style.css (lines 889-899); the repo-root DESIGN.md keeps the product direction and points here for tokens.
 status: final
 updated: 2026-11-17
 sources:
@@ -122,13 +122,28 @@ components:
     border: '{colors.line}'
     radius: '{rounded.lg}'
     note: 'Calm inline notice. Replaces banners and toasts for every state in EXPERIENCE.md.'
+  choice-buttons:
+    background: '{colors.surface}'
+    border: '{colors.field-border}'
+    selected-background: '{colors.action-tint}'
+    selected-border: '{colors.action}'
+    radius: '{rounded.sm}'
+    minHeight: '{spacing.target}'
+    note: 'New (release layout). The Verify chooser: two aria-pressed buttons, I have a link / I have files. Not primary buttons.'
+  compare-table:
+    border: '{colors.line}'
+    typography: '{typography.data}'
+    note: 'New. Full main-column width at 1440px; below the 768px rule it becomes one summary per file with a Details disclosure.'
+  counts-row:
+    typography: '{typography.data}'
+    note: 'New. Matches, differs, missing, extra counts in one line with status shapes; numbers tabular.'
 ---
 
 ## Brand & Style
 
 HashWing is an evidence tool for small drone inspection companies and the clients or insurers who receive their files. It has to feel calm and trustworthy: a quiet, light workspace where the one next step is obvious and nothing shouts. The owner's wording is "very user friendly, calm and premium; nothing hitting your face".
 
-"Premium" here means restraint, not decoration. It comes from generous spacing, plain words, aligned data in a monospace face and precise status wording. There are no gradients, hero art, celebration animations or dark-first themes. This file does not change the repo-root `DESIGN.md`. It inherits the workbench direction there (light neutral canvas, 220px rail, 48px command bar, hairline dividers, small corners, labelled Lucide icons) and adds only what the registry and offline states need.
+"Premium" here means restraint, not decoration. It comes from generous spacing, plain words, aligned data in a monospace face and precise status wording. There are no gradients, hero art, celebration animations or dark-first themes. This is the one token map: the repo-root `DESIGN.md` keeps the product direction and points here for token values, and `newweb/src/style.css` holds them (checked 2026-11-17: `:root` on line 889 for canvas, surface, ink, muted, line, field-border, action (`--forest`), action-tint (`--mint`) and the status pairs; line 892 rail `#eaf0f7`; line 895 action-hover `#194393`; line 899 nav-current `#173f92` on `#dce7fa`; lines 887-888 the bundled Space Grotesk and JetBrains Mono). It inherits the workbench direction there (light neutral canvas, 220px rail, 48px command bar, hairline dividers, small corners, labelled Lucide icons) and adds only what the registry and offline states need.
 
 ## Colors
 
@@ -203,6 +218,10 @@ New for the registry wiring:
   The chip text is always a word, never only an icon.
 - **Inline notice** (`{components.notice-inline}`). A one- or two-sentence notice placed directly under the thing it is about, with at most one action button (secondary style). Every empty, offline, error and next-step message in `EXPERIENCE.md` uses it. Notices don't animate in and don't auto-dismiss.
 - **Share link row.** It shows the link on one line in `{typography.data}`, with two buttons: "Copy link" (secondary) and "Withdraw link" (secondary text in `{colors.ink}`; the danger color is not used here because withdrawing can be undone by making a new link).
+- **Verify chooser** (`{components.choice-buttons}`, New, release layout). Two equal choice buttons, "I have a link" and "I have files". The chosen one shows the action tint and border; the step's single primary button sits under the fields that follow.
+- **Comparison table and per-file summary** (`{components.compare-table}`, `{components.counts-row}`, New). Columns: file, bytes, status (word and shape), SHA-256 (abbreviated with Copy). The counts row sits above it. Narrow widths use one summary block per file instead of a squeezed table.
+- **Jobs list** (New). Same table rules as the comparison. Pagination uses secondary Previous and Next buttons; search is a labelled text input.
+- **Registry line** (Change). "Last confirmed by this device {time}" in `{typography.hint}` with a secondary Refresh button. It is never green until a lookup in this session succeeds.
 - **Delete hosted record button.** A secondary button labelled "Delete hosted record". The confirm dialog's confirm button uses `{colors.bad}` fill. This is the only place the bad color fills a button.
 
 ## Do's and Don'ts

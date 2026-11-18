@@ -2,6 +2,7 @@
 name: HashWing
 status: in-review
 updated: 2026-11-17
+# Release layout locked 2026-11-17 against main b2cec46 (owner brief Phase A).
 sources:
   - ../../../newweb/src/main.jsx
   - ../../../newweb/src/recipient-trust.mjs
@@ -42,14 +43,15 @@ Each surface, state and string is marked with one of three tags:
 
 ## Information Architecture
 
-Primary nav (Existing: `PRIMARY_NAV`). The order is fixed.
+Primary nav (Existing: `PRIMARY_NAV`). The order is fixed. **Change (owner decision 2026-11-17, locked in "Release layout, locked" below):** the primary nav becomes Seal & send, Verify, Jobs, Trust, and Records and Receipts move into More tools with their routes kept. This applies to the GitHub Pages console (hash routes, `productMode` false in `main.jsx:113`). The self-hosted product mode keeps its own Overview, Workbench, Reports and Settings paths from the root `DESIGN.md`; this release does not change them.
 
 | Nav item | Route | Purpose | Who |
 |---|---|---|---|
 | Seal & send | `protect` | Seal a small file or a set of large files, then send the receipt message. With the flag on, it also lists items sealed on this device with their registry status. | Pilot, ops lead |
 | Verify | `verify` | Check what you were sent: a share link, or files plus a receipt message. | Reviewer |
-| Records | `records` | Browse the records inside a loaded `.fseal` log. | Anyone with a log loaded |
-| Receipts | `receipts` | Receipt coverage and signature checks for a loaded log. | Anyone with a log loaded |
+| Jobs | `jobs` | **New.** Find and resume local evidence packages on this device. | Pilot, ops lead |
+| Records | `records` | Browse the records inside a loaded `.fseal` log. **Change:** moves to More tools. | Anyone with a log loaded |
+| Receipts | `receipts` | Receipt coverage and signature checks for a loaded log. **Change:** moves to More tools. | Anyone with a log loaded |
 | Trust | `help` | Trusted companies (fingerprint pins), your signing key, your company's keys (flag on), and plain-language limits. | Reviewer, ops lead |
 
 The "More tools" disclosure (Existing: `MORE_NAV`, a `<details>` in the nav) holds Samples (`sandbox`), Video, Benchmarks and System. It is closed by default and opens automatically when one of those pages is current. Escape closes it and returns focus to its summary.
@@ -262,6 +264,7 @@ Every error shows one sentence saying what happened and one action. Raw codes ap
 |---|---|
 | 1440px | Rail visible. A step panel takes the main column. The "Sealed on this device" list sits below it. |
 | 768px | The rail becomes the "Menu" button (Existing). One column. "More tools" stays a disclosure inside the menu. |
+| 390px and 200% zoom | Same as 320px. See "Release layout, locked" for the per-screen rules. |
 | 320px | One column with a 16px gutter. The share link row stacks: field, then two full-width buttons. Time fields stack label, value, basis. Nothing scrolls horizontally, and no control is clipped. |
 
 Installed and offline: sealing, checking and the outbox work offline. The service worker never caches registry API responses (Existing rule: private APIs are never cached).
@@ -318,6 +321,157 @@ Marcus is the ops lead and owns the company's signing key. `[ASSUMPTION]`: "adds
 5. **Reviewer half** (Existing). Daniel, in Trust → Trusted companies, adds "Skyline Inspections", pastes the fingerprint and chooses "contract or invoice" as the source. The fingerprint and its source show in the company list.
 6. **Replacing a key.** Marcus enrolls a new key. The old key shows **Replaced on {date}**, never "rotated". Daniel replacing his pin needs the existing in-page confirmation, "Replace key" or "Keep current key".
 
+## Release layout, locked (2026-11-17)
+
+Locked before any code, from the owner's release brief (Phase A) and the owner decisions of 2026-11-17. Ledger IDs (R12 to R68) are in `../initiative-hashwing-aws.md`. Task packets are in `../plan-ui-backend-release.md`. Tokens are the ones in `DESIGN.md` beside this file, unchanged. Every item here is **Change** or **New** unless it says Existing. Nothing below is built yet.
+
+### Frame
+
+- **Desktop (1440px).** The existing 220px left rail with four labelled Lucide links (Seal & send, Verify, Jobs, Trust), then the More tools disclosure. A 48px command bar with the route title and account access. One readable main column, up to 1280px. An optional summary column on the right for facts about the current task. There are never two competing forms on one screen.
+- **One task per screen.** Each step panel has one `.button.primary`. Everything else is secondary or a text link.
+- **Results link out.** A result links straight to the More tools page that explains it, for example "Open in Records" from a chain failure, or "Receipt coverage" from a receipt line.
+
+### Wireframes
+
+Text wireframes. `[Primary]` is the only primary button on the screen. `(secondary)` is a secondary button. `‹link›` is a text link. `▸` is a closed disclosure.
+
+**Front door (`landing`)**
+
+```
+HashWing
+Seal flight files on this device and let your client check them.      <- one factual line, no kicker, no lede
+[Seal files]   (Verify files)   ‹Try a sample›                          <- Try a sample runs the real engine on the included fixture
+Files stay on this device. ‹How checking works›                          <- one privacy line; detail in Help
+```
+
+No rotating preview, no numbered steps, no metrics, logos or testimonials, no login wall. The Mavframe link moves to More tools → System (or Help). The sample result reuses the existing live result panel.
+
+**Seal & send (`protect`)**
+
+```
+Seal & send
+  What are you sealing?
+    (o) Small file: seal the whole file, up to 45 MiB
+    ( ) Large files: fingerprint only, files stay where they are
+  Files       flight-12.ulg                       18,442,112 bytes
+              Total 1 file                         18,442,112 bytes   <- JetBrains Mono, tabular
+  Job reference (optional)  [______________]      <- local label, never signed, never sent to the registry
+  Signing key   Skyline Inspections · 3f9a 1c0b …  ‹Change on Trust›
+  ▸ More options (landing time, technical options)
+  [Seal this log]
+  -- while sealing --
+  Sealing 2 of 14 · 4.1 GB of 9.0 GB   (Cancel)
+  ‹Checking files someone sent you? Go to Verify›
+```
+
+**After sealing (same route, the step panel collapses to "Sealed · 1 file")**
+
+```
+Send these to your client
+  Sealed file   flight-12.fseal         (Download)       <- small-file mode
+  -- or, large-file mode --
+  Manifest      job-12.manifest         (Download)
+  Originals     14 files travel separately; they are not inside the manifest
+  Receipt message                       [Copy message]
+  Copying the message does not show that your client kept it.
+  ▸ Share link (flag on): a link to the registry's record, not to the files
+Sealed on this device                                  <- compact list, last 5, ‹All jobs› to Jobs
+  flight-12.fseal   Sealed locally   17 Nov 15:41
+```
+
+**Verify (`verify`)**
+
+```
+Verify
+  What were you sent?
+    [ I have a link ]  [ I have files ]                 <- two choice buttons; a share link preselects "I have a link"
+  -- I have a link --
+  The registry received a receipt for 14 items from the key 3f9a 1c… at 2026-11-17 15:41 UTC (the registry's clock).
+  Files not checked yet.                                <- a prefilled link never marks files verified
+  [Check the files]
+  -- I have files --
+  Sealed file or manifest [Choose]   Receipt message [paste]   Trusted company [Skyline ▾]
+  Originals [Choose files]
+  [Check files]
+  -- result, full width --
+  Manifest signature   Valid
+  Key trust            Signed by a key you trust: Skyline Inspections (contract or invoice)
+  File contents        Incomplete: 12 match · 1 differs · 1 missing · 0 extra
+  Receipt coverage     All items covered
+  Registry             Last confirmed by this device 17 Nov 15:42 (Refresh)   <- flag on only
+  Times                reported landing, sealed at, registry acceptance, each with its basis
+  +------------------------------------------------------------------------------+
+  | File              | Bytes        | Status       | SHA-256 (copy)             |
+  | roof-north-01.mp4 | 812,004,113  | Matches      | 9c1e…  (Copy)              |
+  | roof-north-02.mp4 | 790,113,020  | Bytes differ | 41aa…  (Copy)              |
+  | roof-east-07.mp4  | —            | Missing      | 07d2…  (Copy)              |
+  +------------------------------------------------------------------------------+
+```
+
+A valid signature with any missing original reads "Incomplete", never "Verified".
+
+**Jobs (`jobs`, New)**
+
+```
+Jobs                                       On this device only. Not a cloud copy.
+  [Search job reference or file name____]  Status [All ▾]
+  Job ref   | Package           | Status             | Sealed           | Actions
+  J-1042    | job-12.manifest   | Registered (flag on) | 17 Nov 15:41   | (Resume) (Export)
+  —         | flight-9.fseal    | Sealed locally     | 16 Nov 09:02     | (Resume) (Export)
+  Showing 1–25 of 61   (Previous) (Next)
+```
+
+Resume reopens the package. Originals may need to be chosen again, and the row says so ("Choose the 14 originals again to check them"). File bytes are never copied into browser storage.
+
+**Trust (`help`)**
+
+```
+Trust
+  1 Trusted companies       list, Add company (fingerprint + where you confirmed it + "I confirmed this fingerprint
+                            through a channel I already knew" checkbox)
+  2 Your signing key        fingerprint, load or generate, copy
+  3 Company sign-in         flag on: who is signed in, which company; flag off: "Company sign-in isn't in this build"
+  4 Company keys            flag on, admins: Enroll this key, list (Active / Replaced on / Compromised), Mark compromised
+```
+
+The numbers above are for this wireframe only; the page shows plain section headings. No Verify workbench strip, no "Source and report actions" on Trust.
+
+**More tools**
+
+A closed disclosure under the four links: Records, Receipts, Samples, Video, Benchmarks, System. It opens on its own only when one of them is the current page, and Escape closes it and returns focus to its summary (Existing behaviour, AC-05).
+
+### Route, state and action matrix
+
+| Route | States | Primary action | Secondary actions | Leaves to |
+|---|---|---|---|---|
+| `landing` | idle, sample running, sample result, sample error | Seal files | Verify files, Try a sample | `protect`, `verify`, `sandbox` |
+| `protect` | choose mode, files chosen, sealing (with progress), cancelled, sealed, seal error, storage full | Seal this log / Seal the list | Cancel, More options, Go to Verify | `verify`, `jobs`, `help` (signing key) |
+| `protect` after sealing | sealed, copy failed, download failed | Copy message | Download, Make a share link (flag on), All jobs | `jobs` |
+| `verify` | chooser, link prefilled, link unavailable, files chosen, checking, verified, incomplete, not verified, wrong key | Check files (or Check the files from a link) | I have a link / I have files, Refresh (flag on), Download report | `records`, `receipts` from a result |
+| `jobs` | empty, list, search with no match, page n, export failed, storage unavailable | none (list screen) | Resume, Export, Previous, Next | `protect`, `verify` |
+| `help` (Trust) | no pins, pins, replace-confirm, compromised, signed out, signed in, admin, identity unavailable | Add company (or Enroll this key for an admin) | Mark compromised, Copy fingerprint, Sign in, Sign out | none |
+| More tools routes | unchanged | unchanged | unchanged | unchanged |
+
+Every route keeps its hash URL, Back/Forward and heading focus. A share link lands on `verify` with the token after `#` only.
+
+### Responsive rules
+
+| Width | Rule |
+|---|---|
+| 1440px | Rail, main column and optional summary column. Comparison tables take the full main column; the summary column moves below the table when the table is shown. |
+| 768px | Rail becomes the Menu button. One column. Tables keep columns if they fit without horizontal scroll; otherwise they switch to the per-file summary below. |
+| 390px and 320px | One column, 16px gutter, no horizontal page scroll. The file comparison becomes one summary per file: name (wraps at word and separator boundaries, never letter by letter), status word with its shape, bytes, then a "Details" disclosure with the full hash and Copy. Statuses are never hidden off screen. |
+| 200% zoom | Treated as the 768px or 390px rule by the resulting CSS width. No clipped control, no overlap, every 44px target kept. |
+| Reduced motion | No transitions or animated progress; progress shows numbers only. |
+| Forced colours | Every status keeps its word and shape. |
+
+Long hashes wrap only inside their own detail cell and always have a full-value Copy.
+
+### Design guidance applied and rejected
+
+- **UI/UX Pro Max** (design-system search, run by the coordinating session, returned "Minimalism & Swiss Style"). Applied: strict alignment, clear hierarchy, 44px targets, visible labels, errors next to their field, progress for multi-step work, full-width tables on desktop and per-file summaries on mobile. Rejected: its suggested navy and Plus Jakarta Sans palette (the existing slate, white and cobalt tokens and the bundled Space Grotesk and JetBrains Mono stay), and its marketing "Trust & Authority" hero pattern (HashWing is an operational workspace).
+- **Frontend Taste 2.5.1** (read by the coordinating session). Applied, system rules only: one button pair (primary and secondary), one panel style, equal edges, no captions or filler copy, hover and press feedback, no carousels or timed tabs, reduced motion respected. Not applied: its marketing-page rules on photography, hero entrances, shader effects and "dealt moments", which are for company websites and do not fit an operational console.
+
 ## Builder defaults awaiting owner confirmation (2026-11-17)
 
 These were chosen by the builder and are built, but the owner has not confirmed them.
@@ -325,11 +479,11 @@ These were chosen by the builder and are built, but the owner has not confirmed 
 - **Registry sign-in.** A small "Company registry" panel on the Trust page.
 - **Setting.** Build-time `VITE_REGISTRY_URL`. It is empty on the public Pages build, so the feature is off there.
 - **"Sealed on this device".** At the bottom of Seal & send.
-- **Share-link expiry.** 30 days by default; other lengths under "More options".
 
 ## Decided (2026-11-17)
 
 - **Key-management home.** Trusted companies and the signing-key controls live on the Trust page.
+- **Owner decisions, 2026-11-17 (binding).** Registry sign-in lives on Trust. The registry stays off the public Pages build until a dedicated origin and production sign-in exist (a subpath of the same github.io origin is not origin isolation). "Sealed on this device" stays as a compact list below the sealing result, in every build, and a Jobs page is added. Share links default to 30 days with 7 days as the one alternative, and the server refuses more than 30 (AD-9). These supersede the matching builder defaults above.
 
 ## Open
 
@@ -341,14 +495,14 @@ These were chosen by the builder and are built, but the owner has not confirmed 
 
 The wiring PR tests against these items. Each one is observable in the browser.
 
-Build status, checked against the code and tests on `main` at e279032 (2026-11-17; read, not re-run). The tag after each ID means: `built` (in the code and asserted by a test), `built, partly tested` (a test covers only part of the item), `built, untested` (in the code, no test asserts it), `partial` (part is missing or not met) or `open` (not built). Totals: 26 built, 10 partly tested, 6 untested, 4 partial, 4 open. Still to build: AC-37 ("Matches the registry's record"), AC-38..AC-40 ("Your company's keys"), the Verify chooser (AC-09) and one primary button per step (AC-06).
+Build status, checked against the code and tests on `main` at e279032 (2026-11-17; read, not re-run). The tag after each ID means: `built` (in the code and asserted by a test), `built, partly tested` (a test covers only part of the item), `built, untested` (in the code, no test asserts it), `partial` (part is missing or not met) or `open` (not built). Totals: 26 built, 10 partly tested, 6 untested, 4 partial, 4 open; after AC-04 was changed on 2026-11-17 to the four-link nav, 26 built, 9 partly tested, 6 untested, 4 partial, 5 open. Still to build: AC-37 ("Matches the registry's record"), AC-38..AC-40 ("Your company's keys"), the Verify chooser (AC-09) and one primary button per step (AC-06).
 
 ### With the registry flag off
 
 - **AC-01** `built` No registry URL is configured. No registry chip, "Sealed on this device" list, share link, "Your company's keys" section or registry sign-in appears on any page.
 - **AC-02** `built, partly tested` No registry URL is configured. Sealing and checking a small file and a large-file set make no network request to a registry origin, and no outbox IndexedDB database is created.
 - **AC-03** `built` No registry URL is configured. The Verify time fields show "Registry acceptance", "Not registered", "no registry was used".
-- **AC-04** `built, partly tested` The primary nav shows exactly Seal & send, Verify, Records, Receipts and Trust, in that order. "More tools" contains Samples, Video, Benchmarks and System, and is closed unless one of them is the current page.
+- **AC-04** `open` (changed 2026-11-17; the old five-link version was `built, partly tested`) The primary nav shows exactly Seal & send, Verify, Jobs and Trust, in that order. "More tools" contains Records, Receipts, Samples, Video, Benchmarks and System, and is closed unless one of them is the current page. `#/records` and `#/receipts` still load and focus their heading.
 - **AC-05** `built, partly tested` With "More tools" open, Escape closes it and moves focus to its summary.
 - **AC-06** `partial` No Seal & send or Verify step shows more than one `.button.primary` at a time. Not met today: after sealing, "Seal this log" and "Copy message" are both primary; Verify shows "Run Interactive Demo" and "Run check" as primary together.
 - **AC-07** `built, untested` "More options" and "What is this?" are closed on first load of every page.
@@ -395,6 +549,27 @@ Build status, checked against the code and tests on `main` at e279032 (2026-11-1
 - **AC-45** `built, untested` With nothing to export, "Export pending proofs" shows "There's nothing waiting to export here. If this browser lost its saved data, only an export file you saved earlier can bring those proofs back." It downloads no file.
 - **AC-46** `built, partly tested` Importing an export file queues its receipts, and already-registered ones show their original `received_at`. A non-export file shows "This file isn't a HashWing pending-proofs export."
 - **AC-47** `built, untested` When the outbox runs in memory or `exportOffered` is true, the notice "This browser can't keep these proofs after you close the tab. Export them now." appears, and stays until an export succeeds.
-- **AC-48** `partial` A new share link defaults to 30 days. Other lengths are only under "More options". The token appears in the page URL only after `#`. When the link is made, the registry receives only its SHA-256. This holds for share creation only: opening a link (`GET /v1/shares/{token}`) and withdrawing it (`DELETE /v1/shares/{token}`) carry the raw token in the request path.
+- **AC-48** `partial` A new share link defaults to 30 days. The only other length is 7 days (changed 2026-11-17; today the select offers 7, 30, 90 and 365, `registry-ui.jsx:405`), and the server answers 400 for more than 30 (`app.py:500-501` accepts up to 365 today). The token appears in the page URL only after `#`. When the link is made, the registry receives only its SHA-256. This holds for share creation only: opening a link (`GET /v1/shares/{token}`) and withdrawing it (`DELETE /v1/shares/{token}`) carry the raw token in the request path.
 - **AC-49** `built` A share request whose response was lost, when retried, returns the same link. Exactly one share exists.
 - **AC-50** `built` On the public Pages build (`VITE_REGISTRY_URL` empty), the Trust page shows Trusted companies and Your signing key, and does not show Company registry or Your company's keys. "Your company's keys" is not built yet, so that half passes trivially.
+
+### Release layout (added 2026-11-17, all `open`)
+
+These cover "Release layout, locked" above. Ledger IDs are in brackets.
+
+- **AC-51** `open` [R13] The landing route shows HashWing, one value line, "Seal files" (primary), "Verify files" and "Try a sample". Nothing on it changes on a timer during 10 seconds, it has no numbered step list, and "Try a sample" produces the real engine's result for the included fixture.
+- **AC-52** `open` [R17] Seal & send shows the chosen files with a byte total in tabular mono, the mode, an optional job reference and the signing key's fingerprint before sealing. Cancel during sealing keeps the selection and leaves one next action.
+- **AC-53** `open` [R18] After sealing, the first block says what to download and send. Small-file mode names the sealed file; large-file mode names the manifest and says the originals travel separately. The share-link disclosure says it links to the registry's record, not the files.
+- **AC-54** `open` [R19] Opening a share link lands on Verify with "I have a link" chosen and no file row marked Matches until files are checked.
+- **AC-55** `open` [R21] The comparison shows counts of matches, differences, missing and extra that equal its rows. At 1440px it spans the main column. With a valid signature and one missing original, the verdict reads "Incomplete".
+- **AC-56** `open` [R22] Jobs lists this device's packages 25 per page with search by job reference or file name, status, sealed time, Resume and Export. Its heading area says the list is on this device only.
+- **AC-57** `open` [R23] After logout or a profile or company switch, Jobs shows none of the previous owner's rows, and signing back in as that owner shows them again. No copy calls this server-enforced isolation.
+- **AC-58** `open` [R22] Resuming a large-file job whose originals are not available asks for them again, by count, and never claims the bytes were saved.
+- **AC-59** `open` [R24] Trust shows exactly four sections in this order: Trusted companies, Your signing key, Company sign-in, Company keys (the last two only with the flag on). It shows no Verify workbench strip and no "Source and report actions".
+- **AC-60** `open` [R26] On the Pages build, "Sealed on this device" appears below the sealing result and Jobs works, and neither makes a request to any registry origin.
+- **AC-61** `open` [R32] The browser profile screens say they create a profile on this device, not a company account.
+- **AC-62** `open` [R36] With the flag on, an admin sees the shares of a registration (active, expired, withdrawn, with expiry) after a reload and in another admin's session, and can withdraw one without the original link. No raw token is shown or stored.
+- **AC-63** `open` [R39] A saved ack reads "Last confirmed by this device {time}" with a Refresh action. Only after a successful signed-in lookup does it read "Registered at {received_at}" for the rest of that session; a failed or unauthorized lookup keeps the saved wording and says why.
+- **AC-64** `open` [R48] When the registry's recovery version is newer than the one a saved ack was confirmed under, the ack reads "Last confirmed by this device" with "The registry was restored; refresh to check this record" until refreshed. A record missing after a restore offers re-registration and never reopens a deleted proof or withdrawn link.
+
+Totals after this addition: 64 items; 26 built, 9 partly tested, 6 untested, 4 partial, 19 open.

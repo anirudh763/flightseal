@@ -184,6 +184,20 @@ The console runs on another origin (GitHub Pages), so the API answers CORS for a
   recipient's page can read it. On the deployed HTTP API, the API-wide CORS settings apply to this route too (API
   Gateway overrides integration CORS headers), so there it is limited to the allowlist.
 
+### PROPOSED routes (agreed contract, not built)
+
+Recorded 2026-11-17 before any code, from the release brief (ledger R36, R39, R48, R54) and spine AD-9, AD-15 and AD-19. None of these exist in `app.py` or `infra/lib/stack.ts` yet, and none adds a field to the "Stored" table above except where it says so. Each needs the matching `stack.ts` route and a registry test in the same PR.
+
+| Route | Who | Request | Response | Notes |
+|---|---|---|---|---|
+| `GET /v1/registrations/{rid}/shares?limit&cursor` | any member of the org | path rid (32 hex) | `{shares: [{share_id, state, created_at, expires_at}], next_cursor}` | `share_id` is the stored `sha256(token)`; it cannot open a link (the public route hashes what it is given). Reads `REG.share_hashes` (at most 10) and each `SHARE#` item; another org's rid is the same 404 as an unknown one. Expired is computed on read. |
+| `DELETE /v1/registrations/{rid}/shares/{share_id}` | any member of the org (same rule as today's withdraw) | path rid and `share_id` (64 hex) | `{withdrawn: true}` | Same transaction and tombstone as `DELETE /v1/shares/{token}`, so a reload or another admin can withdraw without the raw token. The token route stays. |
+| `GET /v1/registrations/{rid}` | any member of the org | path rid | `{registration_id, state, received_at, disposition, recovery_version}` | The signed-in lookup behind "Refresh". Deleted: `disposition: "deleted"`, no `received_at`. |
+| `GET /v1/recovery` | any member | none | `{recovery_version}` | A number that only goes up; `registry.restore` raises it when it writes `SYSTEM/RESTORE`. Every ack also returns it. New stored field: `SYSTEM / RECOVERY` (the version). |
+| `POST /v1/shares` (change) | unchanged | `expires_days` 1 to 30 | unchanged | 400 above 30. Existing shares keep the `expires_at` they were created with. No registry is deployed, so no production link exists to migrate. |
+
+Org-wide link management lists registrations with the existing paged `GET /v1/registrations`, then the shares of each one; there is no org-wide share index, because shares are keyed by `SHARE#<hash>` outside the org partition.
+
 ## Withdrawal, deletion and backups
 
 - **Withdraw a share:** the share becomes `withdrawn` and a TOMB item is written in the same transaction. Its link

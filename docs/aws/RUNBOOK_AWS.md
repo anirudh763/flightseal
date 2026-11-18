@@ -38,6 +38,8 @@ sealer's Ed25519 key, and posts `{public_key, nonce, signature}` to `POST /v1/ke
 
 ## When the budget alert fires
 
+Decided 2026-11-17, not built (spine AD-18): the budget response will be a reversible traffic pause that keeps the table and user pool. Until that switch exists, the options are:
+
 The budget email only warns. Nothing stops requests or spend until you act. Pick one:
 
 1. **Stop all traffic now, keep the data.** Delete the `$default` stage. The API then answers nothing and nothing
