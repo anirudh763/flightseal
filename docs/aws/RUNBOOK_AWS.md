@@ -16,18 +16,26 @@ npx cdk deploy HashWingRegistry \
 ```
 
 That deploys the disposable `dev` stage: PITR off unless `-c pitr=true`, and the table, user pool and log group are
-deleted with the stack. Production uses `-c stage=prod`:
+deleted with the stack.
+
+**A production deploy is not authorized yet.** The production switch exists so its settings are reviewed and
+tested, not as permission to deploy. When it is authorized, production is a separate stack, `HashWingRegistry-prod`:
 
 ```sh
-npx cdk deploy HashWingRegistry -c stage=prod \
+npx cdk deploy HashWingRegistry-prod -c stage=prod \
   --parameters BudgetEmail=<you@example.com>
 ```
 
 `stage=prod` turns on PITR with a 35-day recovery window, deletion protection on the table and the user pool, and
-RETAIN on the table, user pool and log group. **A production deploy is not authorized yet**: the switch exists so
-the settings are reviewed and tested, not as permission to deploy. Context is not remembered between runs, so
-every later `cdk deploy` of a production stack (a rollback, a restore below) must repeat `-c stage=prod`; without
-it the deploy turns protection off and sets the resources back to Delete.
+RETAIN on the table, user pool and log group. Production reads its restore settings only from the committed
+`infra/restore.json` (`{}` = never restored); synth fails if that file is missing or malformed.
+
+The app only defines `HashWingRegistry-prod` when `-c stage=prod` is given. A deploy without it, or with a
+misspelt key such as `-c Stage=prod`, builds the dev stack `HashWingRegistry` and cannot update the production
+stack; naming `HashWingRegistry-prod` without the flag fails with "no stacks match". If production were ever
+deployed with dev settings, it would turn PITR off (losing the 35-day recovery history), drop deletion protection,
+set the resources to Delete and point the function back at the original table, undoing a restore. Every command
+below that touches production must therefore use `HashWingRegistry-prod -c stage=prod`.
 
 The outputs are `ApiUrl`, `TableName`, `UserPoolId` and `UserPoolClientId`.
 
@@ -77,7 +85,7 @@ cd infra && npx cdk destroy HashWingRegistry
 ```
 
 In the dev stage the table, log group and user pool use `RemovalPolicy.DESTROY`, so they go with the stack. A
-`stage=prod` stack uses `RemovalPolicy.RETAIN`: they stay after `cdk destroy` and keep billing (storage and PITR)
+production stack (`HashWingRegistry-prod`) uses `RemovalPolicy.RETAIN`: they stay after `cdk destroy` and keep billing (storage and PITR)
 until deleted by hand, and the table and user pool need deletion protection turned off first. Then check, in us-east-1:
 
 ```sh
@@ -116,7 +124,8 @@ only there. A source that is not the served table is refused, because its tombst
 
 1. Restore (PITR or an on-demand backup) to a new table, for example `HashWingRegistry-restored-2`.
    After a restore, set PITR (35 days), deletion protection and TTL on the restored table before opening the gate;
-   the stack does not manage it.
+   the stack does not manage it. For the same reason the restored table outlives `cdk destroy` and keeps billing
+   (storage, and PITR once on) until deleted by hand, with deletion protection turned off first.
 2. Pick a new random restore ID (for example `uuidgen`). Point the function at the new table and close every route
    until tombstones are applied:
 
@@ -125,10 +134,12 @@ only there. A source that is not the served table is refused, because its tombst
      -c restoreId=<restore id>
    ```
 
-   That is the dev form. For a `stage=prod` stack the `-c` restore flags are refused: write the three values to
-   `infra/restore.json` (`{"restoredTableName": "<new table>", "restoredFrom": "<served table>", "restoreId":
-   "<restore id>"}`), commit it, and run `npx cdk deploy HashWingRegistry -c stage=prod`. Keep the file committed:
-   every later prod deploy reads it, so a routine deploy cannot point the function back at the old table.
+   That is the dev form. For production (**not authorized yet**) the `-c` restore flags are refused: replace the
+   `{}` in `infra/restore.json` with all three values (`{"restoredTableName": "<new table>", "restoredFrom":
+   "<served table>", "restoreId": "<restore id>"}`, non-empty, and `restoredFrom` must differ from the new table),
+   commit it, and run `npx cdk deploy HashWingRegistry-prod -c stage=prod`. Keep the file committed: every later
+   production deploy reads it, so a routine deploy cannot point the function back at the old table. A dev synth
+   refuses a file that records a restore.
 
    This sets `TABLE_NAME`, `RESTORED_FROM` and `RESTORE_ID`, and moves the function's IAM grant to the new table's
    ARN. The function now answers 503 `restore_pending` everywhere. A marker copied in from the backup does not open

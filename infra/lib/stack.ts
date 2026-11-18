@@ -34,18 +34,49 @@ export interface RegistryStackProps extends StackProps {
 const RESTORE_KEYS = ['restoredTableName', 'restoredFrom', 'restoreId'] as const;
 type RestoreProps = Pick<RegistryStackProps, (typeof RESTORE_KEYS)[number]>;
 
+/** Production gets its own stack ID, so a deploy that forgot `-c stage=prod` can never update it. */
+export function stackId(stage: unknown): string {
+  return stage === 'prod' ? 'HashWingRegistry-prod' : 'HashWingRegistry';
+}
+
+/** infra/restore.json: `{}` (never restored) or all three keys as non-empty strings. */
+function readRestoreFile(file: string): RestoreProps {
+  const name = 'infra/restore.json';
+  let saved: unknown;
+  try {
+    saved = JSON.parse(readFileSync(file, 'utf8'));
+  } catch (e) {
+    throw new Error(`${name}: cannot read it as JSON (${(e as Error).message})`);
+  }
+  if (typeof saved !== 'object' || saved === null || Array.isArray(saved)) {
+    throw new Error(`${name}: must be a JSON object: {} or the three restore settings`);
+  }
+  const keys = Object.keys(saved);
+  const extra = keys.filter((k) => !(RESTORE_KEYS as readonly string[]).includes(k));
+  if (extra.length) throw new Error(`${name}: unknown keys ${extra.join(', ')} (expected ${RESTORE_KEYS.join(', ')})`);
+  if (keys.length === 0) return {};
+  const values = saved as Record<string, unknown>;
+  const bad = RESTORE_KEYS.filter((k) => typeof values[k] !== 'string' || (values[k] as string).trim() === '');
+  if (bad.length) throw new Error(`${name}: ${bad.join(', ')} must be non-empty strings (or use {} for no restore)`);
+  return values as RestoreProps;
+}
+
 /**
- * Restore settings. dev: from -c context. prod: only from the committed file (absent = never restored), because
- * free context is forgotten by the next routine deploy, which would serve the original table with the gate open.
+ * Restore settings. dev: from -c context. prod: only from the committed infra/restore.json, which must exist
+ * (`{}` = never restored): free context is forgotten by the next routine deploy, which would serve the original
+ * table with the gate open. A restore recorded in the file is refused outside prod.
  */
 export function restoreSettings(stage: unknown, context: (key: string) => unknown, file: string): RestoreProps {
-  if (stage !== 'prod') return Object.fromEntries(RESTORE_KEYS.map((k) => [k, context(k)])) as RestoreProps;
+  const saved = existsSync(file) ? readRestoreFile(file) : undefined;
+  if (stage !== 'prod') {
+    if (saved && Object.keys(saved).length) {
+      throw new Error('infra/restore.json records a production restore: synth it with -c stage=prod');
+    }
+    return Object.fromEntries(RESTORE_KEYS.map((k) => [k, context(k)])) as RestoreProps;
+  }
   const given = RESTORE_KEYS.filter((k) => context(k) !== undefined);
   if (given.length) throw new Error(`stage=prod: set ${given.join(', ')} in infra/restore.json, not with -c`);
-  if (!existsSync(file)) return {};
-  const saved = JSON.parse(readFileSync(file, 'utf8'));
-  const extra = Object.keys(saved).filter((k) => !(RESTORE_KEYS as readonly string[]).includes(k));
-  if (extra.length) throw new Error(`infra/restore.json: unknown keys ${extra.join(', ')}`);
+  if (!saved) throw new Error('stage=prod needs infra/restore.json: commit {} if the table was never restored');
   return saved;
 }
 
@@ -98,6 +129,9 @@ export class RegistryStack extends Stack {
 
     if (!props.restoredTableName !== !props.restoredFrom || !props.restoredTableName !== !props.restoreId) {
       throw new Error('restoredTableName, restoredFrom and restoreId must be set together');
+    }
+    if (props.restoredTableName && props.restoredTableName === props.restoredFrom) {
+      throw new Error('restoredFrom must name the table served before the restore, not the restored table');
     }
     const served = props.restoredTableName
       ? dynamodb.Table.fromTableName(this, 'RestoredTable', props.restoredTableName)

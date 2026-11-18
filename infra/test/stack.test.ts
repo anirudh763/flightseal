@@ -2,8 +2,9 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { App } from 'aws-cdk-lib';
 import { Match, Template } from 'aws-cdk-lib/assertions';
-import { RegistryStack, restoreSettings } from '../lib/stack';
-import { existsSync, mkdtempSync, readdirSync, statSync, writeFileSync } from 'node:fs';
+import { RegistryStack, restoreSettings, stackId } from '../lib/stack';
+import { existsSync, mkdtempSync, readdirSync, readFileSync, statSync, writeFileSync } from 'node:fs';
+import { execFileSync } from 'node:child_process';
 import { tmpdir } from 'node:os';
 import { join, sep } from 'node:path';
 
@@ -78,15 +79,15 @@ test('dev (the default) stays disposable: no PITR window, no deletion protection
   const dev = Template.fromStack(new RegistryStack(new App(), 'Test', { stage: 'dev' }));
   assert.deepEqual(dev.toJSON(), json, 'stage dev synthesizes the same template as no stage');
   const gone = { DeletionPolicy: 'Delete', UpdateReplacePolicy: 'Delete' };
-  t.hasResource('AWS::DynamoDB::Table', {
+  dev.hasResource('AWS::DynamoDB::Table', {
     ...gone,
     Properties: {
       PointInTimeRecoverySpecification: { PointInTimeRecoveryEnabled: false, RecoveryPeriodInDays: Match.absent() },
       DeletionProtectionEnabled: Match.absent(),
     },
   });
-  t.hasResource('AWS::Cognito::UserPool', { ...gone, Properties: { DeletionProtection: Match.absent() } });
-  t.hasResource('AWS::Logs::LogGroup', gone);
+  dev.hasResource('AWS::Cognito::UserPool', { ...gone, Properties: { DeletionProtection: Match.absent() } });
+  dev.hasResource('AWS::Logs::LogGroup', gone);
   assert.throws(() => new RegistryStack(new App(), 'Bad', { stage: 'production' as any }), /not 'dev' or 'prod'/);
 });
 
@@ -226,20 +227,59 @@ test('Lambda asset holds only the runtime: handler.py and registry/*.py', () => 
   for (const f of files) assert.match(f, /^(handler\.py|registry\/[a-z0-9_]+\.py)$/, `unexpected file in asset: ${f}`);
 });
 
-test('prod reads restore settings only from infra/restore.json, so a plain deploy keeps the restore', () => {
+test('prod reads restore settings only from a committed infra/restore.json, so a plain deploy keeps the restore', () => {
   const dir = mkdtempSync(join(tmpdir(), 'restore-'));
   const file = join(dir, 'restore.json');
+  const put = (v: string) => writeFileSync(file, v);
   const ctx = (m: Record<string, string>) => (k: string) => m[k];
   const saved = { restoredTableName: 'registry-restored', restoredFrom: 'registry-live', restoreId: 'r-1' };
-  assert.deepEqual(restoreSettings('prod', ctx({}), file), {}, 'no file: never restored');
+  const prod = () => restoreSettings('prod', ctx({}), file);
+  assert.throws(prod, /stage=prod needs infra\/restore\.json: commit \{\}/, 'missing file in prod');
+  put('{}');
+  assert.deepEqual(prod(), {}, '{} means never restored');
   assert.throws(() => restoreSettings('prod', ctx({ restoredTableName: 'x' }), file), /restore\.json, not with -c/);
-  writeFileSync(file, JSON.stringify(saved));
-  const props = restoreSettings('prod', ctx({}), file);
-  Template.fromStack(new RegistryStack(new App(), 'ProdRestored', { stage: 'prod', ...props }))
+  put(JSON.stringify(saved));
+  Template.fromStack(new RegistryStack(new App(), 'ProdRestored', { stage: 'prod', ...prod() }))
     .hasResourceProperties('AWS::Lambda::Function', {
       Environment: { Variables: { TABLE_NAME: 'registry-restored', RESTORED_FROM: 'registry-live', RESTORE_ID: 'r-1' } },
     });
-  writeFileSync(file, JSON.stringify({ ...saved, extra: 1 }));
-  assert.throws(() => restoreSettings('prod', ctx({}), file), /unknown keys extra/);
+  assert.throws(() => restoreSettings(undefined, ctx({}), file), /records a production restore: synth it with -c stage=prod/,
+    'no stage with a recorded restore');
+  assert.throws(() => restoreSettings('dev', ctx({}), file), /records a production restore/);
+  put(JSON.stringify({ restoredTablename: 'x', restoredFrom: 'y', restoreId: 'z' }));
+  assert.throws(prod, /unknown keys restoredTablename/, 'misspelled key');
+  put(JSON.stringify({ ...saved, restoreId: '' }));
+  assert.throws(prod, /restoreId must be non-empty strings/, 'empty string');
+  put(JSON.stringify({ restoredTableName: 'x' }));
+  assert.throws(prod, /restoredFrom, restoreId must be non-empty strings/, 'partial');
+  put('[]');
+  assert.throws(prod, /must be a JSON object/, 'array');
+  put('null');
+  assert.throws(prod, /must be a JSON object/, 'null');
+  put('{"restoredTableName": ');
+  assert.throws(prod, /cannot read it as JSON/, 'broken JSON');
+  put('{}');
   assert.deepEqual(restoreSettings('dev', ctx(saved), file), saved, 'dev still takes -c context');
+  assert.throws(() => new RegistryStack(new App(), 'Same', { stage: 'prod', restoredTableName: 't', restoredFrom: 't',
+    restoreId: 'r' }), /restoredFrom must name the table served before the restore/);
+});
+
+test('prod is its own stack (HashWingRegistry-prod): a deploy without -c stage=prod cannot reach it', () => {
+  assert.equal(stackId('prod'), 'HashWingRegistry-prod');
+  assert.equal(stackId(undefined), 'HashWingRegistry');
+  assert.equal(stackId('dev'), 'HashWingRegistry');
+  // The real app, with the committed infra/restore.json ({}).
+  const run = (context: Record<string, string>) => {
+    const out = mkdtempSync(join(tmpdir(), 'synth-'));
+    execFileSync(process.execPath, [join(__dirname, '..', 'bin', 'app.js')], {
+      cwd: join(__dirname, '..', '..'),
+      env: { ...process.env, CDK_OUTDIR: out, CDK_CONTEXT_JSON: JSON.stringify(context) },
+    });
+    const artifacts: Record<string, { type: string }> = JSON.parse(readFileSync(join(out, 'manifest.json'), 'utf8')).artifacts;
+    return Object.keys(artifacts).filter((a) => artifacts[a].type === 'aws:cloudformation:stack');
+  };
+  assert.deepEqual(run({ stage: 'prod' }), ['HashWingRegistry-prod']);
+  for (const context of [{}, { Stage: 'prod' }, { stgae: 'prod' }] as Array<Record<string, string>>) {
+    assert.deepEqual(run(context), ['HashWingRegistry'], `misspelt or missing stage ${JSON.stringify(context)}`);
+  }
 });
