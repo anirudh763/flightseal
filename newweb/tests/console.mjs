@@ -44,10 +44,14 @@ async function loadFreshDemo(page) {
 }
 async function loadLandingDemo(page) {
   await page.goto(url);
-  await page.getByRole('button', { name: /Run real verification/ }).first().click();
-  await page.waitForFunction(() => document.querySelector('.hero-actual-result')?.innerText.includes('Intact'), null, { timeout: 30000 });
-  await page.getByRole('button', { name: 'Inspect records and export' }).click();
+  await page.getByRole('link', { name: 'Try a sample' }).click(); // the front door opens Samples, which runs the real engine
   await waitResult(page, 'Intact');
+}
+// The one "Profile on this device" menu in the command bar (AC-61).
+async function profileMenuAction(page, name) {
+  const menu = page.locator('.profile-menu');
+  if (!(await menu.evaluate((d) => d.open))) await menu.locator('summary').click();
+  await menu.getByRole('button', { name, exact: true }).click();
 }
 // Samples, Video, Benchmarks and System sit behind the rail's "More tools" disclosure.
 async function clickNav(page, name) {
@@ -111,10 +115,8 @@ try {
   page.on('console', (message) => { if (message.type() === 'error') runtimeErrors.push(`${message.text()} (${message.location().url})`); });
   const initialStarted = performance.now();
   await page.goto(url);
-  assert.equal(await page.locator('#page-landing').textContent().then((text) => text.includes('Check the log.')), true, 'first load is the editorial landing page');
-  await page.getByRole('button', { name: /Run real verification/ }).first().click();
-  await page.waitForFunction(() => document.querySelector('.hero-actual-result')?.innerText.includes('Intact'));
-  await page.getByRole('button', { name: 'Inspect records and export' }).click();
+  assert.equal(await page.locator('#page-landing').textContent(), 'HashWing', 'first load is the front door');
+  await page.getByRole('link', { name: 'Try a sample' }).click();
   await waitResult(page, 'Intact');
   await page.waitForFunction(() => document.querySelector('.result-stat')?.textContent.includes('800'));
   assert.equal(await page.getByLabel('Choose source or sealed log').count(), 1, 'the shared upload control has a direct action name');
@@ -694,9 +696,9 @@ try {
     assert.equal(await page.locator(':focus').getAttribute('class'), 'skip-link');
     await page.keyboard.press('Enter');
     assert.equal(await page.locator(':focus').getAttribute('id'), 'main');
-    assert.equal(await page.getByRole('navigation', { name: 'Primary navigation' }).getByRole('link', { name: /Records/ }).isVisible(), false);
+    assert.equal(await page.getByRole('navigation', { name: 'Primary navigation' }).getByRole('link', { name: 'Verify', exact: true }).isVisible(), false);
     await page.getByRole('button', { name: 'Menu' }).click();
-    assert.equal(await page.getByRole('navigation', { name: 'Primary navigation' }).getByRole('link', { name: 'Records' }).isVisible(), true);
+    assert.equal(await page.getByRole('navigation', { name: 'Primary navigation' }).getByRole('link', { name: 'Verify', exact: true }).isVisible(), true);
     await page.evaluate(() => { location.hash = '#/verify'; });
     await page.waitForFunction(() => document.activeElement?.id === 'page-verify' && document.title === 'Verify · HashWing').catch(async () => assert.fail(`legacy Verify route did not restore focus/title: ${location.hash}; focus=${await page.evaluate(() => document.activeElement?.id)}; title=${await page.title()}`));
     await page.evaluate(() => history.back());
@@ -761,18 +763,20 @@ try {
     assert.equal(await rail.getByRole('link', { name: 'Samples', exact: true }).getAttribute('aria-current'), 'page');
     await page.getByRole('navigation', { name: 'Primary navigation' }).getByRole('link', { name: 'Verify' }).click();
     await page.locator('#trusted-key').fill('editing');
-    await page.getByRole('navigation', { name: 'Primary navigation' }).getByRole('link', { name: 'Records' }).click();
-    assert.equal(await page.evaluate(() => location.hash), '#/app/records?sample=intact&record=799');
+    await clickNav(page, 'Records');
+    assert.match(await page.evaluate(() => location.hash), /^#\/app\/records\?sample=intact&record=\d+$/, 'Records keeps the sample and record in its link');
     await page.getByRole('navigation', { name: 'Primary navigation' }).getByRole('link', { name: 'Verify' }).click();
     assert.equal(await page.locator('#trusted-key').inputValue(), 'editing');
     await page.goto(`${url}#/protect`); await page.waitForSelector('#page-protect');
     await page.waitForFunction(() => document.querySelector('.nav-more')?.open === false, null, { timeout: 3000 }).catch(() => assert.fail('More tools starts closed on a primary page'));
-    for (const name of ['Samples', 'Video', 'Benchmarks', 'System']) assert.equal(await rail.getByRole('link', { name, exact: true }).isVisible(), false, `${name} is behind More tools`);
-    assert.equal(await rail.locator('a:visible').count(), 5, 'only the five primary links show');
+    // AC-04, changed on purpose: the primary links are Seal & send, Verify and Trust (Jobs joins when its page lands);
+    // Records and Receipts moved under More tools with their routes kept.
+    for (const name of ['Records', 'Receipts', 'Samples', 'Video', 'Benchmarks', 'System']) assert.equal(await rail.getByRole('link', { name, exact: true }).isVisible(), false, `${name} is behind More tools`);
+    assert.deepEqual(await rail.locator('a:visible').allTextContents(), ['Seal & send', 'Verify', 'Trust'], 'only the primary links show, in order');
     assert.equal(await page.locator('.session-strip').isVisible(), false, 'Seal & send hides the workbench session strip');
     assert.equal(await page.locator('.source-actions').isVisible(), false, 'Seal & send hides the workbench source actions');
     await rail.locator('.nav-more summary').click();
-    assert.equal(await rail.getByRole('link', { name: 'Benchmarks', exact: true }).isVisible(), true);
+    assert.deepEqual(await rail.locator('.nav-more a').allTextContents(), ['Records', 'Receipts', 'Samples', 'Video', 'Benchmarks', 'System'], 'More tools holds the six secondary pages, in order');
     await rail.locator('.nav-more summary').press('Escape');
     assert.equal(await rail.locator('.nav-more').evaluate((d) => d.open), false, 'Escape closes More tools');
     await page.goto(`${url}#/video`); await page.waitForSelector('#page-video');
@@ -786,10 +790,58 @@ try {
     await page.setViewportSize({ width: 1440, height: 900 });
   });
 
+  await check('page shell: workbench strip only on Verify and More tools, one profile menu, full-height rail, 44px shell targets', async () => {
+    await page.setViewportSize({ width: 1440, height: 900 });
+    // AC-66
+    for (const [screen, shown] of [['protect', false], ['help', false], ['verify', true], ['records', true], ['receipts', true], ['sandbox', true], ['video', true], ['benchmarks', true], ['system', true]]) {
+      await page.goto(`${url}#/app/${screen}`); await page.waitForSelector(`#page-${screen}`);
+      assert.equal(await page.locator('.session-strip').isVisible(), shown, `${screen}: session strip ${shown ? 'shown' : 'hidden'}`);
+      assert.equal(await page.locator('.source-actions').isVisible(), shown, `${screen}: Source and report actions ${shown ? 'shown' : 'hidden'}`);
+    }
+    // AC-61: one menu, "Profile on this device"; company sign-in is not in the bar.
+    await page.goto(`${url}#/app/protect`); await page.waitForSelector('#page-protect');
+    const bar = page.locator('.commandbar');
+    assert.equal(await bar.locator('.profile-menu').count(), 1);
+    assert.equal(await bar.getByRole('link').count(), 0, 'the bar has no separate Log in / Create account links');
+    const summary = bar.locator('.profile-menu > summary');
+    assert.equal(await summary.getAttribute('aria-label'), 'Profile on this device');
+    assert.match(await summary.innerText(), /Profile on this device/);
+    await summary.click();
+    const panel = bar.locator('.profile-menu-panel');
+    assert.match(await panel.innerText(), /Profiles live in this browser\. They are not company accounts\./);
+    for (const name of ['Use a local profile', 'Create a local profile']) assert.equal(await panel.getByRole('button', { name, exact: true }).isVisible(), true, `menu offers ${name}`);
+    assert.equal(await bar.getByText(/Company registry|Sign in to the company/).count(), 0, 'no company sign-in in the bar');
+    await page.keyboard.press('Escape');
+    assert.equal(await page.locator('.profile-menu').getAttribute('open'), null, 'Escape closes the profile menu');
+    assert.equal(await summary.evaluate((el) => el === document.activeElement), true, 'focus returns to the menu summary');
+    // The rail column reaches the bottom of a page taller than the window (it stopped at 900px in full-page views).
+    await page.goto(`${url}#/app/help`); await page.waitForSelector('#page-help');
+    const height = await page.evaluate(() => document.documentElement.scrollHeight);
+    assert.ok(height > 1200, `Trust is taller than the window (${height}px)`);
+    const png = await page.screenshot({ fullPage: true, clip: { x: 100, y: height - 4, width: 1, height: 1 } });
+    const { inflateSync } = await import('node:zlib');
+    let offset = 8, idat = [];
+    while (offset < png.length) { const length = png.readUInt32BE(offset), type = png.toString('latin1', offset + 4, offset + 8); if (type === 'IDAT') idat.push(png.subarray(offset + 8, offset + 8 + length)); offset += length + 12; }
+    const pixel = [...inflateSync(Buffer.concat(idat)).subarray(1, 4)].map((v) => v.toString(16).padStart(2, '0')).join('');
+    assert.equal(pixel, 'eaf0f7', `rail colour at the page bottom is #${pixel}`);
+    // AC-13: standalone shell controls are at least 44 by 44px.
+    for (const width of [320, 768, 1440]) {
+      await page.setViewportSize({ width, height: 900 });
+      await page.goto(`${url}#/app/help`); await page.waitForSelector('#page-help');
+      if (await page.locator('.rail-menu').isVisible()) await page.locator('.rail-menu').click();
+      await page.locator('.install-tools > summary').click();
+      const small = await page.evaluate(() => [...document.querySelectorAll('#primary-nav a, .nav-more summary, .rail-menu, .brand, .profile-menu > summary, .workspace-tools-menu summary, .install-tools > summary, .offline-control-actions .button, .offline-control-actions .text-action, .trust-footer nav a, .trust-footer nav button, .help-layout .prose p > a:only-child')]
+        .filter((el) => el.getClientRects().length).map((el) => ({ name: el.textContent.trim().slice(0, 40), width: Math.round(el.getBoundingClientRect().width), height: Math.round(el.getBoundingClientRect().height) }))
+        .filter((box) => box.width < 44 || box.height < 44));
+      assert.deepEqual(small, [], `${width}px: undersized shell targets ${JSON.stringify(small)}`);
+    }
+    await page.setViewportSize({ width: 1440, height: 900 });
+  });
+
   await check('direct routes and root hash resolve to their own current screens', async () => {
     await page.goto(`${url}#/`);
     await page.waitForSelector('#page-landing');
-    assert.match(await page.locator('#page-landing').textContent(), /Check the log\./);
+    assert.equal(await page.locator('#page-landing').textContent(), 'HashWing');
     const paths = [['#/sandbox', 'Samples'], ['#/verify', 'Verify'], ['#/records', 'Records'], ['#/receipts', 'Receipts'], ['#/video', 'Video'], ['#/help', 'Trust']];
     for (const [hash, title] of paths) {
       await page.goto(`${url}${hash}`);
@@ -841,14 +893,15 @@ try {
     const password = 'flightseal browser password 123';
     const backupPassphrase = 'separate backup passphrase 456';
     await page.goto(url);
-    await page.getByRole('button', { name: /Run real verification/ }).first().click();
-    await page.waitForFunction(() => document.querySelector('.hero-actual-result')?.innerText.includes('Intact'));
-    await page.getByRole('navigation', { name: 'Account and workspace' }).getByRole('link', { name: 'Create account' }).click();
+    await page.getByRole('link', { name: 'Try a sample' }).click();
+    await waitResult(page, 'Intact');
+    await profileMenuAction(page, 'Create a local profile');
     await page.locator('#auth-email').fill(email); await page.locator('#auth-password').fill(password); await page.locator('#auth-confirm').fill(password);
     await page.getByLabel(/Import this guest session/).check();
     await page.getByRole('button', { name: 'Create account' }).click();
     await page.waitForFunction(() => document.querySelector('.profile-menu > summary')?.textContent.includes('backup-'));
-    assert.equal(await page.getByRole('navigation', { name: 'Account and workspace' }).isVisible(), false, 'signed-in account sees no Log in / Create account links');
+    assert.equal(await page.locator('.profile-menu > summary').getAttribute('aria-label'), `Profile on this device: ${email}`, 'the one profile menu names the open local profile');
+    assert.equal(await page.getByRole('navigation', { name: 'Account and workspace' }).count(), 0, 'the command bar has no second set of account links');
     await page.locator('.profile-menu').locator('summary').click();
     await page.locator('#backup-passphrase').fill(backupPassphrase);
     const [backupDownload] = await Promise.all([page.waitForEvent('download'), page.getByRole('button', { name: 'Download encrypted backup' }).click()]);
@@ -870,14 +923,14 @@ try {
     await restorePage.getByRole('button', { name: 'Check backup and preview' }).click();
     await restorePage.waitForFunction((expected) => document.querySelector('.profile-backup [role="status"]')?.textContent.includes(`Restore preview: local profile ${expected}`), email);
     await restorePage.getByRole('button', { name: 'Restore this profile' }).click();
-    await restorePage.getByRole('navigation', { name: 'Account and workspace' }).getByRole('link', { name: 'Log in' }).click();
+    await profileMenuAction(restorePage, 'Use a local profile');
     await restorePage.locator('#auth-email').fill(email); await restorePage.locator('#auth-password').fill(password);
     await restorePage.getByRole('button', { name: 'Log in' }).click();
     await restorePage.waitForFunction(() => document.querySelector('.profile-menu > summary')?.textContent.includes('backup-'));
     assert.match(restorePage.url(), /sample=intact/, 'saved included-sample view is restored without copying source files');
     await restorePage.locator('.profile-menu > summary').click();
     await restorePage.getByRole('button', { name: 'Log out' }).click();
-    await restorePage.getByRole('navigation', { name: 'Account and workspace' }).getByRole('link', { name: 'Log in' }).click();
+    await restorePage.locator('.landing-footer').getByRole('link', { name: 'Log in to a local profile' }).click(); // logout lands on the front door
     await restorePage.locator('#auth-email').fill(email); await restorePage.locator('#auth-password').fill(password);
     await restorePage.getByRole('button', { name: 'Log in' }).click();
     await restorePage.waitForFunction(() => document.querySelector('.profile-menu > summary')?.textContent.includes('backup-'));
@@ -900,7 +953,7 @@ try {
     const evidence = join(EVIDENCE, 'seal-send'); mkdirSync(evidence, { recursive: true });
     await page.setViewportSize({ width: 1440, height: 900 });
     await page.goto(url); await page.reload();
-    await page.getByRole('button', { name: /Seal a flight log/ }).click();
+    await page.getByRole('link', { name: 'Seal files', exact: true }).click(); // the front door's primary action
     await page.waitForFunction(() => location.hash === '#/app/protect' && document.querySelector('.commandbar h1')?.textContent === 'Seal & send');
     await page.locator('#protect-file').setInputFiles(ulg);
     const pad = (n) => String(n).padStart(2, '0');

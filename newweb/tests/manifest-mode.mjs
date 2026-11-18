@@ -59,7 +59,7 @@ try {
   page.on('pageerror', (error) => runtimeErrors.push(String(error)));
   page.on('console', (message) => { if (message.type() === 'error') runtimeErrors.push(message.text()); });
   await page.goto(url);
-  await page.getByRole('button', { name: /Seal a flight log/ }).click();
+  await page.getByRole('link', { name: 'Seal files', exact: true }).click(); // the front door's primary action
   await page.waitForFunction(() => location.hash === '#/app/protect' && document.querySelector('.commandbar h1')?.textContent === 'Seal & send');
   let handover, sealedPath, publicKey;
 

@@ -756,7 +756,7 @@ try {
       await signIn(d, 'keep-pilot', 'pilot');
       await profileIn(b, 'keep-b@example.test'); // app sign-in
       await appLogout(b); // logout of another profile
-      await b.locator('.landing-persistent-actions').getByRole('button', { name: 'Launch Workspace' }).click(); // demo entry
+      await b.locator('#main').getByRole('link', { name: 'Try a sample' }).click(); // demo entry from the front door
       await b.locator('#page-sandbox').waitFor();
       await profileIn(b, 'keep-b@example.test', 'login'); // account switch from the demo
       await sleep(500);
@@ -765,6 +765,11 @@ try {
       assert.equal(await a.locator('#handover-text').count(), 1, 'the Seal & send result is still on screen');
       assert.ok(await d.evaluate(() => sessionStorage.getItem('hashwing-registry-token')), 'the registry sign-in in tab D is kept');
       await d.locator('#company-registry').getByText('Signed in to the company registry as keep-pilot').waitFor();
+      // AC-61, flag on: the command bar names the signed-in company as a link to Trust; sign-in itself stays on Trust.
+      const barLink = d.locator('.commandbar .registry-bar-link');
+      await barLink.waitFor();
+      assert.match(await barLink.innerText(), / registry$/);
+      assert.equal(await d.locator('.commandbar .registry-signin, .commandbar #company-registry').count(), 0, 'no company sign-in controls in the bar');
     } finally { await c.close(); }
   });
 
