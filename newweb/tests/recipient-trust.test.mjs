@@ -58,6 +58,20 @@ test('time fields carry labels and their basis', () => {
   assert.equal(timeFields({})[4].value, 'Unknown');
 });
 
+test('a registry line replaces only the "Registry acceptance" row, in timeFields and in every manifest export', () => {
+  const registry = { value: 'Registered at 2026-11-17T10:00:05Z', basis: "the registry's clock; the registry's statement, not proof of the files" };
+  const fields = timeFields({ sealedAt: '2026-11-17T10:00:00.000Z', registry });
+  assert.deepEqual(fields[2], { label: 'Registry acceptance', ...registry });
+  assert.deepEqual(timeFields({ sealedAt: '2026-11-17T10:00:00.000Z', registry: null }), timeFields({ sealedAt: '2026-11-17T10:00:00.000Z' }));
+  const report = manifestReport({ sealedName: 'x.manifest.fseal', sources: SOURCES, keyFingerprint: 'ab'.repeat(32), head: 'cd'.repeat(32), sealedAt: '2026-11-17T10:00:00.000Z', trust: { status: 'untrusted' }, items: [], extras: [], locals: [], registry });
+  const line = `Registry acceptance: ${registry.value} (${registry.basis})`;
+  for (const out of [report.text, report.markdown, report.pdfLines.join('\n'), JSON.parse(report.json).report]) {
+    assert.ok(out.includes(line), out);
+    assert.ok(!out.includes('Not registered') && !out.includes('no registry was used'));
+  }
+  assert.deepEqual(JSON.parse(report.json).timeProvenance.fields[2], { label: 'Registry acceptance', ...registry });
+});
+
 test('Sealed and landing lines parse from a quoted, wrapped email reply', () => {
   const message = ['HashWing receipt for x.ulg', "Sealed: 2026-11-17T10:00:00.000Z (from the sealing computer's clock, not", 'independently verified)', landingLine(LANDING), 'fseal-receipt v1 count=1'].map((l) => `> ${l}`).join('\n');
   assert.equal(parseSealedLine(message), '2026-11-17T10:00:00.000Z');

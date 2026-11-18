@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { createRoot } from 'react-dom/client';
 import { Activity, ArrowRight, Building2, Check, Copy, Download, Gauge, ChevronDown, CircleHelp, FileCheck2, FileLock2, FileUp, KeyRound, Mail, FlaskConical, List, LockKeyhole, LogIn, MapPin, Menu, Pause, Play, ShieldCheck, Stamp, UserRound, Video } from 'lucide-react';
 import { hashFile, importFile, IMPORT_MAX_BYTES, VERIFY_MAX_BYTES, verifyFile, sealFile, SEAL_MAX_BYTES, recoverTemporaryOutputs } from '../../docs/wasm/client.mjs';
@@ -26,7 +26,7 @@ import { deliverEarlyAccessRequest } from './early-access.mjs';
 import { createEncryptedProfileBackup, inspectEncryptedProfileBackup, commitBackupRestore, previewBackupRestore } from './profile-backup.mjs';
 import { createSyncProvider } from './sync-provider.mjs';
 import { PINS_CHANGED, SOURCES, addTrustedCompany, fingerprintHex, formatFingerprint, listTrustedHistory, listTrustedKeys, markCompromised, pinTrustedKey, removeTrustedKey, trustForKey } from './trusted-keys.mjs';
-import { RegistryPanel, SealedOnDevice, ShareRecordPanel, getRegistry, registryLogout, registrySealed } from './registry-ui.jsx';
+import { RegistryPanel, SealedOnDevice, ShareRecordPanel, getRegistry, registryLogout, registrySealed, useRegistryTimeField } from './registry-ui.jsx';
 import { BYTES_DIFFER, TRUST_KIND, composeNote, landingLine, manifestReport, parseLandingLine, parseNote, parseSealedLine, timeFields, toIsoFromLocal, trustLine } from './recipient-trust.mjs';
 
 const syncProvider = createSyncProvider({ supabaseUrl: import.meta.env.VITE_SUPABASE_URL, supabaseAnonKey: import.meta.env.VITE_SUPABASE_ANON_KEY });
@@ -1219,7 +1219,8 @@ function App() {
     return () => { live = false; };
   }, [result, pinsVersion]);
   const protectView = !!result && result === protectResult;
-  const resultTimes = protectView && protectTimes?.for === result ? timeFields({ landing: protectTimes.landing, landingSigned: false, sealedAt: protectTimes.sealedAt }) : null;
+  const registryLine = __REGISTRY_URL__ ? useRegistryTimeField(protectView ? result.receipts : '') : null; // eslint-disable-line react-hooks/rules-of-hooks -- a build-time constant
+  const resultTimes = protectView && protectTimes?.for === result ? timeFields({ landing: protectTimes.landing, landingSigned: false, sealedAt: protectTimes.sealedAt, registry: registryLine }) : null;
   // A just-sealed result is the sender's own key, so the recipient's trust line is not shown for it.
   const shownTrust = keyTrust?.for === result && !(protectView && !resultTimes) ? keyTrust : null;
   const trustLines = shownTrust ? [`Key trust: ${trustLine(shownTrust, SOURCES)}`, ...(shownTrust.entry ? [`Key source: ${SOURCES[shownTrust.entry.source] || shownTrust.entry.source}`] : [])] : [];
@@ -2324,7 +2325,10 @@ function ManifestCheck({ onActiveChange }) {
   const changed = (apply) => { revisionRef.current++; controllerRef.current?.abort(); setOutcome(null); setMessage(''); apply(); };
   const pinsVersion = usePinsVersion();
   const pinsRef = useRef(pinsVersion); pinsRef.current = pinsVersion;
-  const reportFor = (trust, o) => manifestReport({ sealedName: o.sealedName, trust, sources: SOURCES, keyFingerprint: o.fingerprint, head: o.head, sealedAt: o.sealedAt, items: o.comparison.items, extras: o.comparison.extras, locals: o.locals });
+  const reportFor = (trust, o, registry = null) => manifestReport({ sealedName: o.sealedName, trust, sources: SOURCES, keyFingerprint: o.fingerprint, head: o.head, sealedAt: o.sealedAt, items: o.comparison.items, extras: o.comparison.extras, locals: o.locals, registry });
+  const registryLine = __REGISTRY_URL__ ? useRegistryTimeField(outcome?.verified ? text : '') : null; // eslint-disable-line react-hooks/rules-of-hooks -- a build-time constant
+  // The registry row follows this device's outbox live (queued, then Registered), so the report is rebuilt with it.
+  const report = useMemo(() => (outcome?.verified && registryLine ? reportFor(outcome.trust, outcome, registryLine) : outcome?.report), [outcome, registryLine?.value, registryLine?.basis]); // eslint-disable-line react-hooks/exhaustive-deps
   // A pin may change (here, in Settings or in another tab) while files hash or after the result shows. Each result
   // records the pins version its trust was read at; re-read it whenever that is older than the current version.
   useEffect(() => {
@@ -2387,17 +2391,17 @@ function ManifestCheck({ onActiveChange }) {
       <h3><span role="status" className="manifest-summary"><span className="status-label ok">Manifest verified</span> {comparison.items.filter((item) => item.status === 'match').length} of {comparison.items.length} files match</span></h3>
       <TrustLine trust={outcome.trust} />
       {outcome.pinned && <p className="field-hint">Used the key you saved for {outcome.pinned.name}.</p>}
-      <TimeFields fields={outcome.report.fields} />
+      <TimeFields fields={report.fields} />
       <div className="table-scroll" role="region" aria-label="Manifest check results" tabIndex={0}><table className="manifest-table"><thead><tr><th scope="col">Item</th><th scope="col">Name in manifest</th><th scope="col">Size</th><th scope="col">Status</th><th scope="col">Local file</th></tr></thead><tbody>
         {comparison.items.map((item) => <tr key={item.id}><td className="mono-values">{item.id}</td><td className="wrap">{item.name || <span className="muted">Not included</span>}<ItemNote note={item.note} showLanding={new Set(comparison.items.map((entry) => parseNote(entry.note).landing || '')).size > 1} /></td><td className="mono-values">{fmtBytes(item.bytes)}</td><td><span className={`status-label ${STATUS_KIND[item.status]}`}>{MANIFEST_STATUS[item.status]}</span>{item.status === 'bytes-differ' && <span className="manifest-note">{BYTES_DIFFER.text}</span>}</td><td className="wrap">{item.local == null ? '—' : outcome.locals[item.local].name}</td></tr>)}
         {comparison.extras.map((extra) => <tr key={`extra-${extra.local}`}><td>—</td><td>—</td><td className="mono-values">{fmtBytes(extra.bytes)}</td><td><span className={`status-label ${STATUS_KIND['not-in-manifest']}`}>{MANIFEST_STATUS['not-in-manifest']}</span></td><td className="wrap">{extra.name}</td></tr>)}
       </tbody></table></div>
       {comparison.items.some((item) => item.status === 'missing' && !item.name) && <p className="field-hint">Files sealed without a name can only match or be missing.</p>}
       <div className="actions-row">
-        <button className="button secondary" type="button" onClick={() => download(`${outcome.base}.check-report.txt`, outcome.report.text)}><Download aria-hidden="true" size={16} />Download text report</button>
-        <button className="button secondary" type="button" onClick={() => download(`${outcome.base}.check-report.md`, outcome.report.markdown, 'text/markdown;charset=utf-8')}><Download aria-hidden="true" size={16} />Download Markdown report</button>
-        <button className="button secondary" type="button" onClick={() => download(`${outcome.base}.check-report.json`, outcome.report.json, 'application/json')}><Download aria-hidden="true" size={16} />Download JSON</button>
-        <button className="button secondary" type="button" onClick={async () => { try { const { createIntegrityPdf } = await import('./report-pdf.mjs'); download(`${outcome.base}.check-report.pdf`, await createIntegrityPdf({ title: 'HashWing manifest check report', lines: outcome.report.pdfLines }), 'application/pdf'); } catch (cause) { setMessage(cause?.message || 'Could not create the PDF. Download the text report instead.'); } }}><Download aria-hidden="true" size={16} />Download PDF</button>
+        <button className="button secondary" type="button" onClick={() => download(`${outcome.base}.check-report.txt`, report.text)}><Download aria-hidden="true" size={16} />Download text report</button>
+        <button className="button secondary" type="button" onClick={() => download(`${outcome.base}.check-report.md`, report.markdown, 'text/markdown;charset=utf-8')}><Download aria-hidden="true" size={16} />Download Markdown report</button>
+        <button className="button secondary" type="button" onClick={() => download(`${outcome.base}.check-report.json`, report.json, 'application/json')}><Download aria-hidden="true" size={16} />Download JSON</button>
+        <button className="button secondary" type="button" onClick={async () => { try { const { createIntegrityPdf } = await import('./report-pdf.mjs'); download(`${outcome.base}.check-report.pdf`, await createIntegrityPdf({ title: 'HashWing manifest check report', lines: report.pdfLines }), 'application/pdf'); } catch (cause) { setMessage(cause?.message || 'Could not create the PDF. Download the text report instead.'); } }}><Download aria-hidden="true" size={16} />Download PDF</button>
       </div>
     </div>}
   </div></section>;

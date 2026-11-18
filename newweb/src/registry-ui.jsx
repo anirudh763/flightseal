@@ -164,6 +164,23 @@ export function registrySealed(receipts, name) {
   const receipt = String(receipts || '').split('\n').map((line) => line.trim()).filter(Boolean).pop();
   if (receipt) getRegistry().sealed(receipt, name).catch(() => {}); // a seal never waits on or fails because of the registry
 }
+// The "Registry acceptance" time row for a checked receipt message: this device's outbox row for one of its receipt
+// lines, matched on the stored receipt line. Only these strings reach the screen and the reports, never a row.
+const REGISTERED_BASIS = "the registry's clock; the registry's statement, not proof of the files";
+export function useRegistryTimeField(receipts) {
+  const [, s] = useRegistry();
+  const lines = new Set(String(receipts || '').split('\n').map((line) => line.trim()).filter(Boolean));
+  if (!lines.size) return null;
+  const row = s.rows.find((r) => lines.has(r.receipt));
+  if (row?.state === 'registered' && row.disposition === 'deleted') return { value: 'Registered, later deleted', basis: "the registry's statement, not proof of the files; its hosted record was deleted" };
+  if (row?.state === 'registered') return { value: `Registered at ${row.received_at}`, basis: REGISTERED_BASIS };
+  if (row?.state === 'needs_attention') return { value: 'Needs attention', basis: attentionMessage(row) ?? (REASONS[row.reason] ?? REFUSED)[0] };
+  if (row) return { value: 'Not yet registered', basis: `this device's list: ${s.online || row.state !== 'sealed_local' ? row.label : stateLabel('waiting_for_connection')}` };
+  if (s.pending.some((p) => lines.has(p.receipt))) return { value: 'Not yet registered', basis: "this device's list: Sealed locally" };
+  if (!s.outbox) return { value: 'Not signed in', basis: "sign in to the company registry to see this device's record" };
+  return { value: 'No registry record on this device', basis: 'this device has no registry record for this receipt' };
+}
+
 // Called from the app's logout paths: close the outbox and forget the registry token.
 export function registryLogout() {
   if (registry) registry.logout();
