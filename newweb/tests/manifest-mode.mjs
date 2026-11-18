@@ -358,7 +358,7 @@ try {
     const edited = join(editedDir, 'flight-notes-cropped.txt'); writeFileSync(edited, Buffer.from(text.replace('Battery 81%\n', '')));
     const pad = (n) => String(n).padStart(2, '0');
     const later = new Date(Date.now() + 2 * 3600e3);
-    const local = `${later.getFullYear()}-${pad(later.getMonth() + 1)}-${pad(later.getDate())}T${pad(later.getHours())}:${pad(later.getMinutes())}:${pad(later.getSeconds())}`;
+    const local = `${later.getFullYear()}-${pad(later.getMonth() + 1)}-${pad(later.getDate())}T${pad(later.getHours())}:${pad(later.getMinutes())}:${pad(later.getSeconds())}`.replace(/:00$/, ''); // Chrome drops zero seconds; fill() rejects a changed value
     await page.locator('#manifest-files').setInputFiles([original, edited]);
     if (!(await page.locator('.manifest-options').evaluate((d) => d.open))) await page.locator('.manifest-options summary').click();
     await page.getByLabel('Include file names').check();

@@ -95,3 +95,20 @@ def fseal_receipts(tmp_path):
                    input=lines, text=True, check=True, capture_output=True)
     der = base64.b64decode("".join(key.read_text().splitlines()[1:-1]))
     return der[-32:], rec.read_text().splitlines()
+
+
+def share(app, tok, rid, share_token=None, idem=None, **extra):
+    """POST /v1/shares the way a client does: it makes the token and sends only its SHA-256.
+
+    Returns (status, out, share_token); on success `out["path"]` is the link the client builds from its token."""
+    import hashlib
+    import secrets
+
+    share_token = share_token or secrets.token_urlsafe(32)
+    idem = idem or "share-" + secrets.token_hex(12)
+    body = {"registration_id": rid, "token_hash": hashlib.sha256(share_token.encode()).hexdigest(),
+            "idempotency_key": idem, **extra}
+    s, out, _ = call(app, "POST", "/v1/shares", tok, body)
+    if s in (200, 201):
+        out = {**out, "path": "/v1/shares/" + share_token}
+    return s, out, share_token

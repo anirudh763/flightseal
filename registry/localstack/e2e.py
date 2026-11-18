@@ -89,6 +89,18 @@ def http(method, url, token=None, body=None, timeout=180):
         return status, {"_raw": raw[:300].decode(errors="replace")}
 
 
+def make_share(url, token, rid):
+    """Create a share the way the client does: the token is made here and only its SHA-256 is sent."""
+    import hashlib
+    import secrets
+
+    share_token = secrets.token_urlsafe(32)
+    body = {"registration_id": rid, "token_hash": hashlib.sha256(share_token.encode()).hexdigest(),
+            "idempotency_key": "e2e-share-" + secrets.token_hex(8)}
+    status, out = http("POST", url + "/v1/shares", token, body)
+    return status, {**out, "path": "/v1/shares/" + share_token} if status in (200, 201) else out
+
+
 # ------------------------------------------------------------------ container lifecycle
 
 def start_container():
@@ -256,7 +268,7 @@ def scenarios(url, tok, table, dedupe):
     check("lost ack: retry after a discarded response", status == 200 and one,
           f"{status}; registration items in DynamoDB: {'1' if one else 'not 1'}")
 
-    _, share1 = http("POST", url + "/v1/shares", pilot, {"registration_id": ack1["registration_id"]})
+    _, share1 = make_share(url, pilot, ack1["registration_id"])
     before = http("GET", url + share1["path"])[0]
     withdraw = http("DELETE", url + share1["path"], pilot)[0]
     after = http("GET", url + share1["path"])
@@ -266,7 +278,7 @@ def scenarios(url, tok, table, dedupe):
           (before, withdraw, after[0], replay, after_replay[0]) == (200, 200, 404, 200, 404) and after == after_replay,
           f"GET {before}, DELETE {withdraw}, GET {after[0]}, retry {replay}, GET {after_replay[0]}")
 
-    _, share2 = http("POST", url + "/v1/shares", pilot, {"registration_id": ack2["registration_id"]})
+    _, share2 = make_share(url, pilot, ack2["registration_id"])
     deleted = http("DELETE", url + f"/v1/registrations/{ack2['registration_id']}", admin)[0]
     share_after = http("GET", url + share2["path"])[0]
     item = (reg_items(ack2["registration_id"]) or [{}])[0]
@@ -302,7 +314,7 @@ def scenarios(url, tok, table, dedupe):
     status, ep = http("POST", url + "/v1/epoch", admin, {})
     status2, out = register(pilot, receipt_line(seed, 400), "e2e-idem-0000000006", env_old)
     check("epoch bump (transaction with its tombstone) invalidates an outstanding envelope",
-          status == 200 and ep.get("epoch") == 1 and (status2, out.get("error")) == (422, "envelope_expired"),
+          status == 200 and ep.get("epoch") == 1 and (status2, out.get("error")) == (422, "epoch_mismatch"),
           f"epoch {status} {ep}, register {status2} {out}")
     return {"share_path": share2["path"], "rid": ack1["registration_id"], "pilot": pilot, "ack1": ack1,
             "withdrawn_paths": [share1["path"], share2["path"]], "rid2": ack2["registration_id"]}
@@ -321,7 +333,7 @@ def restore_drill(url, state, base_env):
     from registry.store import DynamoTable
 
     ddb, lam, target = client("dynamodb"), client("lambda"), TABLE + "-restored"
-    _, live_share = http("POST", url + "/v1/shares", state["pilot"], {"registration_id": state["rid"]})
+    _, live_share = make_share(url, state["pilot"], state["rid"])
     ddb.create_table(TableName=target, BillingMode="PAY_PER_REQUEST",
                      AttributeDefinitions=[{"AttributeName": "PK", "AttributeType": "S"},
                                            {"AttributeName": "SK", "AttributeType": "S"}],
@@ -363,7 +375,7 @@ def persistence(url_for, state):
     """Write, restart, read back through the API and directly from DynamoDB. Never reseed."""
     pilot = state["pilot"]
     url = url_for()
-    _, live = http("POST", url + "/v1/shares", pilot, {"registration_id": state["rid"]})
+    _, live = make_share(url, pilot, state["rid"])
     check("persistence: share served before restart", http("GET", url + live["path"])[0] == 200)
 
     def probe(label):

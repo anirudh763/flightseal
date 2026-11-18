@@ -39,11 +39,28 @@ ROUTES = [
     ("GET", r"/v1/keys", "list_keys", ANY),
     ("POST", r"/v1/keys/([0-9a-f]{64})/compromised", "compromise", ADMIN),
     ("POST", r"/v1/epoch", "epoch", ADMIN),
+    ("GET", r"/v1/epoch", "get_epoch", ANY),
     ("POST", r"/v1/shares", "create_share", ANY),
     ("GET", r"/v1/shares/([A-Za-z0-9_-]{1,128})", "get_share", PUBLIC),
     ("DELETE", r"/v1/shares/([A-Za-z0-9_-]{1,128})", "withdraw_share", ANY),
 ]
 ROUTES = [(m, re.compile(p), name, access) for m, p, name, access in ROUTES]
+SHARE_VIEW = re.compile(r"/v1/shares/[A-Za-z0-9_-]{1,128}")
+# CORS. Only an exact allowlisted origin is echoed back, never "*", and credentials (cookies) are never allowed:
+# the bearer token travels in Authorization. A `scheme://host:*` entry matches any port (dev servers only).
+CORS_ENTRY = re.compile(r"https?://[a-z0-9]([a-z0-9.-]*[a-z0-9])?(:([0-9]{1,5}|\*))?")
+CORS_PREFLIGHT = {"access-control-allow-methods": "GET,POST,DELETE",
+                  "access-control-allow-headers": "authorization,content-type,idempotency-key",
+                  "access-control-max-age": "600"}
+
+
+def _cors_allowlist(value):
+    out = []
+    for entry in (value or "").split(","):
+        entry = entry.strip()
+        if CORS_ENTRY.fullmatch(entry):
+            out.append(re.compile(re.escape(entry[:-2]) + r":[0-9]{1,5}" if entry.endswith(":*") else re.escape(entry)))
+    return out
 
 
 class HttpError(Exception):
@@ -99,6 +116,7 @@ class App:
         self.restored_from = env.get("RESTORED_FROM", "")
         self.restore_id = env.get("RESTORE_ID", "")
         self.table_name = env.get("TABLE_NAME", "")
+        self.cors = _cors_allowlist(env.get("CORS_ORIGINS", ""))
         self._restore_ok = False
 
     def now(self):
@@ -106,8 +124,20 @@ class App:
 
     # ------------------------------------------------------------ plumbing
 
+    def _origin_ok(self, origin):
+        return bool(origin) and any(p.fullmatch(origin) for p in self.cors)
+
     def handle(self, event):
         name = "unrouted"
+        method, path, headers, _ = _event_parts(event)
+        origin = headers.get("origin", "")
+        if method == "OPTIONS":  # CORS preflight: answered before identity, like API Gateway does
+            if self._origin_ok(origin) and any(p.fullmatch(path) for _, p, _, _ in ROUTES):
+                cors = {"access-control-allow-origin": origin, "vary": "Origin", **CORS_PREFLIGHT}
+                print(json.dumps({"route": "preflight", "status": 204}), file=sys.stderr)
+                return {"statusCode": 204, "headers": {**HEADERS, **cors}, "body": ""}
+            print(json.dumps({"route": "preflight", "status": 403}), file=sys.stderr)
+            return {"statusCode": 403, "headers": dict(HEADERS), "body": json.dumps({"error": "cors_forbidden"})}
         try:
             self._check_restore()
             body = event.get("body") or ""
@@ -141,7 +171,12 @@ class App:
         except ConditionFailed:
             status, out = 409, {"error": "conflict"}
         print(json.dumps({"route": name, "status": status}), file=sys.stderr)
-        return {"statusCode": status, "headers": dict(HEADERS), "body": json.dumps(out)}
+        out_headers = dict(HEADERS)
+        if method == "GET" and SHARE_VIEW.fullmatch(path):
+            out_headers["access-control-allow-origin"] = "*"  # public and credential-free, for any recipient
+        elif self._origin_ok(origin):
+            out_headers.update({"access-control-allow-origin": origin, "vary": "Origin"})
+        return {"statusCode": status, "headers": out_headers, "body": json.dumps(out)}
 
     def _check_restore(self):
         if not self.restored_from or self._restore_ok:
@@ -213,12 +248,17 @@ class App:
             raise HttpError(410, "registration_deleted")
         return 200, self._ack(reg, idem["received_at"])  # the original ack, with the current disposition
 
-    def _envelope_ok(self, pk, envelope_id, ident, now):
+    def _envelope_error(self, pk, envelope_id, ident, now):
+        """None for a usable envelope, else why not. An unknown id reads as expired: TTL may have removed it."""
         env = self.t.get(pk, "ENV#" + envelope_id)
-        if not env or env.get("expires_at", 0) <= now or env.get("sub") != ident.sub:
-            return False
+        if not env or env.get("expires_at", 0) <= now:
+            return "envelope_expired"
+        if env.get("sub") != ident.sub:
+            return "sub_mismatch"
         epoch = self.t.get(pk, "EPOCH")
-        return env.get("epoch", -1) >= (epoch or {}).get("epoch", 0)
+        if env.get("epoch", -1) < (epoch or {}).get("epoch", 0):
+            return "epoch_mismatch"
+        return None
 
     def register(self, ident, body, _query):
         self._fields(body, required=("receipt", "idempotency_key", "envelope_id"))
@@ -244,11 +284,12 @@ class App:
             raise HttpError(422, "bad_signature")
         fp = receipt.fingerprint(r.key)
         rid = _sha(f"{ident.org_id}|{fp}|{r.head.hex()}|{r.count}")[:32]
-        if not self._envelope_ok(pk, envelope_id, ident, now):
+        env_error = self._envelope_error(pk, envelope_id, ident, now)
+        if env_error:
             committed = self._existing(pk, rid)
             if committed:
                 return committed
-            raise HttpError(422, "envelope_expired")
+            raise HttpError(422, env_error)
         key = self.t.get(pk, "KEY#" + fp)
         if key is None:
             raise HttpError(403, "key_not_enrolled")
@@ -313,11 +354,13 @@ class App:
                                    "org": ident.org_id, "ref": rid, "at": now}},
         ]
         for h in reg.get("share_hashes", []):
-            # no condition (TTL may already have removed the share); the ttl makes any upserted stub expire
+            # No condition and no TTL: even if the record was lost, this leaves a permanent claim on the hash, so a
+            # client-chosen token hash can never be registered again (see create_share).
             ops.append({"op": "update", "key": ("SHARE#" + h, "SHARE"),
-                        "set": {"state": "withdrawn", "withdrawn_at": now, "ttl": now + DAY}})
+                        "set": {"state": "withdrawn", "withdrawn_at": now, "org": ident.org_id, "rid": rid},
+                        "remove": ["ttl"]})
             ops.append({"op": "put", "item": {"PK": f"TOMB#{ident.org_id}#{h}", "SK": "TOMB", "kind": "share",
-                                              "org": ident.org_id, "ref": h, "at": now}})
+                                              "org": ident.org_id, "ref": h, "rid": rid, "at": now}})
         if self._transact(ops):
             raise HttpError(409, "conflict")
         return 200, {"registration_id": rid, "disposition": "deleted"}
@@ -331,6 +374,9 @@ class App:
         self.t.put({"PK": pk, "SK": "ENV#" + envelope_id, "sub": ident.sub, "epoch": epoch, "expires_at": expires,
                     "ttl": expires + DAY}, cond=[("not_exists",)])
         return 201, {"envelope_id": envelope_id, "expires_at": _iso(expires), "epoch": epoch}
+
+    def get_epoch(self, ident, _body, _query):
+        return 200, {"epoch": (self.t.get(f"ORG#{ident.org_id}", "EPOCH") or {}).get("epoch", 0)}
 
     def epoch(self, ident, body, _query):
         self._fields(body)
@@ -429,31 +475,63 @@ class App:
 
     # ------------------------------------------------------------ shares
 
+    def _share_replay(self, sidem, rid, h):
+        if sidem["rid"] != rid or sidem["hash"] != h:
+            raise HttpError(409, "idempotency_conflict")
+        return self._share_view(self.t.get("SHARE#" + h, "SHARE"), rid, sidem["share_expires_at"])
+
+    def _share_view(self, share, rid, expires_at=None):
+        state = (share or {}).get("state", "expired")
+        expires_at = (share or {}).get("expires_at", expires_at)
+        if state == "active" and (expires_at or 0) <= self.now():
+            state = "expired"
+        return 200, {"registration_id": rid, "expires_at": _iso(expires_at) if expires_at else None,
+                     "disposition": state}
+
     def create_share(self, ident, body, _query):
-        self._fields(body, required=("registration_id",), optional=("expires_days",))
+        """The client makes the 256-bit token and sends only its SHA-256, so a lost response can be retried: the
+        same (idempotency_key, registration_id, token_hash) returns the same share, and the client still holds the
+        token. A replay never reopens a withdrawn or expired share; it reports that disposition instead."""
+        self._fields(body, required=("registration_id", "token_hash", "idempotency_key"), optional=("expires_days",))
         rid = self._str(body, "registration_id", HEX32)
+        h = self._str(body, "token_hash", HEX64)
+        idem_key = self._str(body, "idempotency_key", IDEM_KEY)
         days = body.get("expires_days", 30)
         if not isinstance(days, int) or isinstance(days, bool) or not 1 <= days <= 365:
             raise HttpError(400, "bad_request")
         pk, now = f"ORG#{ident.org_id}", self.now()
+        sidem = self.t.get(pk, "SIDEM#" + idem_key)
+        if sidem and sidem.get("expires_at", 0) > now:
+            return self._share_replay(sidem, rid, h)
         reg = self.t.get(pk, "REG#" + rid)
         if reg is None or reg["state"] != "active":
             raise not_found()
         hashes = reg.get("share_hashes", [])
         if len(hashes) >= MAX_SHARES:
             raise HttpError(409, "share_limit")
-        token = secrets.token_urlsafe(32)
-        h, expires = _sha(token), now + days * DAY
+        expires = now + days * DAY
         failed = self._transact([
             {"op": "put", "item": {"PK": "SHARE#" + h, "SK": "SHARE", "org": ident.org_id, "rid": rid,
-                                   "state": "active", "created_at": now, "expires_at": expires, "ttl": expires + DAY},
-             "cond": [("not_exists",)]},
+                                   "state": "active", "created_at": now, "expires_at": expires},
+             "cond": [("not_exists",)]},  # no TTL: a hash, once used, is never free again
             {"op": "update", "key": (pk, "REG#" + rid), "set": {"share_hashes": hashes + [h]},
              "cond": [("eq", "state", "active"), ("eq", "share_hashes", hashes)]},
+            {"op": "put", "item": {"PK": pk, "SK": "SIDEM#" + idem_key, "rid": rid, "hash": h,
+                                   "share_expires_at": expires, "expires_at": now + self.dedupe,
+                                   "ttl": now + self.dedupe + DAY},
+             "cond": [("or", ("not_exists",), ("lt", "expires_at", now + 1))]},
         ])
-        if failed:
-            raise HttpError(409, "conflict")
-        return 201, {"token": token, "path": "/v1/shares/" + token, "expires_at": _iso(expires)}
+        if failed is None:
+            return 201, {"registration_id": rid, "expires_at": _iso(expires), "disposition": "active"}
+        if failed[2]:  # a concurrent request with the same idempotency key won
+            sidem = self.t.get(pk, "SIDEM#" + idem_key)
+            if sidem and sidem.get("expires_at", 0) > now:
+                return self._share_replay(sidem, rid, h)
+        if failed[0]:  # the hash is taken: this caller's own share (a retry after the dedupe window), or refused
+            share = self.t.get("SHARE#" + h, "SHARE")
+            if share and share.get("org") == ident.org_id and share.get("rid") == rid:
+                return self._share_view(share, rid)
+        raise HttpError(409, "conflict")  # token hash used by another share, or the registration changed meanwhile
 
     def get_share(self, _ident, _body, _query, token):
         if not SHARE_TOKEN.fullmatch(token):
@@ -480,7 +558,7 @@ class App:
                 {"op": "update", "key": ("SHARE#" + h, "SHARE"), "set": {"state": "withdrawn", "withdrawn_at": now},
                  "cond": [("eq", "org", ident.org_id)]},
                 {"op": "put", "item": {"PK": f"TOMB#{ident.org_id}#{h}", "SK": "TOMB", "kind": "share",
-                                       "org": ident.org_id, "ref": h, "at": now}},
+                                       "org": ident.org_id, "ref": h, "rid": share.get("rid"), "at": now}},
             ])
             if failed:
                 raise HttpError(409, "conflict")
