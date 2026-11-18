@@ -134,6 +134,8 @@ try {
     await page.setViewportSize({ width: 320, height: 900 }); await frame(page);
     const order = await page.locator('.jobs-table tbody tr').first().evaluate((tr) => ['.jobs-name', '.jobs-ref', '.jobs-status', '.jobs-when', '.jobs-actions'].map((c) => tr.querySelector(c).getBoundingClientRect().top));
     assert.deepEqual([...order].sort((x, y) => x - y), order, `320px: package, job ref, status, time, actions (${order})`);
+    const empty = page.locator('.jobs-table .jobs-ref-empty');
+    if (await empty.count()) assert.deepEqual(await empty.evaluateAll((cells) => cells.map((c) => [getComputedStyle(c).display !== 'none', c.getBoundingClientRect().height <= 1, c.parentElement.cells.length])), (await empty.evaluateAll((c) => c.map(() => [true, true, 5]))), '320px: an empty job ref is hidden visually but stays a cell, so screen readers keep five cells under five headers');
     await page.setViewportSize({ width: 1440, height: 900 });
   });
 

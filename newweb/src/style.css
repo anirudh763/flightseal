@@ -1273,7 +1273,8 @@ table.jobs-table { min-width: 0; width: 100%; table-layout: auto; }
   /* package first, its job ref under it, then status and time, then the actions */
   .jobs-table tr { display: flex; flex-direction: column; padding: 10px 0; border-bottom: 1px solid var(--line); }
   .jobs-table .jobs-name { order: 1; } .jobs-table .jobs-ref { order: 2; color: var(--muted); } .jobs-table td:nth-child(3) { order: 3; } .jobs-table .jobs-when { order: 4; } .jobs-table td:last-child { order: 5; }
-  .jobs-table .jobs-ref-empty { display: none; }
+  /* visually hidden, not display:none, so every row keeps five cells under five headers for screen readers */
+  .jobs-table .jobs-ref-empty { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; border: 0; }
   .jobs-table td { padding: 2px 0; border: 0; }
   .jobs-table .jobs-name { font-weight: 600; }
   .jobs-actions { display: grid; gap: 6px; margin-top: 8px; }
