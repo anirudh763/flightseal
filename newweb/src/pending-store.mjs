@@ -16,7 +16,7 @@ const done = (tx) => new Promise((resolve, reject) => { tx.oncomplete = () => re
 
 function check(row) {
   if (!row || Object.keys(row).some((k) => !FIELDS.includes(k)) || !isReceipt(row.receipt)
-    || !(row.owner === null || (typeof row.owner === 'string' && /^[^/]+\/[^/]+$/.test(row.owner))) || !Number.isFinite(row.at)) throw new TypeError('pending-store: bad row');
+    || !(row.owner === null || (typeof row.owner === 'string' && row.owner.length <= 1024 && /^.+\/[^/]+$/.test(row.owner))) || !Number.isFinite(row.at)) throw new TypeError('pending-store: bad row');
 }
 
 function memoryStore() {

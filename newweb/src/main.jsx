@@ -26,7 +26,7 @@ import { deliverEarlyAccessRequest } from './early-access.mjs';
 import { createEncryptedProfileBackup, inspectEncryptedProfileBackup, commitBackupRestore, previewBackupRestore } from './profile-backup.mjs';
 import { createSyncProvider } from './sync-provider.mjs';
 import { PINS_CHANGED, SOURCES, addTrustedCompany, fingerprintHex, formatFingerprint, listTrustedHistory, listTrustedKeys, markCompromised, pinTrustedKey, removeTrustedKey, trustForKey } from './trusted-keys.mjs';
-import { RegistryBoundary, RegistryPanel, SealedOnDevice, ShareRecordPanel, getRegistry, registryLogout, registryScope, registrySealed, useRegistryTimeField, useRegistryUnsent } from './registry-ui.jsx';
+import { RegistryBoundary, RegistryPanel, SealedOnDevice, ShareRecordPanel, getRegistry, registryLogout, registryScope, registrySealStart, registrySealed, useRegistryTimeField, useRegistryUnsent } from './registry-ui.jsx';
 import { BYTES_DIFFER, TRUST_KIND, composeNote, landingLine, manifestReport, parseLandingLine, parseNote, parseSealedLine, timeFields, toIsoFromLocal, trustLine } from './recipient-trust.mjs';
 
 const syncProvider = createSyncProvider({ supabaseUrl: import.meta.env.VITE_SUPABASE_URL, supabaseAnonKey: import.meta.env.VITE_SUPABASE_ANON_KEY });
@@ -169,7 +169,10 @@ function App() {
   const [sealOutput, setSealOutput] = useState(null);
   const [sealOutputAcknowledged, setSealOutputAcknowledged] = useState(false);
   const [manifestUnsaved, setManifestUnsaved] = useState(null); // { files, markSaved } from ManifestSeal while its result is not saved
-  const [rescue, setRescue] = useState(null); // { reason, files, error }: unsaved work kept after a logout this tab did not choose
+  const [rescue, setRescue] = useState(null); // { reason, files }: unsaved work kept after a logout this tab did not choose
+  const [unsavedAsk, setUnsavedAsk] = useState(null); // the parts in a download the user has not yet confirmed finished
+  const [unsavedError, setUnsavedError] = useState('');
+  const [discardAsk, setDiscardAsk] = useState(false);
   const registryUnsent = __REGISTRY_URL__ ? useRegistryUnsent() : 0; // the flag is a build-time constant, so the hook order never changes
   const [videoInfo, setVideoInfo] = useState(null);
   const [videoUrl, setVideoUrl] = useState('');
@@ -241,15 +244,21 @@ function App() {
       const seen = new Set();
       const files = parts.flatMap((part) => part.files).map((file) => { let name = file.name; for (let n = 2; seen.has(name); n++) name = `${n}-${file.name}`; seen.add(name); return { ...file, name }; });
       const zip = await createStoreZip(files, { maxBytes: 1024 * 1024 * 1024 }); // ponytail: one in-memory zip; past 1 GiB the per-file buttons below still work
-      const url = URL.createObjectURL(zip); const anchor = document.createElement('a'); anchor.href = url; anchor.download = 'hashwing-unsaved-work.zip'; document.body.append(anchor); anchor.click(); anchor.remove(); setTimeout(() => URL.revokeObjectURL(url), 0);
-      for (const part of parts) part.markSaved();
-      setProfileMenuMessage('');
+      const url = URL.createObjectURL(zip); const anchor = document.createElement('a'); anchor.href = url; anchor.download = 'hashwing-unsaved-work.zip'; document.body.append(anchor); anchor.click(); anchor.remove(); setTimeout(() => URL.revokeObjectURL(url), 60000);
+      setUnsavedError(''); setUnsavedAsk(parts); // a started download can still be cancelled or blocked: keep everything until the user says it finished
     } catch (cause) {
-      const message = `Couldn't make one download (${cause?.message || 'unknown error'}). Your work is still here, so download each file on its own.`;
-      setRescue((current) => current && { ...current, error: message });
-      setProfileMenuMessage(message);
+      setUnsavedError(`Couldn't make one download (${cause?.message || 'unknown error'}). Your work is still here, so download each file on its own.`);
     }
   };
+  const confirmUnsavedSaved = () => { for (const part of unsavedAsk || []) part.markSaved(); setUnsavedAsk(null); setUnsavedError(''); };
+  // One control wherever unsaved work blocks the next step: download, then confirm it finished; per-file buttons if the zip fails.
+  const unsavedControl = <div className="unsaved-download">
+    {unsavedError && <><p className="receipt-error" role="alert">{unsavedError}</p>
+      <div className="actions-row">{unsavedParts().flatMap((part) => part.files).map((file) => <button key={file.name} type="button" className="button secondary" onClick={() => { download(file.name, file.blob || file.bytes, 'application/octet-stream'); setUnsavedAsk(unsavedRef.current()); }}>{file.name}</button>)}</div></>}
+    {unsavedAsk ? <><p role="status">Did the download finish?</p>
+      <div className="actions-row"><button type="button" className="button primary" onClick={confirmUnsavedSaved}>Yes, saved</button><button type="button" className="button secondary" onClick={downloadUnsaved}>Download again</button></div></>
+      : <div className="actions-row"><button type="button" className="button primary" onClick={downloadUnsaved}><Download aria-hidden="true" size={16} />Download unsaved work</button></div>}
+  </div>;
   updateSafeRef.current = !busy && !manifestSealActive && !manifestCheckActive && !(sealOutput && !sealOutputAcknowledged);
 
   const navigate = useCallback((next, options = {}) => {
@@ -302,11 +311,11 @@ function App() {
   useEffect(() => { if (reloadedWithFiles) setOperationStatus('This tab was reloaded, so the files you had chosen are no longer selected. Choose them again.'); }, [reloadedWithFiles]);
 
   useEffect(() => {
-    if (!hasUnsavedWork) return undefined;
+    if (!hasUnsavedWork && !busy && !manifestSealActive) return undefined; // a seal still running is lost on reload too
     const warnBeforeUnload = (event) => { event.preventDefault(); event.returnValue = ''; };
     addEventListener('beforeunload', warnBeforeUnload);
     return () => removeEventListener('beforeunload', warnBeforeUnload);
-  }, [hasUnsavedWork]);
+  }, [hasUnsavedWork, busy, manifestSealActive]);
 
   useEffect(() => {
     const input = workbenchFileRef.current;
@@ -1015,6 +1024,7 @@ function App() {
     if (!protectFile) { setError('Choose the flight log file you want to seal.'); return; }
     let op = ++runRef.current;
     const controller = new AbortController(); controllerRef.current = controller;
+    const sealStart = __REGISTRY_URL__ ? registrySealStart() : null; // the registry owner when sealing began, not when it ends
     setBusy('Sealing your file on this device…');
     try {
       const packed = await fileToRecords(protectFile);
@@ -1037,7 +1047,7 @@ function App() {
       setProtectTimes(null);
       setProtectResult(verified);
       setProtectSealed({ name: packed.name, bytes: packed.bytes, sha256: packed.sha256, log, savedKey: !!signingKey?.privateKeyPem, fingerprint, handover: lines.join('\n') }); setProtectLanding('');
-      if (__REGISTRY_URL__) registrySealed(sealed.receipts, packed.name);
+      if (__REGISTRY_URL__) registrySealed(sealed.receipts, packed.name, sealStart);
       setOperationStatus('Sealed and checked on this device; nothing was uploaded. Now send the receipt message to someone else.');
     } catch (cause) {
       if (op !== runRef.current || cause?.name === 'AbortError') return;
@@ -1130,6 +1140,7 @@ function App() {
     setReceiptInputError(''); setKeyText(''); setSelectedRecord(0); setRecordDetail(null); setRecordError(''); setPageRows([]); setFirstRecord(null);
     setTelemetry([]); setSelectedTelemetryIndex(null); setHasImportedOutput(false); setPage(0); setSealFileInput(null); setSealSourceMetadata(null); setSealSourceOriginal(null); setSigningKey(null);
     setCsvDraft(null); setShareDialogOpen(false); setFeedbackDialogOpen(false); setInstallDialogOpen(false);
+    setUnsavedAsk(null); setUnsavedError(''); setDiscardAsk(false);
     setSealOutput(null); setSealOutputAcknowledged(false); setCurrentSample(null); setDemoLabel(''); setError(''); setOperationStatus('');
     setVideoOffset('0'); clearVideo();
     setManifestUnsaved(null); setProtectFile(null); setProtectSealed(null); setProtectResult(null); setRestored(null); setProtectLanding(''); setProtectTimes(null); setCopyCompare(null); setCopyStatus(''); setCheckFile(null); setCheckText('');
@@ -1144,7 +1155,7 @@ function App() {
     const files = parts.flatMap((part) => part.files);
     for (const part of parts) part.markSaved(); // it lives in the rescue now
     clearSensitiveWorkspace();
-    if (files.length) setRescue({ reason, files, error: '' });
+    if (files.length) setRescue({ reason, files });
   };
   const logout = () => {
     if (hasUnsavedWork) { setProfileMenuMessage('Download your unsaved work before logging out.'); return; }
@@ -1443,9 +1454,10 @@ function App() {
 
   const rescueNotice = rescue && <section className="rescue-notice" aria-label="Unsaved work">
     <p role="status">{rescue.reason === 'other-tab' ? 'You were logged out in another tab. This tab kept work that was not saved yet.' : 'Your workspace session ended. This tab kept work that was not saved yet.'} It stays only until you close this tab.</p>
-    {rescue.error && <><p className="receipt-error" role="alert">{rescue.error}</p>
-      <div className="actions-row">{rescue.files.map((file) => <button key={file.name} type="button" className="button secondary" onClick={() => download(file.name, file.blob || file.bytes, 'application/octet-stream')}>{file.name}</button>)}</div></>}
-    <div className="actions-row"><button type="button" className="button primary" onClick={downloadUnsaved}><Download aria-hidden="true" size={16} />Download unsaved work</button><button type="button" className="button secondary" onClick={() => setRescue(null)}>Discard</button></div>
+    {unsavedControl}
+    {discardAsk ? <><p role="alert">This deletes the only copy of this work.</p>
+      <div className="actions-row"><button type="button" className="button secondary" onClick={() => { setRescue(null); setDiscardAsk(false); setUnsavedAsk(null); }}>Delete it</button><button type="button" className="button secondary" onClick={() => setDiscardAsk(false)}>Keep it</button></div></>
+      : <div className="actions-row"><button type="button" className="button secondary" onClick={() => setDiscardAsk(true)}>Discard</button></div>}
   </section>;
   if (route.kind === 'landing') return <LandingPage notice={rescueNotice} key={privateResetVersion} onProtect={() => setHashRoute(routeHash('protect'))} onDemo={() => loadDemo(false)} onContinue={() => setHashRoute(routeHash('sandbox', { sample: currentSample || 'intact', record: selectedRecord }))} result={result} busy={busy} error={error} installKind={installKind} onInstall={installApp} onFeedback={() => setFeedbackDialogOpen(true)} installOpen={installDialogOpen} onInstallClose={() => setInstallDialogOpen(false)} feedbackOpen={feedbackDialogOpen} onFeedbackClose={() => setFeedbackDialogOpen(false)} route={route.route} />;
   if (route.kind === 'signup' || route.kind === 'login') return <AuthPage
@@ -1453,7 +1465,7 @@ function App() {
     mode={route.kind}
     returnTo={returnTo}
     outputNeedsAck={hasUnsavedWork}
-    onDownloadUnsaved={downloadUnsaved}
+    unsavedControl={unsavedControl}
     onReturnToWorkspace={() => setHashRoute(routeHash('sandbox', { sample: currentSample, record: selectedRecord }))}
     guestCanImport={activeSession?.kind === 'guest' && !!currentSample}
     currentSampleName={demoLabel}
@@ -1486,7 +1498,7 @@ function App() {
           savedContext={savedContext}
           savedContextError={savedContextError}
           hasUnacknowledgedOutput={hasUnsavedWork}
-          onDownloadUnsaved={downloadUnsaved}
+          unsavedControl={unsavedControl}
           message={profileMenuMessage}
           onSave={saveCurrentView}
           onRestore={restoreSavedView}
@@ -1837,7 +1849,7 @@ function TeamAccessForm() {
   </form>;
 }
 
-function AuthPage({ mode, returnTo, guestCanImport, currentSampleName, outputNeedsAck, onDownloadUnsaved, onReturnToWorkspace, expectedEpoch, isCurrent, onAuthAttempt, onLogin, onSignup, onComplete, onDemo, installKind, onInstall, onFeedback, installOpen, onInstallClose, feedbackOpen, onFeedbackClose, route }) {
+function AuthPage({ mode, returnTo, guestCanImport, currentSampleName, outputNeedsAck, unsavedControl, onReturnToWorkspace, expectedEpoch, isCurrent, onAuthAttempt, onLogin, onSignup, onComplete, onDemo, installKind, onInstall, onFeedback, installOpen, onInstallClose, feedbackOpen, onFeedbackClose, route }) {
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [confirm, setConfirm] = useState('');
@@ -1865,7 +1877,7 @@ function AuthPage({ mode, returnTo, guestCanImport, currentSampleName, outputNee
     <main id="auth-main" className={`auth-layout${creating ? ' auth-signup' : ''}`} tabIndex="-1">
       <section className="auth-context"><span className="landing-kicker">Local profile</span><h1>{creating ? 'Keep your workspace context.' : 'Return to your saved view.'}</h1><p>Profiles are stored only in this browser. They help restore an included-sample view; they do not upload files or create a cloud account.</p><ul><li><Check size={16} aria-hidden="true" />All HashWing tools stay free.</li><li><Check size={16} aria-hidden="true" />Flight logs, receipts and keys are not saved in a profile.</li><li><Check size={16} aria-hidden="true" />Passwords use a salted PBKDF2 verifier on this device.</li></ul><a href="#/app/help">Read local handling and trust limits <ArrowRight size={14} aria-hidden="true" /></a></section>
       <section className="auth-form-wrap" aria-labelledby={`page-${mode}`}><div className="auth-form-card"><p className="landing-kicker">{creating ? 'Create a local account' : 'Log in on this device'}</p><h2 id={`page-${mode}`} tabIndex="-1">{creating ? 'Create account' : 'Log in'}</h2><form onSubmit={submit} noValidate>
-        {outputNeedsAck && <div className="auth-output-warning" role="alert"><p>This tab has work that is not saved yet. Download it before you sign in.</p><button type="button" className="auth-return-workspace" onClick={onDownloadUnsaved}>Download unsaved work</button><button type="button" className="auth-return-workspace" onClick={onReturnToWorkspace}>Return to workspace</button></div>}
+        {outputNeedsAck && <div className="auth-output-warning" role="alert"><p>This tab has work that is not saved yet. Download it before you sign in.</p>{unsavedControl}<button type="button" className="auth-return-workspace" onClick={onReturnToWorkspace}>Return to workspace</button></div>}
         <div className="auth-field"><label htmlFor="auth-email">Email</label><input id="auth-email" type="email" name="email" autoComplete="email" inputMode="email" maxLength="254" required value={email} onChange={(event) => setEmail(event.target.value)} /></div>
         <div className="auth-field"><label htmlFor="auth-password">Password</label><div className="auth-password-wrap"><input id="auth-password" type={showPassword ? 'text' : 'password'} name="password" autoComplete={creating ? 'new-password' : 'current-password'} minLength="12" maxLength="128" required value={password} onChange={(event) => setPassword(event.target.value)} aria-describedby="password-help" /><button type="button" className="password-toggle" aria-label={showPassword ? 'Hide password' : 'Show password'} aria-pressed={showPassword} onClick={() => setShowPassword((value) => !value)}>{showPassword ? 'Hide' : 'Show'}</button></div><small id="password-help">Use 12–128 characters. Paste and password managers are supported.</small></div>
         {creating && <div className="auth-field"><label htmlFor="auth-confirm">Confirm password</label><input id="auth-confirm" type={showPassword ? 'text' : 'password'} name="confirm-password" autoComplete="new-password" minLength="12" maxLength="128" required value={confirm} onChange={(event) => setConfirm(event.target.value)} /></div>}
@@ -2066,7 +2078,7 @@ function EncryptedBackupControls({ profileId, isOwnerCurrent }) {
   </section>;
 }
 
-function ProfileMenu({ isCurrent, session, profile, currentSample, savedContext, savedContextError, hasUnacknowledgedOutput, onDownloadUnsaved, message, onSave, onRestore, onDeleteSaved, onRemoveProfile, onLogout, onNavigateAuth, syncStatus }) {
+function ProfileMenu({ isCurrent, session, profile, currentSample, savedContext, savedContextError, hasUnacknowledgedOutput, unsavedControl, message, onSave, onRestore, onDeleteSaved, onRemoveProfile, onLogout, onNavigateAuth, syncStatus }) {
   const menuRef = useRef(null);
   const email = profile?.email || (session?.kind === 'guest' ? 'Demo session' : 'Workspace access');
   return <details className="profile-menu" ref={menuRef} onKeyDown={closeDisclosure}>
@@ -2080,7 +2092,7 @@ function ProfileMenu({ isCurrent, session, profile, currentSample, savedContext,
         <button type="button" onClick={onRestore} disabled={!savedContext}>Restore saved view{savedContext ? ` · ${savedContext.screen}` : ''}</button>
         {(savedContext || savedContextError) && <button type="button" onClick={onDeleteSaved}>{savedContextError ? 'Remove damaged saved view' : 'Remove saved view'}</button>}
         <p className="profile-menu-note">Files, receipts, keys and payloads are not saved.</p>
-        {hasUnacknowledgedOutput && <><p className="profile-menu-message" role="alert">This tab has work that is not saved yet. Download it before you log out.</p><button type="button" className="profile-download-unsaved" onClick={onDownloadUnsaved}>Download unsaved work</button></>}
+        {hasUnacknowledgedOutput && <><p className="profile-menu-message" role="alert">This tab has work that is not saved yet. Download it before you log out.</p>{unsavedControl}</>}
         {savedContextError && <p className="profile-menu-message" role="alert">{savedContextError}</p>}
         {message && <p className="profile-menu-message" role="status">{message}</p>}
         <button type="button" className="profile-logout" disabled={hasUnacknowledgedOutput} onClick={onLogout}>Log out</button><button type="button" className="profile-remove" disabled={hasUnacknowledgedOutput} onClick={onRemoveProfile}>Remove local profile and saved view</button>
@@ -2088,7 +2100,7 @@ function ProfileMenu({ isCurrent, session, profile, currentSample, savedContext,
         {session?.kind === 'guest' && <p className="profile-menu-note">Guest state is separate from every local profile.</p>}
         <button type="button" onClick={() => onNavigateAuth('signup')}>Create local account</button>
         <button type="button" onClick={() => onNavigateAuth('login')}>Log in</button>
-        {session?.kind === 'guest' && hasUnacknowledgedOutput && <><p className="profile-menu-message" role="alert">This tab has work that is not saved yet. Download it before you end the session.</p><button type="button" className="profile-download-unsaved" onClick={onDownloadUnsaved}>Download unsaved work</button></>}
+        {session?.kind === 'guest' && hasUnacknowledgedOutput && <><p className="profile-menu-message" role="alert">This tab has work that is not saved yet. Download it before you end the session.</p>{unsavedControl}</>}
         {session?.kind === 'guest' && <button type="button" className="profile-logout" disabled={hasUnacknowledgedOutput} onClick={onLogout}>End demo session</button>}
       </>}
     </div>
@@ -2292,6 +2304,7 @@ function ManifestSeal({ signingKey, onActiveChange, onUnsaved, onSealed }) {
     // Same length as the real payload, so a long note or name fails now rather than after hours of hashing.
     try { encodeManifest({ salt: '0'.repeat(64), items: itemsFor(null) }); } catch (cause) { setError(cause?.code === 'note-tag' ? cause.message : friendlyLimit(cause)); return; }
     const controller = new AbortController(); controllerRef.current = controller;
+    const sealStart = __REGISTRY_URL__ && onSealed ? registrySealStart() : null; // hashing can take hours: bind to the owner signed in now
     setPhase('hashing');
     try {
       const hashed = await hashAll(files, controller.signal, setProgress);
@@ -2316,7 +2329,7 @@ function ManifestSeal({ signingKey, onActiveChange, onUnsaved, onSealed }) {
         handover: manifestHandoverText({ items: items.length, receipts: sealed.receipts, publicKey: sealed.publicKey, sealedAt: new Date().toISOString() }),
       });
       setMessage('Sealed and checked on this device.');
-      onSealed?.(sealed.receipts, `${items.length} file${items.length === 1 ? '' : 's'}`);
+      onSealed?.(sealed.receipts, `${items.length} file${items.length === 1 ? '' : 's'}`, sealStart);
     } catch (cause) {
       if (cause?.name === 'AbortError') setMessage('Cancelled');
       else setError(cause?.message || 'Something went wrong. Press Seal again.');

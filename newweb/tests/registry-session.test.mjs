@@ -137,6 +137,76 @@ test('without IndexedDB the pending list is memory only and counts as unsaved un
   assert.equal(r.unsavedCount(), 0);
 });
 
+test('Assign binds the proof to this owner before sending, so it can never be assigned to another company', async () => {
+  const r = getRegistry();
+  await r.sealed(receipt(4000), 'bind.ulg'); // signed out: unassigned
+  assert.ok(await r.signIn(tokenFor('b1')));
+  const sending = r.assign(receipt(4000));
+  assert.deepEqual(r.snapshot().pending.filter((p) => p.receipt === receipt(4000)).map((p) => p.owner), ['orgA/b1'], 'bound at once, before the outbox answers');
+  assert.equal(await sending, true);
+  r.signOut();
+  assert.ok(await r.signIn(tokenFor('b2')));
+  assert.equal(await r.assign(receipt(4000)), false, 'a second company never gets it');
+  r.logout();
+});
+
+test('a seal started signed out (or as another owner) and finished after a sign-in is not sent under the new owner', async () => {
+  const r = getRegistry();
+  const start = r.sealStart(); // signed out when sealing began
+  assert.ok(await r.signIn(tokenFor('s1')));
+  await r.sealed(receipt(4100), 'long.ulg', start);
+  assert.deepEqual(r.snapshot().pending.filter((p) => p.receipt === receipt(4100)).map((p) => p.owner), [null], 'unassigned, waiting for Assign');
+  assert.ok(!(await r.snapshot().outbox.list()).some((row) => row.receipt === receipt(4100)));
+  const asS1 = r.sealStart();
+  r.signOut();
+  assert.ok(await r.signIn(tokenFor('s2')));
+  await r.sealed(receipt(4101), 'other.ulg', asS1);
+  assert.deepEqual(r.snapshot().pending.filter((p) => p.receipt === receipt(4101)).map((p) => p.owner), ['orgA/s1'], 'held for the owner it began under');
+  assert.equal(r.names.has(receipt(4101)), false, 'and its name is hidden from the new owner');
+  r.logout();
+});
+
+test('the pending store refuses a full store and an owner it cannot name, and a failed save is kept in memory and offered for export', async () => {
+  const { openPendingStore, MAX_PENDING } = await vite.ssrLoadModule('/src/pending-store.mjs');
+  const mem = await openPendingStore('x', { indexedDB: null });
+  assert.equal(mem.storage, 'memory');
+  await mem.put({ receipt: receipt(1), owner: 'org/with/slash/sub', at: 1 }); // org ids may contain "/"
+  await assert.rejects(mem.put({ receipt: receipt(2), owner: 'no-slash', at: 1 }), TypeError);
+  for (let i = 3; mem && (await mem.list()).length < MAX_PENDING; i++) await mem.put({ receipt: receipt(i), owner: null, at: 1 });
+  await assert.rejects(mem.put({ receipt: receipt(9999), owner: null, at: 1 }), RangeError);
+  // A browser store whose writes fail (storage full or denied): the proof stays listed, memory only, and counts as unsaved.
+  const quota = Object.assign(new Error('quota'), { name: 'QuotaExceededError' });
+  const later = (fn) => setTimeout(fn, 0);
+  const fakeIdb = { open() {
+    const req = {};
+    later(() => {
+      const db = { close() {}, createObjectStore() {}, transaction(_names, mode) {
+        const tx = {};
+        const reqOf = (result) => { const q = { result }; later(() => q.onsuccess?.()); return q; };
+        const s = { transaction: tx, getAll: () => reqOf([]), count: () => reqOf(0), getKey: () => reqOf(undefined), put() { tx.failed = true; }, delete() {} };
+        tx.objectStore = () => s; tx.abort = () => {};
+        later(() => later(() => later(() => (mode === 'readwrite' && tx.failed ? (tx.error = quota, tx.onerror?.()) : tx.oncomplete?.()))));
+        return tx;
+      } };
+      req.result = db; req.onsuccess?.();
+    });
+    return req;
+  } };
+  const r = getRegistry();
+  globalThis.indexedDB = fakeIdb;
+  try {
+    await r.setScope('profile:quota');
+    assert.equal(r.snapshot().pendingStorage, 'indexeddb');
+    const before = r.unsavedCount();
+    await r.sealed(receipt(6000), 'quota.ulg');
+    const row = r.snapshot().pending.find((p) => p.receipt === receipt(6000));
+    assert.equal(row?.memoryOnly, true);
+    assert.equal(r.unsavedCount(), before + 1, 'counts as unsaved, so reload warns and logout waits for a download');
+    assert.match(r.snapshot().enqueueError, /Export pending proofs/);
+    assert.ok(JSON.parse(r.unsentExport().text).receipts.includes(receipt(6000)));
+  } finally { delete globalThis.indexedDB; await r.setScope('guest'); }
+});
+
 test('the Verify time row for each state of this device\'s outbox row', () => {
   const R = receipt(9), lines = `${R}\n`;
   const base = { owner: 'orgA/u', outbox: {}, listed: true, rows: [], pending: [], online: true };

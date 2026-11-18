@@ -86,7 +86,8 @@ async function assignRow(page, name, org = 'orgA') {
   const row = await openRow(page, name);
   await row.getByRole('button', { name: `Assign to ${org}` }).click();
   await row.getByText("Sealed while signed out, so it isn't assigned to a company yet.").waitFor({ state: 'detached' }).catch(() => {});
-  await page.waitForFunction((n) => [...document.querySelectorAll('.registry-row .registry-name')].filter((e) => e.textContent === n).length === 1 && ![...document.querySelectorAll('.registry-row')].some((r) => r.querySelector('.registry-name')?.textContent === n && /Assign to/.test(r.textContent)), name, { timeout: 30000 });
+  // Assign binds the row at once; wait until the outbox row (not the pending one) is the only row of that name.
+  await page.waitForFunction((n) => { const rows = [...document.querySelectorAll('.registry-row')].filter((r) => r.querySelector('.registry-name')?.textContent === n); return rows.length === 1 && rows[0].querySelector(':scope > summary .status-label')?.textContent !== 'Sealed locally'; }, name, { timeout: 30000 });
 }
 async function signIn(page, sub, role, ttl) {
   await go(page, 'help');
@@ -721,10 +722,20 @@ try {
         await axe(a, `rescue notice ${width}`);
         assert.ok(await a.evaluate(() => document.documentElement.scrollWidth <= innerWidth), `no horizontal scroll at ${width}`);
       }
-      const [download] = await Promise.all([a.waitForEvent('download'), notice.getByRole('button', { name: 'Download unsaved work' }).click()]);
+      // A cancelled or blocked download never clears the only copy: the notice stays until the user says it finished.
+      const [cancelled] = await Promise.all([a.waitForEvent('download'), notice.getByRole('button', { name: 'Download unsaved work' }).click()]);
+      await cancelled.cancel();
+      await notice.getByText('Did the download finish?').waitFor();
+      assert.equal(await notice.count(), 1, 'the kept work is still here after a cancelled download');
+      assert.equal(await reloadWarns(a), true, 'and reload still warns');
+      await notice.getByRole('button', { name: 'Discard' }).click();
+      await notice.getByText('This deletes the only copy of this work.').waitFor();
+      await notice.getByRole('button', { name: 'Keep it' }).click();
+      const [download] = await Promise.all([a.waitForEvent('download'), notice.getByRole('button', { name: 'Download again' }).click()]);
       assert.equal(download.suggestedFilename(), 'hashwing-unsaved-work.zip');
       const zip = readFileSync(await download.path()).toString('latin1');
       for (const name of ['kept-flight.ulg.fseal', 'kept-flight.ulg.receipt.txt']) assert.ok(zip.includes(name), `zip has ${name}`);
+      await notice.getByRole('button', { name: 'Yes, saved' }).click();
       await notice.waitFor({ state: 'detached' });
       assert.equal(await reloadWarns(a), false);
       assert.equal(await a.evaluate(() => sessionStorage.getItem('hashwing-registry-token')), null);
@@ -766,7 +777,10 @@ try {
       const menu = a.locator('.profile-menu');
       await menu.locator('summary').click();
       assert.equal(await menu.getByRole('button', { name: 'Log out', exact: true }).isDisabled(), true);
-      await Promise.all([a.waitForEvent('download'), menu.getByRole('button', { name: 'Download unsaved work' }).click()]);
+      const [started] = await Promise.all([a.waitForEvent('download'), menu.getByRole('button', { name: 'Download unsaved work' }).click()]);
+      await started.cancel();
+      assert.equal(await menu.getByRole('button', { name: 'Log out', exact: true }).isDisabled(), true, 'a started download alone does not unlock Log out');
+      await menu.getByRole('button', { name: 'Yes, saved' }).click();
       await menu.getByRole('button', { name: 'Log out', exact: true }).click();
       await a.waitForFunction(() => location.hash === '#/');
       await a.goto(`${flagOn.url}#/app/protect`);
@@ -793,6 +807,7 @@ try {
       const zip = readFileSync(await download.path()).toString('latin1');
       assert.match(zip, /hashwing-\d{8}-\d{6}\.manifest\.fseal/, 'the zip holds the sealed list');
       assert.match(zip, /hashwing-\d{8}-\d{6}\.receipt\.txt/, 'and its receipt message');
+      await a.locator('#auth-main').getByRole('button', { name: 'Yes, saved' }).click();
       await a.waitForFunction(() => !document.querySelector('.auth-output-warning'));
       assert.equal(await reloadWarns(a), false);
     } finally { await c.close(); }

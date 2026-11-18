@@ -120,6 +120,11 @@ function createRegistry() {
       if (n !== seq || state.outbox !== ob) return; // a newer refresh, a close or an owner change won
       const st = ob.status();
       set({ rows, listed: true, needsSignIn: st.needsSignIn, memory: st.storage === 'memory' || st.exportOffered, listError: '' });
+      // A pending proof this outbox already holds (an assign or flush cut short by a reload) is not pending any more.
+      const queued = new Set(rows.map((row) => row.receipt));
+      for (const p of state.pending.filter((q) => queued.has(q.receipt))) await dropPending(p.receipt);
+      // A proof kept because this owner's queue was full is retried whenever the queue changes.
+      if (state.outbox === ob && state.pending.some((p) => p.owner === state.owner)) flushOwned(ob, state.owner);
     } catch { if (state.outbox === ob) set({ listError: LIST_ERROR }); }
   }
   async function enqueueOn(ob, receipt) {
@@ -148,12 +153,17 @@ function createRegistry() {
     set({ pending: state.pending.filter((p) => p.receipt !== receipt) });
     try { await store?.remove(receipt); } catch { /* still in the outbox, which is what counts; a later flush finds it already queued */ }
   }
+  let flushing = null;
   async function flushOwned(ob, owner) { // only proofs sealed under this same owner go to its outbox by themselves
-    for (const p of state.pending.filter((q) => q.owner === owner)) {
-      if (state.outbox !== ob) return;
-      if (!(await enqueueOn(ob, p.receipt))) return; // kept; the list shows why
-      if (state.outbox === ob) await dropPending(p.receipt);
-    }
+    if (flushing === ob) return; // one flush per outbox at a time; the next queue change retries
+    flushing = ob;
+    try {
+      for (const p of state.pending.filter((q) => q.owner === owner)) {
+        if (state.outbox !== ob) return;
+        if (!(await enqueueOn(ob, p.receipt))) return; // kept; the list shows why
+        if (state.outbox === ob) await dropPending(p.receipt);
+      }
+    } finally { if (flushing === ob) flushing = null; }
   }
   async function setScope(scope) {
     if ((scope || null) === state.scope) return;
@@ -236,19 +246,27 @@ function createRegistry() {
       if (owner) { channel?.postMessage({ type: 'signout', owner, at }); markSignedOut(owner, at); }
     },
     logout: logoutHere, // this tab only (AD-17); the app's profile logout message reaches that profile's other tabs
-    async sealed(receipt, name) {
-      const owner = state.owner, g = scopeGen; // the registry owner it was sealed under, or null when signed out
-      if (name) names.set(receipt, name);
-      if (state.outbox && await enqueueOn(state.outbox, receipt)) return; // a failed enqueue (queue full) keeps it below
+    sealStart: () => ({ owner: state.owner, g: scopeGen }),
+    async sealed(receipt, name, start = { owner: state.owner, g: scopeGen }) {
+      // The registry owner signed in when sealing began (null: unassigned), so a sign-in during a long seal never adopts it.
+      const { owner, g } = start;
+      if (g !== scopeGen) return; // the local profile changed meanwhile: the app keeps the sealed files for that user
+      if (name && (!owner || owner === state.owner)) names.set(receipt, name);
+      if (owner && owner === state.owner && state.outbox && await enqueueOn(state.outbox, receipt)) return; // a failed enqueue (queue full) keeps it below
       if (g !== scopeGen) return; // the local profile changed meanwhile: the app keeps the sealed files for that user
       await keepPending({ receipt, owner, at: Date.now() });
     },
     /** Send an unassigned proof under the current sign-in, on the user's explicit request. The registry still checks
      * that its key is enrolled for this company and that the user is a member. */
     async assign(receipt) {
-      const ob = state.outbox;
-      if (!ob || !state.pending.some((p) => p.receipt === receipt && !p.owner)) return false;
-      if (!(await enqueueOn(ob, receipt))) return false;
+      const ob = state.outbox, owner = state.owner;
+      const row = state.pending.find((p) => p.receipt === receipt && !p.owner);
+      if (!ob || !row) return false;
+      // Bind it to this owner first, so a reload between saving and sending can never offer it to another company.
+      const bound = { receipt, owner, at: row.at };
+      set({ pending: state.pending.map((p) => (p.receipt === receipt ? { ...p, owner } : p)) });
+      try { await store?.put(bound); } catch { /* the in-memory row is bound; the outbox below is what counts */ }
+      if (!(await enqueueOn(ob, receipt))) return false; // kept under this owner; retried when the queue changes
       if (state.outbox === ob) await dropPending(receipt);
       return true;
     },
@@ -275,9 +293,10 @@ export function useRegistryUnsent() { const [r] = useRegistry(); return r.unsave
 export function registryScope(scope) { getRegistry().setScope(scope).catch(() => {}); }
 
 // Called by main.jsx after a seal passed its own check. Only the receipt line goes to the outbox.
-export function registrySealed(receipts, name) {
+export function registrySealStart() { return getRegistry().sealStart(); }
+export function registrySealed(receipts, name, start) {
   const receipt = String(receipts || '').split('\n').map((line) => line.trim()).filter(Boolean).pop();
-  if (receipt) getRegistry().sealed(receipt, name).catch(() => {}); // a seal never waits on or fails because of the registry
+  if (receipt) getRegistry().sealed(receipt, name, start || undefined).catch(() => {}); // a seal never waits on or fails because of the registry
 }
 // The "Registry acceptance" time row for a checked receipt message: this device's outbox row for one of its receipt
 // lines, matched on the stored receipt line. Only these strings reach the screen and the reports, never a row.
@@ -397,7 +416,7 @@ export function SealedOnDevice({ onSignIn }) {
     {s.enqueueError && <p className="registry-notice" role="alert">{s.enqueueError}</p>}
     {rows.length ? <>
       <p className="registry-summary">{registered} registered · {waiting} not yet registered</p>
-      <ul className="registry-rows">{rows.map((row) => <li key={row.id}><RegistryRow row={row} name={nameOf(row)} registry={r} org={s.claims?.org || ''} admin={s.claims?.role === 'admin'} outbox={s.outbox} onSignIn={onSignIn} onExport={exportProofs} /></li>)}</ul>
+      <ul className="registry-rows">{rows.map((row) => <li key={row.id}><RegistryRow row={row} name={nameOf(row)} registry={r} org={s.claims?.org || ''} signedIn={!!s.owner} admin={s.claims?.role === 'admin'} outbox={s.outbox} onSignIn={onSignIn} onExport={exportProofs} /></li>)}</ul>
     </> : <p className="field-hint">Nothing sealed on this device yet.</p>}
     <p className="visually-hidden registry-announce" role="status">{announce}</p>
     <details className="report-details registry-more" onKeyDown={closeDisclosure}><summary>More options <ChevronDown size={17} aria-hidden="true" /></summary>
@@ -408,14 +427,15 @@ export function SealedOnDevice({ onSignIn }) {
   </div></section>;
 }
 
-function RegistryRow({ row, name, registry, org, admin, outbox, onSignIn, onExport }) {
+function RegistryRow({ row, name, registry, org, signedIn, admin, outbox, onSignIn, onExport }) {
   const [chip, kind] = chipOf(row);
   const when = new Date(row.created_at).toLocaleString();
   const retry = () => outbox?.retryNow(row.id);
   let body;
   if (row.unassigned) { // never sent by itself: the user chooses the company, and the registry re-checks key and membership
     body = outbox ? <><p>Sealed while signed out, so it isn't assigned to a company yet.</p>
-      <div className="actions-row"><button type="button" className="button secondary" onClick={() => registry.assign(row.receipt)}>Assign to {org}</button></div></>
+      <div className="actions-row"><button type="button" className="button secondary" onClick={() => registry.assign(row.receipt)}>{org ? `Assign to ${org}` : 'Assign to this company'}</button></div></>
+      : signedIn ? <p>Sealed while signed out, so it isn't assigned to a company yet. It can be assigned once this device's list opens; export it to keep a copy.</p>
       : <p>Sealed while signed out, so it isn't assigned to a company yet. Sign in to the company registry to assign it, or export it.</p>;
   } else if (row.held) {
     body = <><p>This was sealed under another registry sign-in, so it won't be sent under yours. Export it, or sign in as that account to send it.</p>

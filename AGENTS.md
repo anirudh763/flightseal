@@ -31,7 +31,7 @@ The user's request and the owner's RULES.md take precedence over anything here.
 - Registry LocalStack run (optional, needs Docker): `uv run --no-project --with boto3==1.43.123 python registry/localstack/e2e.py`
   writes `docs/aws/evidence/localstack-4.12.0.json`; the REST v1 stand-in is not the HTTP API.
 - JavaScript: `node --test tests/web/verifier.test.mjs tests/web/copy.test.mjs tests/web/workbench.test.mjs tests/web/redirect.test.mjs tests/web/rawfile.test.mjs tests/web/sw-cache-index.test.mjs tests/web/manifest.test.mjs` (142 tests).
-- Registry outbox (browser client): `node --test newweb/tests/outbox.test.mjs newweb/tests/registry-client.test.mjs` (49 tests), `node --test newweb/tests/registry-session.test.mjs` (9 tests: the console's registry session store, cross-tab messages, owner-tagged and unassigned pending proofs, the Verify time row and the panels' error boundary, loaded through Vite in Node)
+- Registry outbox (browser client): `node --test newweb/tests/outbox.test.mjs newweb/tests/registry-client.test.mjs` (49 tests), `node --test newweb/tests/registry-session.test.mjs` (12 tests: the console's registry session store, cross-tab messages, owner-tagged and unassigned pending proofs, the Verify time row and the panels' error boundary, loaded through Vite in Node)
   and `node --test newweb/tests/outbox-browser.mjs` (8 checks in Playwright Chromium against the DEV ONLY
   `registry/devserver/server.py`: it starts one on a loopback port itself, or uses `REGISTRY_DEV_URL` as CI does).
 - Registry wiring (console, `VITE_REGISTRY_URL`): after the console build, `node newweb/tests/registry-wiring.mjs` (28 checks, including reload, logout, frozen-tab and other-tab lost-work cases:

@@ -94,6 +94,16 @@ deferred:
 
 ## Review Triage Log
 
+### 2026-11-18 — Independent review of PR #37 (head 9c46754): fix first
+- `[major]` `patch` Rescued work cleared when the download only started: the control now asks "Did the download finish?" ([Yes, saved] / [Download again]) and marks saved only on Yes; Discard confirms "This deletes the only copy of this work." Browser check cancels the download (fails on 9c46754).
+- `[medium]` `patch` Zip failure silent on #/login: one shared control shows the error and per-file buttons wherever unsaved work blocks the next step.
+- `[medium]` `patch` Queue-full pending proof never retried: flushOwned runs on every outbox change (no test: needs a registry that acks).
+- `[medium]` `patch` Assign cut short by reload could be assigned again elsewhere: assign binds the owner before queueing; refresh drops pending rows the outbox holds.
+- `[medium]` `patch` Owner read at seal finish: captured at seal start (registrySealStart) for Seal & send and large files.
+- `[low]` `patch` Copy: signed in but list failed; empty org claim; owner regex now allows "/" in the org.
+- `[low]` `patch` Reload warns while a seal is running.
+- `[low]` `defer` 5, 6, the rest of 9, and 10: recorded in deferred-work.md.
+
 ### 2026-11-17 — Review pass
 - verdicts: 12 findings — high 1, medium 5, low 3, false 3, maybe-false 0
 - findings:

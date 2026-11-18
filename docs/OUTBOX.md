@@ -41,6 +41,9 @@ What the console does with the flag on:
   (`hashwing-pending-v1-<sha256(scope) hex>`, scope `profile:<local profile id>` or the shared `guest`), at most 200 rows
   of `receipt`, `owner` and `at` only: never a file name, media, key or token. Sign-out and logout never delete them, and
   another local profile never sees them. A row leaves the store only once the owner's outbox holds it.
+- A proof's owner is the registry sign-in when its seal began, so a sign-in during a long seal never adopts it.
+  "Assign" binds the proof to the current owner before it is queued, and a pending proof the owner's outbox already
+  holds is dropped from the pending list; one kept because the owner's queue was full is retried on every queue change.
 - An unassigned proof is never sent by itself, whoever signs in. Its row says it was sealed while signed out and offers
   "Assign to <org>" while signed in; the registry still checks that its key is enrolled for that company and that the
   user is a member (a refusal shows as Needs attention, for example `key_not_enrolled`). A proof tagged with an owner is
@@ -50,9 +53,10 @@ What the console does with the flag on:
   "Export pending proofs" at once.
 - Before anything unsaved is lost, the app asks first. Reloading or closing the tab warns while a Seal & send result,
   a large-file result, a workbench output or a memory-only pending proof is not saved yet. Logging out, switching
-  account, signing in or starting the demo waits until "Download unsaved work" (one zip) has saved them. A logout this
+  account, signing in or starting the demo waits until "Download unsaved work" (one zip) has saved them and the user
+  answers "Yes, saved" to "Did the download finish?" (a cancelled or blocked download changes nothing). A logout this
   tab did not choose (the same profile logged out in another tab, or the workspace server signed out) keeps that work
-  in tab memory and offers it as one download, with "Discard"; this tab is signed out of the registry at once. After a
+  in tab memory and offers it as one download; "Discard" first says it deletes the only copy; this tab is signed out of the registry at once. After a
   reload, a file that was chosen but not sealed is no longer selected, and the page says to choose it again. Rows in
   the outbox database stay there, closed, for that owner's next sign-in. A new owner neither sees the previous owner's
   file names nor hears them announced.
@@ -148,7 +152,7 @@ idempotency window. A malformed `token`, or a page without Web Crypto (not a sec
 
 ```sh
 node --test newweb/tests/outbox.test.mjs newweb/tests/registry-client.test.mjs   # 49 tests, stub fetch + memory store
-node --test newweb/tests/registry-session.test.mjs                                # 9 tests, the console's session store in Node
+node --test newweb/tests/registry-session.test.mjs                                # 12 tests, the console's session store in Node
 node --test newweb/tests/outbox-browser.mjs                                      # 8 tests, Chromium + dev server
 node newweb/tests/registry-wiring.mjs                                            # 28 checks, flag-off scan + flag-on console
 ```
