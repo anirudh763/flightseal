@@ -218,7 +218,7 @@ try {
     await waitForResult(page, 'Intact');
     assert.match(await page.locator('.stats-grid').textContent(), /Time reversals\s*1/);
     assert.equal(await page.locator('.seal-outputs button').count(), 3);
-    const logFile = await downloadText(page, 'Download sealed log');
+    const logFile = await downloadText(page, 'Download sealed file');
     const receiptFile = await downloadText(page, 'Download receipts');
     const publicKey = await downloadText(page, 'Download public key');
     assert.ok(logFile.contents.startsWith('FLTSEAL1'));
@@ -257,7 +257,7 @@ try {
     await waitForResult(page, 'Intact');
     assert.match(await page.locator('.result-stat').textContent(), /5/);
     assert.match(await page.locator('.stats-grid').textContent(), /5 covered · 0 uncovered/);
-    const logs = await downloadText(page, 'Download sealed log');
+    const logs = await downloadText(page, 'Download sealed file');
     const receipts = await downloadText(page, 'Download receipts');
     const key = await downloadText(page, 'Download public key');
     assert.equal(logs.filename, 'sealed.fseal');

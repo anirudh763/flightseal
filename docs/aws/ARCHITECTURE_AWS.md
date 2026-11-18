@@ -56,6 +56,8 @@ The `org_id` and `role` custom attributes cannot be written by the app client; o
 - `cognito` (the only value the CDK stack sets): reads `requestContext.authorizer.jwt.claims`, which the HTTP API
   JWT authorizer has already verified. The client sends the **ID token**: on the Lite plan the custom attributes are
   in the ID token, not the access token.
+  The stack also sets `COGNITO_ISSUER` (`https://cognito-idp.<region>.amazonaws.com/<user pool id>`) and
+  `COGNITO_CLIENT_ID` (the app client) from its own user pool, in both stages.
 - `dev-hs256`: development and the LocalStack run only. HS256 bearer tokens checked against `DEV_TOKEN_SECRET`
   (at least 32 bytes) with an `exp` check. The stack never sets it or any `DEV_` variable; a synth test enforces this.
 - Unset or anything else: every request is 401, and the function logs a configuration error.
@@ -115,6 +117,9 @@ different payload), an existing REG returns the original ack (or 410 if deleted)
   current epoch with `GET /v1/epoch`, so a client can drop a cached envelope before it is refused.
 - After a deletion, an identical retry with the original idempotency key still returns the original ack with
   `disposition: "deleted"` until the idempotency record expires (at most `DEDUPE_SECONDS`).
+- A restore keeps deletions made after the backup: a registration the backup never had comes back as a deleted stub
+  holding only its id and state. `GET /v1/registrations` lists it with just `registration_id` and
+  `disposition: "deleted"`, and any retry, with a new or the original idempotency key, gets 410 `registration_deleted`.
 
 ### Shares
 

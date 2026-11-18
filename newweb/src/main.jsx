@@ -1,6 +1,6 @@
 import React, { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { createRoot } from 'react-dom/client';
-import { Activity, ArrowRight, Building2, Check, Copy, Download, Gauge, ChevronDown, CircleHelp, FileCheck2, FileLock2, FileUp, KeyRound, Mail, FlaskConical, List, LockKeyhole, LogIn, MapPin, Menu, Pause, Play, ShieldCheck, Stamp, UserRound, Video } from 'lucide-react';
+import { Activity, ArrowRight, Building2, Check, Copy, Download, Gauge, ChevronDown, CircleHelp, FileCheck2, FileLock2, KeyRound, Mail, FlaskConical, List, MapPin, Menu, ShieldCheck, Stamp, UserRound, Video } from 'lucide-react';
 import { hashFile, importFile, IMPORT_MAX_BYTES, VERIFY_MAX_BYTES, verifyFile, sealFile, SEAL_MAX_BYTES, recoverTemporaryOutputs } from '../../docs/wasm/client.mjs';
 import { compareFiles, encodeManifest, MANIFEST_LIMITS, MANIFEST_STATUS, manifestHandoverText, manifestRecordsBlob, newSalt, verifySealedManifest } from '../../docs/manifest.mjs';
 import { WEAK_KEY_MESSAGE, blobSource, checkReceipts, decodeReceipts, parseHex, parseReceipts, readRecord, scanLog, summarize, weakPublicKey } from '../../docs/verifier.js';
@@ -22,11 +22,12 @@ import { convertTelemetryFile, inspectCsvFile } from './telemetry-import.mjs';
 import { fileToRecords, handoverText, parseHandover, recordsToFile, RAW_MAX_BYTES } from '../../docs/rawfile.js';
 import { generateEd25519SigningKey, validateEd25519PrivateKey } from './signing-keys.mjs';
 import { createStoreZip } from './zip-store.mjs';
-import { deliverEarlyAccessRequest } from './early-access.mjs';
+import { FrontDoor, SkipLink } from './front-door.jsx';
+import { FileTotals, Handoff, SigningLine, exactBytes } from './seal-send.jsx';
 import { createEncryptedProfileBackup, inspectEncryptedProfileBackup, commitBackupRestore, previewBackupRestore } from './profile-backup.mjs';
 import { createSyncProvider } from './sync-provider.mjs';
 import { PINS_CHANGED, SOURCES, addTrustedCompany, fingerprintHex, formatFingerprint, listTrustedHistory, listTrustedKeys, markCompromised, pinTrustedKey, removeTrustedKey, trustForKey } from './trusted-keys.mjs';
-import { RegistryBoundary, RegistryPanel, SealedOnDevice, ShareRecordPanel, getRegistry, registryLogout, registrySealed, useRegistryTimeField } from './registry-ui.jsx';
+import { RegistryBarLink, RegistryBoundary, RegistryPanel, RegistryShareNote, RegistrySigningLine, SealedOnDevice, ShareRecordPanel, getRegistry, registryLogout, registryScope, registrySealStart, registrySealed, useRegistryTimeField, useRegistryUnsent } from './registry-ui.jsx';
 import { BYTES_DIFFER, TRUST_KIND, composeNote, landingLine, manifestReport, parseLandingLine, parseNote, parseSealedLine, timeFields, toIsoFromLocal, trustLine } from './recipient-trust.mjs';
 
 const syncProvider = createSyncProvider({ supabaseUrl: import.meta.env.VITE_SUPABASE_URL, supabaseAnonKey: import.meta.env.VITE_SUPABASE_ANON_KEY });
@@ -38,9 +39,11 @@ function closeDisclosure(event) {
   event.preventDefault(); event.stopPropagation();
   event.currentTarget.open = false; event.currentTarget.querySelector('summary')?.focus();
 }
-const PRIMARY_NAV = [['protect', 'Seal & send', FileLock2], ['verify', 'Verify', ShieldCheck], ['records', 'Records', List], ['receipts', 'Receipts', Stamp], ['help', 'Trust', CircleHelp]];
-const MORE_NAV = [['sandbox', 'Samples', FlaskConical], ['video', 'Video', Video], ['benchmarks', 'Benchmarks', Gauge], ['system', 'System', Activity]];
+// Jobs joins between Verify and Trust when its page lands (plan packet 6).
+const PRIMARY_NAV = [['protect', 'Seal & send', FileLock2], ['verify', 'Verify', ShieldCheck], ['help', 'Trust', CircleHelp]];
+const MORE_NAV = [['records', 'Records', List], ['receipts', 'Receipts', Stamp], ['sandbox', 'Samples', FlaskConical], ['video', 'Video', Video], ['benchmarks', 'Benchmarks', Gauge], ['system', 'System', Activity]];
 const NAV = [...PRIMARY_NAV, ...MORE_NAV];
+const WORKBENCH_SCREENS = new Set(['verify', ...MORE_NAV.map(([key]) => key)]);
 const CANONICAL_NAV = [['overview','Overview',Gauge],['workbench','Workbench',FlaskConical],['reports','Reports',List],['settings','Settings',Activity]];
 const asBig = (value) => typeof value === 'bigint' ? value : BigInt(value ?? 0);
 const csvMappingSummary = (mapping) => Object.entries(mapping || {}).filter(([key, value]) => key.endsWith('Column') && value).map(([key, value]) => {
@@ -124,6 +127,7 @@ function App() {
   const [busy, setBusy] = useState('');
   const [error, setError] = useState('');
   const [logFile, setLogFile] = useState(null);
+  const [reloadedWithFiles] = useState(() => { try { return sessionStorage.getItem('hashwing-files-chosen') === '1'; } catch { return false; } });
   const [receiptText, setReceiptText] = useState('');
   const [receiptLoading, setReceiptLoading] = useState(false);
   const [receiptSelected, setReceiptSelected] = useState(false);
@@ -150,6 +154,17 @@ function App() {
   const [protectResult, setProtectResult] = useState(null);
   const [restored, setRestored] = useState(null);
   const [protectLanding, setProtectLanding] = useState(''); // datetime-local value; goes in the handover as an unsigned line
+  const [jobRef, setJobRef] = useState(''); // a local label only: never signed, never in the receipt message, never sent to the registry
+  const [protectStep, setProtectStep] = useState(0); // 1-4 while a small file is being sealed (PROTECT_STEPS)
+  const [carryToLarge, setCarryToLarge] = useState(null); // { file }: a too-large small-file pick handed to Large files
+  const [protectError, setProtectError] = useState(''); // shown under the file field, which names it through aria-describedby
+  const [pastedManifestReceipt, setPastedManifestReceipt] = useState(null); // { text }: a list's receipt message pasted on Seal & send
+  const pasteFocusRef = useRef('');
+  const [manifestOutput, setManifestOutput] = useState(null); // ManifestSeal's result: kept here so it survives a route trip, like protectSealed
+  const [manifestSealed, setManifestSealed] = useState(false); // ManifestSeal has a result, so its handoff replaces the step panel
+  const protectRunRef = useRef(0);
+  const handoffRef = useRef(null);
+  const sealStartFocusRef = useRef(false);
   const [protectTimes, setProtectTimes] = useState(null); // { for: result, sealedAt, landing } parsed from the pasted message
   const [copyCompare, setCopyCompare] = useState(null); // { for: result, name, bytes, sha256, expected, matches }
   const [keyTrust, setKeyTrust] = useState(null); // { for: result, status, entry? }
@@ -158,6 +173,8 @@ function App() {
   // shows only while the link is open. Never stored or logged.
   const shareToken = __REGISTRY_URL__ && route.screen === 'verify' ? route.params.get('share') : null;
   useEffect(() => { if (__REGISTRY_URL__) getRegistry(); }, []); // resume this tab's registry sign-in, if any
+  // Unsent proofs are saved per local profile (guests share one scope), so a logout never deletes them and another profile never sees them.
+  useEffect(() => { if (__REGISTRY_URL__) registryScope(activeSession ? (activeSession.kind === 'account' ? `profile:${activeSession.userId}` : 'guest') : null); }, [activeSession?.kind, activeSession?.userId]);
   const [copyStatus, setCopyStatus] = useState('');
   const [sealSourceOriginal, setSealSourceOriginal] = useState(null);
   const [csvDraft, setCsvDraft] = useState(null);
@@ -165,6 +182,12 @@ function App() {
   const [sealInterval, setSealInterval] = useState(1000);
   const [sealOutput, setSealOutput] = useState(null);
   const [sealOutputAcknowledged, setSealOutputAcknowledged] = useState(false);
+  const [manifestUnsaved, setManifestUnsaved] = useState(null); // { files, markSaved } from ManifestSeal while its result is not saved
+  const [rescue, setRescue] = useState(null); // { reason, files }: unsaved work kept after a logout this tab did not choose
+  const [unsavedAsk, setUnsavedAsk] = useState(null); // the parts in a download the user has not yet confirmed finished
+  const [unsavedError, setUnsavedError] = useState('');
+  const [discardAsk, setDiscardAsk] = useState(false);
+  const registryUnsent = __REGISTRY_URL__ ? useRegistryUnsent() : 0; // the flag is a build-time constant, so the hook order never changes
   const [videoInfo, setVideoInfo] = useState(null);
   const [videoUrl, setVideoUrl] = useState('');
   const [videoOffset, setVideoOffset] = useState('0');
@@ -210,6 +233,90 @@ function App() {
   const workspaceScreenRef = useRef('sandbox');
   const authAttemptRef = useRef({ mode: null, email: null });
   const updateSafeRef = useRef(true);
+  // Everything in this tab that a reload, logout or account switch would lose. Each part can mark itself saved.
+  const protectUnsaved = !!protectSealed && !(protectSealed.saved?.receipt && protectSealed.saved?.file);
+  const hasUnsavedWork = (!!sealOutput && !sealOutputAcknowledged) || protectUnsaved || !!manifestUnsaved || registryUnsent > 0 || !!rescue;
+  const unsavedParts = () => {
+    const bytes = (t) => new TextEncoder().encode(t);
+    const safeName = (name) => String(name || 'sealed').replace(/[^A-Za-z0-9._-]+/g, '_').slice(0, 100) || 'sealed';
+    const unsent = __REGISTRY_URL__ && registryUnsent ? getRegistry().unsentExport() : null;
+    return [
+      ...(sealOutput && !sealOutputAcknowledged ? [((so) => ({ files: [{ name: 'sealed.fseal', blob: new Blob([so.log]) }, { name: 'sealed.receipts', bytes: bytes(so.receipts) }, { name: 'sealed-public-key.txt', bytes: bytes(`${so.publicKey}\n`) }], markSaved: () => { if (sealOutputRef.current === so) setSealOutputAcknowledged(true); } }))(sealOutput)] : []),
+      ...(protectUnsaved ? [((log) => ({ files: [{ name: safeName(log.name), blob: log }, { name: `${safeName(protectSealed.name)}.receipt.txt`, bytes: bytes(protectSealed.handover) }], markSaved: () => setProtectSealed((current) => (current?.log === log ? { ...current, saved: { receipt: true, file: true } } : current)) }))(protectSealed.log)] : []),
+      ...(manifestUnsaved ? [manifestUnsaved] : []),
+      ...(unsent ? [{ files: [{ name: 'hashwing-pending-proofs.json', bytes: bytes(unsent.text) }], markSaved: unsent.markSaved }] : []),
+      ...(rescue ? [((kept) => ({ files: kept.files, markSaved: () => setRescue((current) => (current === kept ? null : current)) }))(rescue)] : []),
+    ];
+  };
+  const sealOutputRef = useRef(sealOutput);
+  sealOutputRef.current = sealOutput;
+  // The same unique names in the zip and on the per-file buttons, grouped by part so a part is saved only when all of its files are.
+  const listUnsaved = (parts) => {
+    const seen = new Set();
+    return parts.map((part) => ({ part, files: part.files.map((file) => { let name = file.name; for (let n = 2; seen.has(name); n++) name = `${n}-${file.name}`; seen.add(name); return { ...file, name }; }) }));
+  };
+  const unsavedRef = useRef(unsavedParts);
+  unsavedRef.current = unsavedParts;
+  const protectLogRef = useRef(null);
+  protectLogRef.current = protectSealed?.log;
+  const markProtectSaved = (log, part) => setProtectSealed((current) => (current?.log === log ? { ...current, saved: { ...current.saved, [part]: true } } : current)); // only this exact result
+  const downloadUnsaved = async () => {
+    const listed = listUnsaved(unsavedRef.current());
+    if (!listed.length) return;
+    const files = listed.flatMap((p) => p.files);
+    try {
+      const zip = await createStoreZip(files, { maxBytes: 1024 * 1024 * 1024 }); // ponytail: one in-memory zip; past 1 GiB the per-file buttons below still work
+      const url = URL.createObjectURL(zip); const anchor = document.createElement('a'); anchor.href = url; anchor.download = 'hashwing-unsaved-work.zip'; document.body.append(anchor); anchor.click(); anchor.remove(); setTimeout(() => URL.revokeObjectURL(url), 60000);
+      setUnsavedError(''); setUnsavedAsk({ listed, done: new Set(files.map((f) => f.name)) }); // a started download can still be cancelled or blocked: keep everything until the user says it finished
+    } catch (cause) {
+      setUnsavedError(`Couldn't make one download (${cause?.message || 'unknown error'}). Your work is still here, so download each file on its own.`);
+      setUnsavedAsk({ listed, done: new Set() });
+    }
+  };
+  const downloadOneUnsaved = (file) => {
+    download(file.name, file.blob || file.bytes, 'application/octet-stream');
+    setUnsavedAsk((ask) => ask && { ...ask, done: new Set([...ask.done, file.name]) });
+  };
+  const confirmUnsavedSaved = () => { // only parts whose every file was downloaded
+    for (const p of unsavedAsk?.listed || []) if (p.files.every((f) => unsavedAsk.done.has(f.name))) p.part.markSaved();
+    setUnsavedAsk(null); setUnsavedError('');
+  };
+  // One control wherever unsaved work blocks the next step: download, then confirm it finished; per-file buttons if the zip fails.
+  const askFiles = unsavedAsk ? unsavedAsk.listed.flatMap((p) => p.files) : [];
+  const askDone = unsavedAsk ? askFiles.filter((f) => unsavedAsk.done.has(f.name)).length : 0;
+  const askComplete = unsavedAsk ? unsavedAsk.listed.some((p) => p.files.every((f) => unsavedAsk.done.has(f.name))) : false;
+  const unsavedControl = <div className="unsaved-download">
+    {unsavedError && <><p className="receipt-error" role="alert">{unsavedError}</p>
+      <div className="actions-row">{askFiles.map((file) => <button key={file.name} type="button" className="button secondary" onClick={() => downloadOneUnsaved(file)}>{file.name}</button>)}</div></>}
+    {askDone > 0 && askDone === askFiles.length ? <><p role="status">Did the download finish?</p>
+      <div className="actions-row"><button type="button" className="button primary" onClick={confirmUnsavedSaved}>Yes, saved</button><button type="button" className="button secondary" onClick={downloadUnsaved}>Download again</button></div></>
+      : askDone > 0 ? <><p role="status">{askDone} of {askFiles.length} files downloaded. Download the rest, then confirm.</p>
+        {askComplete && <div className="actions-row"><button type="button" className="button secondary" onClick={confirmUnsavedSaved}>These finished</button></div>}</>
+      : !unsavedError && <div className="actions-row"><button type="button" className="button primary" onClick={downloadUnsaved}><Download aria-hidden="true" size={16} />Download unsaved work</button></div>}
+  </div>;
+  const protectDone = protectMode === 'embedded' ? !!protectSealed : manifestSealed;
+  useEffect(() => { // old receipts say "open #/app/protect and paste this whole message"
+    if (screen !== 'protect' || busy) return undefined; // a seal in progress is never cancelled by a paste: ignore it
+    const onPaste = (event) => {
+      if (event.target?.closest?.('input, textarea, select, [contenteditable]')) return;
+      const text = event.clipboardData?.getData('text/plain') || '';
+      if (!text.includes('fseal-receipt v1')) return;
+      event.preventDefault();
+      const list = /^\s*HashWing manifest receipt/m.test(text);
+      if (list) setPastedManifestReceipt({ text }); else { invalidateCheck(); setCheckText(text); }
+      pasteFocusRef.current = list ? 'manifest-check-file' : 'check-file'; // next step: choose the sealed file
+      navigate('verify');
+    };
+    document.addEventListener('paste', onPaste);
+    return () => document.removeEventListener('paste', onPaste);
+  }, [screen, busy]); // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => { // after the route's own heading focus (one frame later), go on to the next step
+    if (screen !== 'verify' || !pasteFocusRef.current) return;
+    const id = pasteFocusRef.current; pasteFocusRef.current = '';
+    requestAnimationFrame(() => requestAnimationFrame(() => document.getElementById(id)?.focus()));
+  }, [screen]);
+  useEffect(() => { if (protectSealed?.log) handoffRef.current?.focus(); }, [protectSealed?.log]); // seal finished: the handoff heading
+  useEffect(() => { if (!protectDone && sealStartFocusRef.current) { sealStartFocusRef.current = false; document.getElementById('seal-what-title')?.focus(); } }, [protectDone]);
   updateSafeRef.current = !busy && !manifestSealActive && !manifestCheckActive && !(sealOutput && !sealOutputAcknowledged);
 
   const navigate = useCallback((next, options = {}) => {
@@ -257,11 +364,16 @@ function App() {
   useEffect(() => { if (route.kind === 'workspace') workspaceScreenRef.current = route.screen; }, [route.kind, route.screen]);
 
   useEffect(() => {
-    if (!sealOutput || sealOutputAcknowledged) return undefined;
+    try { if (protectFile || checkFile || logFile) sessionStorage.setItem('hashwing-files-chosen', '1'); else sessionStorage.removeItem('hashwing-files-chosen'); } catch { /* nothing to tell after a reload */ }
+  }, [protectFile, checkFile, logFile]);
+  useEffect(() => { if (reloadedWithFiles) setOperationStatus('This tab was reloaded, so the files you had chosen are no longer selected. Choose them again.'); }, [reloadedWithFiles]);
+
+  useEffect(() => {
+    if (!hasUnsavedWork && !busy && !manifestSealActive) return undefined; // a seal still running is lost on reload too
     const warnBeforeUnload = (event) => { event.preventDefault(); event.returnValue = ''; };
     addEventListener('beforeunload', warnBeforeUnload);
     return () => removeEventListener('beforeunload', warnBeforeUnload);
-  }, [sealOutput, sealOutputAcknowledged]);
+  }, [hasUnsavedWork, busy, manifestSealActive]);
 
   useEffect(() => {
     const input = workbenchFileRef.current;
@@ -702,7 +814,7 @@ function App() {
     const extension = file.name.toLowerCase().split('.').pop();
     if (forSeal && !['tsv', 'txt', 'csv', 'json', 'tlog'].includes(extension)) { setError('Choose a timestamped TSV/TXT, CSV, JSON or MAVLink Tlog source to seal.'); return; }
     if (!['fseal', 'ulg', 'tsv', 'txt', 'csv', 'json', 'tlog'].includes(extension)) {
-      setError('Unsupported source format. Choose a .fseal log, a PX4 .ulg capture, a timestamped TSV/TXT file, or CSV, JSON or MAVLink .tlog telemetry. To seal any other log file, use Seal & send.');
+      setError('Unsupported source format. Choose a .fseal log, a PX4 .ulg capture, a timestamped TSV/TXT file, or CSV, JSON or MAVLink .tlog telemetry. To seal any other file, use Seal & send.');
       return;
     }
     setCsvDraft(null);
@@ -754,7 +866,7 @@ function App() {
       return;
     }
     if (extension !== 'ulg') {
-      setError('Unsupported source format. Choose a .fseal log, a PX4 .ulg capture, a timestamped TSV/TXT file, or CSV, JSON or MAVLink .tlog telemetry. To seal any other log file, use Seal & send.');
+      setError('Unsupported source format. Choose a .fseal log, a PX4 .ulg capture, a timestamped TSV/TXT file, or CSV, JSON or MAVLink .tlog telemetry. To seal any other file, use Seal & send.');
       return;
     }
     await importUlog(file);
@@ -964,40 +1076,56 @@ function App() {
     } finally { if (op === runRef.current) setBusy(''); }
   };
 
-  // Seal & send: seal the exact bytes of any log file, hand one receipt to a witness, later check and give the original back.
+  // Seal & send: seal the exact bytes of any file, hand one receipt to a witness, later check and give the original back.
   const runProtectSeal = async () => {
-    invalidateCheck(); setProtectSealed(null); setProtectResult(null); setRestored(null); setCopyStatus(''); setError('');
-    if (!protectFile) { setError('Choose the flight log file you want to seal.'); return; }
+    invalidateCheck(); setProtectSealed(null); setProtectResult(null); setRestored(null); setCopyStatus(''); setError(''); setProtectError('');
+    const fail = (message) => { setProtectError(message); requestAnimationFrame(() => document.getElementById('protect-file')?.focus()); };
+    if (!protectFile) { fail('Choose the file you want to seal.'); return; }
+    if (protectFile.size > RAW_MAX_BYTES) { fail(TOO_LARGE_FOR_SMALL); return; }
     let op = ++runRef.current;
+    const run = ++protectRunRef.current;
     const controller = new AbortController(); controllerRef.current = controller;
-    setBusy('Sealing your file on this device…');
+    const sealStart = __REGISTRY_URL__ ? registrySealStart() : null; // the registry owner when sealing began, not when it ends
+    setBusy('Sealing your file on this device…'); setProtectStep(1);
     try {
       const packed = await fileToRecords(protectFile);
       if (op !== runRef.current) return;
+      setProtectStep(2);
       const sealed = await sealFile(packed.records, { every: 1000000, signal: controller.signal, privateKeyPem: signingKey?.privateKeyPem || '' });
       if (op !== runRef.current) return;
       const log = new File([sealed.log], `${packed.name}.fseal`, { type: 'application/octet-stream' });
+      setProtectStep(3);
       const verified = await runVerify(log, sealed.receipts, sealed.publicKey, `${packed.name} (just sealed)`);
       if (!verified) return;
       op = runRef.current; // runVerify started its own operation; Cancel or a newer action changes it
-      setBusy('Rebuilding the original from the sealed copy to double-check it…');
+      setBusy('Rebuilding the original from the sealed copy to double-check it…'); setProtectStep(4);
       const back = await recordsToFile(log);
       if (op !== runRef.current) return;
       if (verified.overallVerdict !== 'intact' || !back?.matches) { setResult(null); throw new Error('The sealed copy did not check out, so it was discarded. Choose the file again and retry.'); }
       const landing = toIsoFromLocal(protectLanding);
-      const lines = handoverText({ ...packed, receipts: sealed.receipts, publicKey: sealed.publicKey, sealedAt: new Date().toISOString(), checkUrl: `${location.origin}${location.pathname}#/app/protect` }).split('\n');
+      const lines = handoverText({ ...packed, receipts: sealed.receipts, publicKey: sealed.publicKey, sealedAt: new Date().toISOString(), checkUrl: `${location.origin}${location.pathname}#/app/verify` }).split('\n');
       if (landing) lines.splice(2, 0, landingLine(landing)); // right after "Sealed:"; embedded mode has no signed slot for it
       const fingerprint = await fingerprintHex(sealed.publicKey);
       if (op !== runRef.current) return;
       setProtectTimes(null);
       setProtectResult(verified);
-      setProtectSealed({ name: packed.name, bytes: packed.bytes, sha256: packed.sha256, log, savedKey: !!signingKey?.privateKeyPem, fingerprint, handover: lines.join('\n') }); setProtectLanding('');
-      if (__REGISTRY_URL__) registrySealed(sealed.receipts, packed.name);
-      setOperationStatus('Sealed and checked on this device; nothing was uploaded. Now send the receipt message to someone else.');
+      setProtectSealed({ name: packed.name, bytes: packed.bytes, sha256: packed.sha256, log, savedKey: !!signingKey?.privateKeyPem, fingerprint, handover: lines.join('\n'), jobRef: jobRef.trim() }); setProtectLanding('');
+      if (__REGISTRY_URL__) registrySealed(sealed.receipts, packed.name, sealStart);
     } catch (cause) {
       if (op !== runRef.current || cause?.name === 'AbortError') return;
-      setBusy(''); setError(cause?.message || 'Could not seal this file. Choose it again and retry.');
-    } finally { if (op === runRef.current) setBusy(''); }
+      setBusy(''); fail(cause?.message || 'Could not seal this file. Choose it again and retry.');
+    } finally { if (op === runRef.current) setBusy(''); if (run === protectRunRef.current) setProtectStep(0); }
+  };
+  const cancelProtectSeal = () => {
+    runRef.current++; protectRunRef.current++;
+    controllerRef.current?.abort();
+    setBusy(''); setProtectStep(0); setOperationStatus('Sealing cancelled. Your files are still chosen.');
+    requestAnimationFrame(() => document.getElementById('protect-seal')?.focus());
+  };
+  // "Seal more files": the result and the selection go; the step panel comes back with its heading focused.
+  const sealMoreProtect = () => {
+    invalidateCheck(); setProtectSealed(null); setProtectFile(null); setProtectResult(null); setRestored(null); setCopyStatus(''); setProtectError(''); setProtectLanding(''); setJobRef('');
+    sealStartFocusRef.current = true;
   };
 
   const runProtectCheck = async () => {
@@ -1021,8 +1149,9 @@ function App() {
   };
 
   const copyHandover = async () => {
-    try { await navigator.clipboard.writeText(protectSealed.handover); setCopyStatus('Copied. Paste it into an email or message to the person who will keep it.'); }
-    catch { setCopyStatus('This browser blocked copying. Select the text in the box and copy it, or download the receipt.'); }
+    const { log, handover } = protectSealed; // the copy can finish after this result was discarded and another sealed
+    try { await navigator.clipboard.writeText(handover); markProtectSaved(log, 'receipt'); if (protectLogRef.current === log) setCopyStatus('Copied. Paste it into an email or message to the person who will keep it.'); }
+    catch { if (protectLogRef.current === log) setCopyStatus('This browser blocked copying. Select the text in the box and copy it, or download the receipt.'); }
   };
 
   // SHA-256 of a copy the recipient already has, against the digest inside the verified sealed file.
@@ -1057,7 +1186,7 @@ function App() {
     setError('');
   };
   const beginDemo = () => {
-    if (sealOutput && !sealOutputAcknowledged) { setProfileMenuMessage('Download the sealed files or acknowledge them in the workspace before switching sessions.'); return false; }
+    if (hasUnsavedWork) { setProfileMenuMessage('Download your unsaved work before switching sessions.'); return false; }
     if (activeSession) clearSensitiveWorkspace();
     let session;
     try { session = setLocalSession({ kind: 'guest' }); }
@@ -1085,15 +1214,25 @@ function App() {
     setReceiptInputError(''); setKeyText(''); setSelectedRecord(0); setRecordDetail(null); setRecordError(''); setPageRows([]); setFirstRecord(null);
     setTelemetry([]); setSelectedTelemetryIndex(null); setHasImportedOutput(false); setPage(0); setSealFileInput(null); setSealSourceMetadata(null); setSealSourceOriginal(null); setSigningKey(null);
     setCsvDraft(null); setShareDialogOpen(false); setFeedbackDialogOpen(false); setInstallDialogOpen(false);
+    setUnsavedAsk(null); setUnsavedError(''); setDiscardAsk(false);
     setSealOutput(null); setSealOutputAcknowledged(false); setCurrentSample(null); setDemoLabel(''); setError(''); setOperationStatus('');
     setVideoOffset('0'); clearVideo();
+    setManifestUnsaved(null); setManifestOutput(null); setProtectFile(null); setCarryToLarge(null); setProtectSealed(null); setProtectResult(null); setRestored(null); setProtectLanding(''); setProtectTimes(null); setCopyCompare(null); setCopyStatus(''); setCheckFile(null); setCheckText(''); setJobRef(''); setProtectStep(0); setProtectError(''); setManifestSealed(false); protectRunRef.current++;
     receiptInvalidRef.current = false; receiptInvalidMessageRef.current = ''; sealPickerRef.current = false;
     if (receiptInputRef.current) receiptInputRef.current.value = '';
     if (workbenchFileRef.current) workbenchFileRef.current.value = '';
     document.querySelectorAll('#root input[type="file"]').forEach((input) => { input.value = ''; });
   };
+  // A logout this tab did not choose (another tab, or the workspace server) keeps the unsaved files in memory for one download.
+  const keepUnsavedThenClear = (reason) => {
+    const parts = unsavedRef.current();
+    const files = parts.flatMap((part) => part.files);
+    for (const part of parts) part.markSaved(); // it lives in the rescue now
+    clearSensitiveWorkspace();
+    if (files.length) setRescue({ reason, files });
+  };
   const logout = () => {
-    if (sealOutput && !sealOutputAcknowledged) { setProfileMenuMessage('Download the sealed files or acknowledge them in the workspace before logging out.'); return; }
+    if (hasUnsavedWork) { setProfileMenuMessage('Download your unsaved work before logging out.'); return; }
     try { announceLocalLogout({ userId: activeSession?.userId || null }); }
     catch { clearLocalSession(); }
     clearSensitiveWorkspace();
@@ -1111,10 +1250,9 @@ function App() {
       localProfileFor({ kind: 'account', userId: message?.userId })?.email === authAttemptRef.current.email;
     if (!sameActiveProfile && !removedProfile && !storageWasCleared && !pendingLoginMatches) return;
     authEpochRef.current++;
-    if (__REGISTRY_URL__) registryLogout();
-    if (!activeSession) return;
+    if (!activeSession) { keepUnsavedThenClear('other-tab'); return; }
     clearLocalSession();
-    clearSensitiveWorkspace();
+    keepUnsavedThenClear('other-tab'); // collects this tab's unsent proofs before clearSensitiveWorkspace signs the registry out
     setActiveSession(null); setLocalProfile(null); setSavedContext(null); setSavedContextError(''); setProfileMenuMessage('');
     legacyGuestInitializedRef.current = false; initialLegacyLoadedRef.current = false;
     history.replaceState(null, '', `${location.pathname}${location.search}#/`);
@@ -1124,7 +1262,7 @@ function App() {
 
   const finishAuthentication = async (profile, requestedRoute, importGuest, submittedEpoch) => {
     if (submittedEpoch !== authEpochRef.current) return { error: 'This sign-in was canceled because the local session changed. Try again.' };
-    if (sealOutput && !sealOutputAcknowledged) return { error: 'Download the sealed files or acknowledge them in the workspace before switching accounts.' };
+    if (hasUnsavedWork) return { error: 'This tab has work that is not saved yet. Download it first, then sign in.' };
     const guestContext = activeSession?.kind === 'guest' && importGuest && currentSample
       ? { screen: workspaceScreenRef.current, sample: currentSample, record: selectedRecord } : null;
     try {
@@ -1178,7 +1316,7 @@ function App() {
   };
   const removeActiveProfile = async () => {
     if (activeSession?.kind !== 'account' || !localProfile?.id) return;
-    if (sealOutput && !sealOutputAcknowledged) { setProfileMenuMessage('Download or acknowledge the pending sealed output before removing this profile.'); return; }
+    if (hasUnsavedWork) { setProfileMenuMessage('Download your unsaved work before removing this profile.'); return; }
     if (!window.confirm('Remove this local profile and its saved view from this browser? This cannot be undone.')) return;
     const id = localProfile.id;
     const epoch = authEpochRef.current;
@@ -1377,7 +1515,7 @@ function App() {
   const selectedFileName = workbenchFileRef.current?.files?.[0]?.name || '';
   useEffect(()=>{
     const readCurrent=()=>result ? {kind:result.source?'sealing':'verification',title:result.label,payload:{engine:result.native.engine,verdict:result.overallVerdict||result.native.verdict,status:result.native.status,records:String(result.native.records),good_bytes:String(result.native.goodBytes),sha256:result.native.fileSha256,chain_head:result.native.head,public_key:result.key,receipt_count:result.receiptChecks.length,covered:String(result.receiptCoverage?.covered??result.native.covered),uncovered:String(result.receiptCoverage?.uncovered??result.native.uncovered),first_failure:result.indexed.problem?{type:result.indexed.problem.token,record:String(result.indexed.problem.record),offset:String(result.indexed.problem.offset)}:null,source:result.source||null}} : null;
-    globalThis.WorkspaceStore.register({readCurrent,readArtifacts:()=>result?[{name:'source.fseal',blob:result.file},...(result.receipts?[{name:'witness.receipts',blob:new Blob([result.receipts],{type:'text/plain'})}]:[])]:[],onLogout:clearSensitiveWorkspace,restore:async(run,files,isCurrent)=>{if(!files[0])throw Error('No source artifact was saved with this run. Download its report instead.');const receipts=files[1]?await files[1].text():'';if(!isCurrent())return;navigate('sandbox');await runVerify(new File([files[0]],'saved-source.fseal'),receipts,run.payload.public_key||'',run.title,run.payload.source||null);}});
+    globalThis.WorkspaceStore.register({readCurrent,readArtifacts:()=>result?[{name:'source.fseal',blob:result.file},...(result.receipts?[{name:'witness.receipts',blob:new Blob([result.receipts],{type:'text/plain'})}]:[])]:[],onLogout:()=>keepUnsavedThenClear('workspace'),restore:async(run,files,isCurrent)=>{if(!files[0])throw Error('No source artifact was saved with this run. Download its report instead.');const receipts=files[1]?await files[1].text():'';if(!isCurrent())return;navigate('sandbox');await runVerify(new File([files[0]],'saved-source.fseal'),receipts,run.payload.public_key||'',run.title,run.payload.source||null);}});
     globalThis.WorkspaceStore.capture(readCurrent(),{autosave:false});
   },[result]);
   const returnTo = route.params.get('returnTo') || '';
@@ -1388,12 +1526,20 @@ function App() {
 
   if (route.kind === 'legal') return <><header className="auth-header"><a className="landing-brand" href="#/"><span className="brand-mark" aria-hidden="true">H</span><span>HashWing</span></a><nav className="auth-persistent-actions" aria-label="Account and workspace"><a href="#/login">Log in</a><a href="#/signup">Create account</a><a href="#/app/sandbox">Launch Workspace</a></nav></header><LegalPage page={route.page} onBack={() => setHashRoute('#/')} onClearCache={() => { navigator.serviceWorker?.controller?.postMessage({ type: 'CLEAR_FLIGHTSEAL_CACHES' }); setOfflineReady(false); setOfflineStatus('FlightSeal-owned caches were requested for removal. Other apps’ caches are left alone.'); }} cacheStatus={offlineStatus} onFeedback={() => setFeedbackDialogOpen(true)} onInstall={installApp} onRestartQuickStart={() => { setQuickStartDismissed(false); try { localStorage.removeItem(quickStartStorageKey); } catch {} setHashRoute(routeHash('sandbox')); }} /><InstallGuide open={installDialogOpen} onClose={() => setInstallDialogOpen(false)} ios={installKind === 'ios'} /><FeedbackDialog key={`feedback-${privateResetVersion}`} open={feedbackDialogOpen} onClose={() => setFeedbackDialogOpen(false)} route={route.route} /></>;
 
-  if (route.kind === 'landing') return <LandingPage key={privateResetVersion} onProtect={() => setHashRoute(routeHash('protect'))} onDemo={() => loadDemo(false)} onContinue={() => setHashRoute(routeHash('sandbox', { sample: currentSample || 'intact', record: selectedRecord }))} result={result} busy={busy} error={error} installKind={installKind} onInstall={installApp} onFeedback={() => setFeedbackDialogOpen(true)} installOpen={installDialogOpen} onInstallClose={() => setInstallDialogOpen(false)} feedbackOpen={feedbackDialogOpen} onFeedbackClose={() => setFeedbackDialogOpen(false)} route={route.route} />;
+  const rescueNotice = rescue && <section className="rescue-notice" aria-label="Unsaved work">
+    <p role="status">{rescue.reason === 'other-tab' ? 'You were logged out in another tab. This tab kept work that was not saved yet.' : 'Your workspace session ended. This tab kept work that was not saved yet.'} It stays only until you close this tab.</p>
+    {unsavedControl}
+    {discardAsk ? <><p role="alert">This deletes the only copy of this work.</p>
+      <div className="actions-row"><button type="button" className="button secondary" onClick={() => { setRescue(null); setDiscardAsk(false); setUnsavedAsk(null); }}>Delete it</button><button type="button" className="button secondary" onClick={() => setDiscardAsk(false)}>Keep it</button></div></>
+      : <div className="actions-row"><button type="button" className="button secondary" onClick={() => setDiscardAsk(true)}>Discard</button></div>}
+  </section>;
+  if (route.kind === 'landing') return <FrontDoor notice={rescueNotice} key={privateResetVersion} sampleHref={routeHash('sandbox', { sample: currentSample || 'intact' })} installKind={installKind} onInstall={installApp} onFeedback={() => setFeedbackDialogOpen(true)} installOpen={installDialogOpen} onInstallClose={() => setInstallDialogOpen(false)} feedbackOpen={feedbackDialogOpen} onFeedbackClose={() => setFeedbackDialogOpen(false)} route={route.route} />;
   if (route.kind === 'signup' || route.kind === 'login') return <AuthPage
     key={privateResetVersion}
     mode={route.kind}
     returnTo={returnTo}
-    outputNeedsAck={!!sealOutput && !sealOutputAcknowledged}
+    outputNeedsAck={hasUnsavedWork}
+    unsavedControl={unsavedControl}
     onReturnToWorkspace={() => setHashRoute(routeHash('sandbox', { sample: currentSample, record: selectedRecord }))}
     guestCanImport={activeSession?.kind === 'guest' && !!currentSample}
     currentSampleName={demoLabel}
@@ -1417,6 +1563,13 @@ function App() {
   // One copy of the signing-key controls, shown on Samples and on Trust (never both at once, so the ids stay unique).
   const signingKeyControls = (<section className="signing-key-controls" aria-labelledby="signing-key-title"><h3 id="signing-key-title">Ed25519 signing key</h3><p>Use a generated or imported key instead of the ephemeral default. The private key stays in tab memory and is never saved. Key possession does not verify operator identity.</p><div className="actions-row"><button type="button" className="button secondary" onClick={generateSigningKey}>Generate Ed25519 key</button><label className="button secondary key-import-button" htmlFor="private-key-file">Import private PEM<input id="private-key-file" type="file" accept=".pem,application/x-pem-file,text/plain" onChange={(event) => { const file = event.target.files?.[0] || null; event.target.value = ''; importSigningKey(file); }} /></label>{signingKey && <><button type="button" className="button secondary" onClick={downloadPrivateKeyBackup}>Download private-key backup</button>{signingKey.publicKeyHex && <button type="button" className="button secondary" onClick={downloadSigningPublicKey}>Download public key</button>}<button type="button" className="text-action" onClick={clearSigningKey}>Clear key</button></>}</div>{signingKey && <p role="status">{signingKey.origin}{signingKey.publicKeyHex ? ` · public key ${signingKey.publicKeyHex}` : ' · import the matching public key separately'}</p>}<p className="field-hint">A plaintext backup is created only after you choose Download. Store it securely outside this browser profile.</p></section>);
 
+  const sealCommon = <>
+    <label className="field-label" htmlFor="job-ref">Job reference <span>(optional)</span></label>
+    <input id="job-ref" type="text" maxLength={120} autoComplete="off" value={jobRef} aria-describedby="job-ref-hint" onChange={(e) => setJobRef(e.target.value)} />
+    <p id="job-ref-hint" className="field-hint">A label on this device only. It isn't signed or sent.</p>
+    <SigningLine signingKey={signingKey} trustHref={workspaceHref('help')} onTrust={(e) => { if (e.button !== 0 || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return; e.preventDefault(); navigate('help'); }} registryLine={__REGISTRY_URL__ ? <RegistryBoundary><RegistrySigningLine /></RegistryBoundary> : null} />
+  </>;
+
   const profileControls = (<ProfileMenu
           key={`${privateResetVersion}:${activeSession?.userId || ''}`}
           isCurrent={() => authEpochRef.current === renderedAuthEpoch}
@@ -1425,7 +1578,8 @@ function App() {
           currentSample={currentSample}
           savedContext={savedContext}
           savedContextError={savedContextError}
-          hasUnacknowledgedOutput={!!sealOutput && !sealOutputAcknowledged}
+          hasUnacknowledgedOutput={hasUnsavedWork}
+          unsavedControl={unsavedControl}
           message={profileMenuMessage}
           onSave={saveCurrentView}
           onRestore={restoreSavedView}
@@ -1436,7 +1590,11 @@ function App() {
           syncStatus={syncProvider.status}
         />);
 
+  // AC-66: the session strip and source actions belong to Verify and the More tools pages only.
+  const hideWorkbenchStrip = canonicalPage ? canonicalPage !== 'workbench' || screen === 'protect' : !WORKBENCH_SCREENS.has(screen);
   const navLink = ([key, label, Icon]) => <a key={key} href={workspaceHref(key, { sample: currentSample, record: selectedRecord })} aria-current={(productMode ? canonicalPage : screen) === key ? 'page' : undefined} onClick={(e) => { if (e.button !== 0 || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return; e.preventDefault(); navigate(key); }}><Icon size={16} strokeWidth={1.8} aria-hidden="true" />{productMode && key === 'sandbox' ? 'Upload and seal' : label}</a>;
+  // "Other apps": at the foot of the rail on wide screens, inside the Menu panel after More tools at 768px and below (CSS shows one).
+  const otherApps = (className) => <details className={className} onKeyDown={closeDisclosure}><summary>Other apps</summary><div>{SUITE_LINKS.map((tool) => tool.state === 'unavailable' ? <span key={tool.name} aria-disabled="true">{tool.name} · unavailable (HTTP 404)</span> : <a key={tool.name} href={tool.href} target="_blank" rel="noreferrer">{tool.name}</a>)}</div></details>;
   return <div className={`app-shell${canonicalPage ? ` canonical-page canonical-${canonicalPage}` : ''}`}>
     <a className="skip-link" href="#main" onClick={(event) => { event.preventDefault(); document.getElementById('main')?.focus(); }}>Skip to content</a>
     <aside className="workbench-rail" aria-label="HashWing">
@@ -1445,28 +1603,28 @@ function App() {
       <nav id="primary-nav" className={`nav${menuOpen ? ' open' : ''}`} aria-label="Primary navigation">
         {(productMode ? CANONICAL_NAV : PRIMARY_NAV).map(navLink)}
         {!productMode && <details ref={moreRef} className="nav-more" onKeyDown={closeDisclosure}><summary>More tools</summary>{MORE_NAV.map(navLink)}</details>}
+        {otherApps('workspace-tools-menu nav-apps')}
       </nav>
       <div className="rail-foot"><span className="local-dot" aria-hidden="true" />Local files</div>
-        <details className="workspace-tools-menu" onKeyDown={closeDisclosure}><summary>Other apps</summary><div>{SUITE_LINKS.map((tool) => tool.state === 'unavailable' ? <span key={tool.name} aria-disabled="true">{tool.name} · unavailable (HTTP 404)</span> : <a key={tool.name} href={tool.href} target="_blank" rel="noreferrer">{tool.name}</a>)}</div></details>
+        {otherApps('workspace-tools-menu rail-apps')}
     </aside>
     <div className="workspace">
     <header className="topbar commandbar">
       <h1 id={`page-${screen}`} tabIndex="-1">{pageTitle}</h1>
       <div className="command-actions">
-        <nav hidden={!!canonicalPage || activeSession?.kind === 'account'} className="workspace-persistent-actions" aria-label="Account and workspace"><a href="#/login">Log in</a><a href="#/signup">Create account</a></nav>
-
+        {__REGISTRY_URL__ && !canonicalPage && <RegistryBoundary><RegistryBarLink href={workspaceHref('help')} onOpen={(e) => { if (e.button !== 0 || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return; e.preventDefault(); navigate('help'); }} /></RegistryBoundary>}
         {!canonicalPage && screen !== 'settings' && profileControls}
-
       </div>
     </header>
-    <section hidden={(!!canonicalPage && canonicalPage!=='workbench') || screen === 'protect'} className="session-strip" aria-label="Current session">
+    <section hidden={hideWorkbenchStrip} className="session-strip" aria-label="Current session">
       <span id="session-file-name" className="session-name" title={selectedFileName || 'Choose a source or sealed log'}>{selectedFileName ? `Selected: ${selectedFileName}` : 'Choose a source or sealed log'}</span>
       {result && <span className="session-result-name">Checked: {result.label}</span>}
       {result && <button type="button" className="hash-copy" title={`Copy full chain head ${result.native.head}`} onClick={async () => { try { await navigator.clipboard.writeText(result.native.head); setOperationStatus('Chain head copied.'); } catch { setError('Clipboard access is unavailable. Select the full hash in the report.'); } }}><span>Copy hash</span><code>{`${result.native.head.slice(0, 10)}…${result.native.head.slice(-8)}`}</code></button>}
       {hasImportedOutput && <button type="button" className="clear-session" onClick={clearImportedSession}>Clear imported session</button>}
     </section>
     <main id="main" className="page-wrap" tabIndex="-1">
-    <details hidden={(!!canonicalPage && canonicalPage!=='workbench') || screen === 'protect'} className="source-actions" open={screen === 'sandbox'} onKeyDown={closeDisclosure}><summary>Source and report actions</summary><div className="source-action-items">
+      {rescueNotice}
+    <details hidden={hideWorkbenchStrip} className="source-actions" open={screen === 'sandbox'} onKeyDown={closeDisclosure}><summary>Source and report actions</summary><div className="source-action-items">
         <label className="command-file-wrap" htmlFor="workbench-file"><span className="visually-hidden">Choose source or sealed log</span><input id="workbench-file" ref={workbenchFileRef} className="command-file-input" type="file" accept=".fseal,.ulg,.tsv,.txt,.tlog,.csv,.json,application/octet-stream,text/plain,application/json,text/csv" disabled={!!busy} aria-label="Choose source or sealed log" aria-describedby="session-file-name" onChange={(e) => chooseWorkbenchFile(e.target.files?.[0] || null)} /></label>
         <button className="button secondary command-seal" type="button" onClick={() => { if (sealFileInput) runSeal(); else { sealPickerRef.current = true; workbenchFileRef.current?.click(); } }} disabled={!!busy}><FileCheck2 size={16} aria-hidden="true" />Seal new log</button>
         {result && <button className="button primary command-export" type="button" onClick={downloadPdf} disabled={!!busy}>Export PDF</button>}
@@ -1475,7 +1633,7 @@ function App() {
 
 
       {error && <div role="alert" className="alert error-alert"><strong>Could not finish</strong><p>{error}</p><button type="button" className="button secondary" onClick={() => setError('')}>Dismiss</button></div>}
-      {busy && <div className="busy-card" role="status" aria-live="polite"><span className="spinner" aria-hidden="true" />{busy}<button className="button secondary" type="button" onClick={cancel}>Cancel</button></div>}
+      {busy && !protectStep && <div className="busy-card" role="status" aria-live="polite"><span className="spinner" aria-hidden="true" />{busy}<button className="button secondary" type="button" onClick={cancel}>Cancel</button></div>}
       {operationStatus && !busy && <p className={`operation-status${/before treating|unavailable/i.test(operationStatus) ? ' warning' : ''}`} role="status">{operationStatus}</p>}
 
 
@@ -1491,76 +1649,51 @@ function App() {
       </section>}
       {screen === 'settings' && <section aria-label="Workspace settings"><server-workspace view="settings" /><details className="report-details"><summary>Browser profiles and encrypted backups</summary>{profileControls}</details><details className="report-details trusted-companies-details"><summary>Trusted companies <ChevronDown size={17} aria-hidden="true" /></summary><TrustedCompanies /></details><SystemPage /></section>}
       {canonicalPage === 'workbench' && <server-workspace view="workbench" />}
-      {screen === 'system' && <SystemPage />}
+      {screen === 'system' && <><SystemPage /><p className="system-handoff">Raw MAVLink v1/v2 streams open in Mavframe, a separate tool. No file is sent. <a href="https://anirudh763.github.io/mavframe/" target="_blank" rel="noreferrer">Open Mavframe</a></p></>}
       {screen === 'benchmarks' && <BenchmarkPage />}
       {screen === 'not-found' && <section className="screen"><section className="panel empty-state" aria-labelledby="not-found-title"><h2 id="not-found-title">Page not found</h2><p>The address does not match a HashWing page.</p><button className="button primary" type="button" onClick={() => navigate('sandbox')}>Return to samples</button></section></section>}
 
-      {screen === 'protect' && <section className="screen protect-screen" aria-label="Seal and send">
-        {protectMode === 'embedded' && <p className="lede">Seal a flight log as soon as you download it, then send one short receipt to someone you trust: your company, client or insurer. Later, anyone with that receipt can prove the file was not changed and get the exact original back. Files never leave this device.</p>}
-        <fieldset className="mode-choice"><legend>What are you sealing?</legend>
-          <label><input type="radio" name="protect-mode" value="manifest" checked={protectMode === 'manifest'} disabled={!!busy} onChange={() => setProtectMode('manifest')} />Large files (fingerprint only)</label>
-          <label><input type="radio" name="protect-mode" value="embedded" checked={protectMode === 'embedded'} onChange={() => setProtectMode('embedded')} />Small file (seal the whole file, up to 45 MiB)</label>
-        </fieldset>
-        {protectMode === 'embedded' && <div className="section-grid">
-          <section className="panel" aria-labelledby="seal-title"><div className="panel-head"><FileLock2 aria-hidden="true" size={18} /><h2 id="seal-title">Seal a flight log</h2></div><div className="panel-body">
-            <p>For the pilot or operator. Works with any log file: PX4 <code>.ulg</code>, ArduPilot <code>.bin</code>, DJI flight records, CSV and others. The exact bytes are sealed.</p>
-            <label className="field-label" htmlFor="protect-file">Flight log file <span>(up to {RAW_MAX_BYTES / 1024 / 1024} MiB)</span></label>
-            <input id="protect-file" type="file" onChange={(e) => { invalidateCheck(); setProtectFile(e.target.files?.[0] || null); setProtectLanding(''); setProtectSealed(null); setProtectResult(null); setRestored(null); setCopyStatus(''); setError(''); }} />
-            <p className="field-hint">{signingKey?.privateKeyPem ? 'The signing key loaded under Trust (kept in this tab only) will sign the receipt, so every flight you seal with it carries the same public key.' : 'No signing key loaded: a key is made for this file only and discarded. Load or generate a key under Trust to use one identity across flights.'}</p>
+      {/* Always mounted (hidden elsewhere), so the chosen files, a running seal and an unsaved result survive a visit to Trust. */}
+      <section className="screen protect-screen" aria-label="Seal and send" hidden={screen !== 'protect'}>
+        <section className="panel seal-panel" aria-labelledby={protectDone ? (protectMode === 'manifest' ? 'manifest-handoff-title' : 'handoff-title') : 'seal-what-title'}><div className="panel-body seal-body">
+          {/* One live region that stays mounted: each step (25% at a time), then "Sealed 1 file" as focus moves to the handoff. */}
+          <p className="visually-hidden" role="status">{protectMode !== 'embedded' ? '' : protectStep > 0 ? `Step ${protectStep} of 4: ${PROTECT_STEPS[protectStep - 1]}` : protectSealed ? 'Sealed 1 file' : ''}</p>
+          {!protectDone && <>
+            {/* Receipts sent before this layout say "open #/app/protect and paste": point them at Verify first thing. */}
+            <p className="seal-verify-link"><a href={workspaceHref('verify')} onClick={(e) => { if (e.button !== 0 || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return; e.preventDefault(); navigate('verify'); }}>Checking a receipt someone sent you? Go to Verify</a></p>
+            <h2 id="seal-what-title" tabIndex="-1">What are you sealing?</h2>
+            <fieldset className="mode-choice" aria-labelledby="seal-what-title">
+              <label><input type="radio" name="protect-mode" value="embedded" checked={protectMode === 'embedded'} onChange={() => setProtectMode('embedded')} />Small file: seal the whole file, up to 45 MiB</label>
+              <label><input type="radio" name="protect-mode" value="manifest" checked={protectMode === 'manifest'} disabled={!!busy} onChange={() => setProtectMode('manifest')} />Large files: fingerprint only, files stay where they are</label>
+            </fieldset>
+          </>}
+          {protectMode === 'embedded' && !protectSealed && <>
+            <label className="field-label" htmlFor="protect-file">File <span>(up to {RAW_MAX_BYTES / 1024 / 1024} MiB)</span></label>
+            <input id="protect-file" type="file" aria-invalid={protectError ? 'true' : undefined} aria-describedby={protectError ? 'protect-file-error' : undefined} onChange={(e) => { invalidateCheck(); setProtectFile(e.target.files?.[0] || null); setProtectLanding(''); setProtectSealed(null); setProtectResult(null); setRestored(null); setCopyStatus(''); setError(''); setProtectError(''); }} />
+            {protectError && <p id="protect-file-error" className="field-hint receipt-error">{protectError}</p>}
+            {protectError === TOO_LARGE_FOR_SMALL && protectFile && <div className="actions-row"><button type="button" className="button secondary" onClick={() => { setCarryToLarge({ file: protectFile }); setProtectFile(null); setProtectError(''); setProtectMode('manifest'); }}>Use Large files</button></div>}
+            {protectFile && <><ul className="manifest-file-list seal-file-list" aria-label="Selected files"><li><div className="manifest-file-row"><span className="manifest-file-name">{protectFile.name}</span><span className="mono-values">{exactBytes(protectFile.size)}</span></div></li></ul><FileTotals rows={[protectFile]} /></>}
+            {sealCommon}
             <details className="report-details protect-options"><summary>More options <ChevronDown size={17} aria-hidden="true" /></summary><div className="manifest-options-body">
               <label className="field-label" htmlFor="protect-landing">Reported landing time <span>(optional, this computer's time zone)</span></label>
               <input id="protect-landing" type="datetime-local" step="1" value={protectLanding} disabled={!!busy} aria-describedby="protect-landing-hint" onChange={(e) => setProtectLanding(e.target.value)} />
               <p id="protect-landing-hint" className="field-hint">Added to the receipt message as an unsigned line. HashWing doesn't check it.</p>
             </div></details>
-            <button className="button primary" type="button" disabled={!protectFile || !!busy} onClick={runProtectSeal}>Seal this log</button>
-            {protectSealed && <div className="handover">
-              <h3>Send this receipt to someone else now</h3>
-              <p>Protection depends on it. A copy kept only by you could be rewritten together with the file.</p>
-              <SenderFingerprint fingerprint={protectSealed.fingerprint} />
-              <label className="field-label" htmlFor="handover-text">Receipt message</label>
-              <textarea id="handover-text" className="mono-input" readOnly rows={9} value={protectSealed.handover} />
-              <div className="actions-row">
-                <button className="button primary" type="button" onClick={copyHandover}><Copy aria-hidden="true" size={16} />Copy message</button>
-                <a className="button secondary" href={`mailto:?subject=${encodeURIComponent(`HashWing receipt for ${protectSealed.name}`)}&body=${encodeURIComponent(protectSealed.handover)}`}><Mail aria-hidden="true" size={16} />Email it</a>
-                <button className="button secondary" type="button" onClick={() => download(`${protectSealed.name}.receipt.txt`, protectSealed.handover)}><Download aria-hidden="true" size={16} />Download receipt</button>
-              </div>
-              {copyStatus && <p className="field-hint" role="status">{copyStatus}</p>}
-              <h3>Keep the sealed file</h3>
-              <p>It holds your original log, byte for byte. Store it like the original and send it when someone asks for this flight.</p>
-              <button className="button secondary" type="button" onClick={() => download(protectSealed.log.name, protectSealed.log, 'application/octet-stream')}><Download aria-hidden="true" size={16} />Download sealed file</button>
-              <p className="field-hint">{protectSealed.savedKey ? 'Signed with the key loaded under Trust. Anyone holding that private key can sign other files, so keep its backup private.' : 'The signing key was made for this file only and was discarded, never stored or exported, so no further receipt can be made with it.'} Anyone can seal a different file with another key; that is why the receipt you send now is what counts later. Sealing shows the file has not changed since now; it cannot show what happened before you sealed it.</p>
-            </div>}
-          </div></section>
-          <section className="panel" aria-labelledby="check-title"><div className="panel-head"><ShieldCheck aria-hidden="true" size={18} /><h2 id="check-title">Check a sealed log</h2></div><div className="panel-body">
-            <p>For whoever kept the receipt: an operator's company, a client, an insurer or an investigator.</p>
-            <label className="field-label" htmlFor="check-file">Sealed file <span>(.fseal)</span></label>
-            <input id="check-file" type="file" accept=".fseal,application/octet-stream" onChange={(e) => { invalidateCheck(); setCheckFile(e.target.files?.[0] || null); setProtectResult(null); setRestored(null); setError(''); }} />
-            <label className="field-label" htmlFor="check-text">Receipt message you were sent</label>
-            <textarea id="check-text" className="mono-input" rows={6} value={checkText} spellCheck="false" aria-describedby="check-text-hint" onChange={(e) => { invalidateCheck(); setCheckText(e.target.value); setProtectResult(null); setRestored(null); setError(''); }} />
-            <p id="check-text-hint" className="field-hint">Use the copy you received when the flight was sealed, not one that arrives with the file now.</p>
-            <button className="button primary" type="button" disabled={!checkFile || !checkText.trim() || !!busy} onClick={runProtectCheck}>Check this log</button>
-            {result && result === protectResult && checkFile && result.file === checkFile && <p className="field-hint" role="note">This result compares the file with the receipt message you pasted. It means something only if you received that message directly from the pilot or operator when the flight was sealed.</p>}
-            {resultTimes && <TimeFields fields={resultTimes} />}
-            {restored && restored !== 'none' && result === protectResult && <div className="restored">
-              <h3>{restored.matches ? 'Original file recovered' : BYTES_DIFFER.title}</h3>
-              <dl className="detail-grid"><dt>Name</dt><dd className="wrap">{restored.name}</dd><dt>Size</dt><dd>{fmtBytes(restored.bytes)}</dd><dt>SHA-256</dt><dd><code>{restored.actualSha256}</code></dd></dl>
-              {restored.matches ? <button className="button secondary" type="button" onClick={() => download(restored.name, restored.data, 'application/octet-stream')}><Download aria-hidden="true" size={16} />Download original file</button> : <p>{BYTES_DIFFER.text}</p>}
-              <details className="report-details protect-options"><summary>More options <ChevronDown size={17} aria-hidden="true" /></summary><div className="manifest-options-body">
-                <label className="field-label" htmlFor="compare-copy">Compare with a copy you have</label>
-                <input id="compare-copy" type="file" onChange={(e) => compareCopy(e.target.files?.[0] || null)} />
-                {copyCompare?.for === result && <div className="compare-result" role="status"><span className={`status-label ${copyCompare.matches ? 'ok' : 'warn'}`}>{copyCompare.matches ? 'Matches' : BYTES_DIFFER.title}</span> <span className="wrap">{copyCompare.name} · {fmtBytes(copyCompare.bytes)}</span><code className="wrap">{copyCompare.sha256}</code>{!copyCompare.matches && <p>{BYTES_DIFFER.text}</p>}</div>}
-              </div></details>
-            </div>}
-            {restored === 'none' && result === protectResult && <p className="field-hint">This log holds decoded flight records rather than a whole sealed file, so there is no original file to download.</p>}
-          </div></section>
-        </div>}
-        {protectMode === 'embedded' && result && result === protectResult && <ResultPanel result={result} resultTitle={resultTitle} reportText={reportText} onDownloadText={() => download('hashwing-verification-report.txt', reportText)} onDownloadMarkdown={() => download('hashwing-evidence-report.md', reportMarkdown, 'text/markdown;charset=utf-8')} onDownloadJson={() => download('hashwing-verification-report.json', reportJson, 'application/json')} onNavigate={navigate} onShare={() => setShareDialogOpen(true)} trust={shownTrust} />}
-      </section>}
-      {/* Always mounted (hidden elsewhere), so changing mode or route never drops a running hash or an unsaved sealed list. */}
-      <section className="screen protect-screen" aria-label="Large files" hidden={screen !== 'protect' || protectMode !== 'manifest'}>
-        <div className="section-grid"><ManifestSeal signingKey={signingKey} onActiveChange={setManifestSealActive} onSealed={__REGISTRY_URL__ ? registrySealed : undefined} /><ManifestCheck onActiveChange={setManifestCheckActive} /></div>
+            <button id="protect-seal" className="button primary" type="button" disabled={!protectFile || !!busy} onClick={runProtectSeal}>Seal this file</button>
+            {protectStep > 0 && <div className="seal-progress"><label htmlFor="protect-progress">Step {protectStep} of 4 · {PROTECT_STEPS[protectStep - 1]}</label><progress id="protect-progress" max="4" value={protectStep} aria-valuetext={`Step ${protectStep} of 4: ${PROTECT_STEPS[protectStep - 1]}`} /><button className="button secondary" type="button" onClick={cancelProtectSeal}>Cancel</button></div>}
+          </>}
+          {protectMode === 'embedded' && protectSealed && <Handoff headingRef={handoffRef} headingId="handoff-title"
+            summary={`Sealed · 1 file${protectSealed.jobRef ? ` · ${protectSealed.jobRef}` : ''}`}
+            kind="file" fileName={protectSealed.log.name} unsaved={protectUnsaved} downloaded={!!protectSealed.saved?.file} receiptSaved={!!protectSealed.saved?.receipt}
+            onDownload={() => download(protectSealed.log.name, protectSealed.log, 'application/octet-stream')} onSaved={() => markProtectSaved(protectSealed.log, 'file')} onDownloadReceipt={() => download(`${protectSealed.name}.receipt.txt`, protectSealed.handover)} onReceiptSaved={() => markProtectSaved(protectSealed.log, 'receipt')}
+            handoverId="handover-text" handover={protectSealed.handover} onCopy={copyHandover} copyStatus={copyStatus}
+            actions={<><a className="button secondary" href={`mailto:?subject=${encodeURIComponent(`HashWing receipt for ${protectSealed.name}`)}&body=${encodeURIComponent(protectSealed.handover)}`}><Mail aria-hidden="true" size={16} />Email it</a></>}
+            details={<>{protectSealed.savedKey && <SenderFingerprint fingerprint={protectSealed.fingerprint} />}<details className="report-details handoff-about"><summary>What is this? <ChevronDown size={17} aria-hidden="true" /></summary><div className="manifest-options-body prose"><p>{protectSealed.savedKey ? 'Signed with the key loaded under Trust. Anyone holding that private key can sign other files, so keep its backup private.' : 'The signing key was made for this file only and was discarded, never stored or exported, so no further receipt can be made with it.'} Anyone can seal a different file with another key; that is why the receipt you send now is what counts later. Sealing shows the file has not changed since now; it cannot show what happened before you sealed it.</p></div></details></>}
+            shareNote={__REGISTRY_URL__ ? <RegistryShareNote /> : null}
+            onSealMore={sealMoreProtect} />}
+          <ManifestSeal hidden={protectMode !== 'manifest'} output={manifestOutput} setOutput={setManifestOutput} carry={carryToLarge} common={sealCommon} jobRef={jobRef} signingKey={signingKey} onActiveChange={setManifestSealActive} onUnsaved={setManifestUnsaved} onSealed={__REGISTRY_URL__ ? registrySealed : undefined} onDone={setManifestSealed} onSealMore={() => { setJobRef(''); sealStartFocusRef.current = true; }} shareNote={__REGISTRY_URL__ ? <RegistryShareNote /> : null} />
+        </div></section>
       </section>
-      {/* Always mounted (hidden elsewhere) like the section above, so a share link made here survives a visit to another page. */}
       {__REGISTRY_URL__ && <section className="screen" aria-label="Registry status" hidden={screen !== 'protect'}><RegistryBoundary><SealedOnDevice onSignIn={() => navigate('help')} /></RegistryBoundary></section>}
 
       {screen === 'sandbox' && <section className="screen" aria-label="Samples and sealing">
@@ -1574,12 +1707,34 @@ function App() {
         {result?.source && <FlightTelemetry source={result.source} points={telemetry} verificationProblem={result.indexed.problem} selectedPointIndex={selectedTelemetryIndex} onMovePoint={(pointIndex) => { const point = telemetry[pointIndex]; if (!point) return; telemetrySelectionRef.current++; setSelectedTelemetryIndex(pointIndex); setSelectedRecord(Number(point.record)); setPage(Math.floor(Number(point.record) / PAGE_SIZE)); }} onSelectPoint={(pointIndex) => { const point = telemetry[pointIndex]; if (!point) return; telemetrySelectionRef.current++; setSelectedTelemetryIndex(pointIndex); setSelectedRecord(Number(point.record)); setPage(Math.floor(Number(point.record) / PAGE_SIZE)); navigate('records'); }} />}
         <div className="section-grid">
           <section className="panel"><div className="panel-head"><FlaskConical aria-hidden="true" size={18} /><h2>Mutations</h2></div><div className="panel-body"><div className="mutation-list"><button className="mutation" type="button" disabled={!result || !!busy} onClick={(event) => doMutation('flip', event.currentTarget)}><span>Flip one payload byte</span></button><button className="mutation" type="button" disabled={!result || !!busy} onClick={(event) => doMutation('delete', event.currentTarget)}><span>Remove one middle record</span></button><button className="mutation" type="button" disabled={!result || !!busy} onClick={(event) => doMutation('truncate', event.currentTarget)}><span>Trim seven tail bytes</span></button></div></div></section>
-          <section className="panel"><div className="panel-head"><FileCheck2 aria-hidden="true" size={18} /><h2>Seal</h2></div><div className="panel-body"><p>Create a sealed log from a timestamped source.</p><p className="field-hint">TSV, CSV, JSON or MAVLink <code>.tlog</code>. Converted values are canonicalized; MAVLink frame CRC is not checked.</p><details className="report-details import-details"><summary>Import details <ChevronDown size={17} aria-hidden="true" /></summary><div className="prose"><p>TSV/TXT uses <code>timestamp_us&lt;TAB&gt;payload</code>. CSV opens a bounded preview and requires explicit column and unit mapping before conversion. JSON accepts an array of objects with an unsigned <code>timestamp_us</code>. MAVLink .tlog records use their 8-byte big-endian timestamps; frame checksum/CRC_EXTRA validation is not performed.</p><p>CSV timestamp units must be microseconds. Coordinates require both latitude and longitude in degrees; altitude is mapped in meters and speed in meters per second. All original CSV columns remain in each payload and the mapping is saved in provenance. Unsupported/conflicting unit labels are rejected. JSON fields use the documented names and units; unknown names are not guessed. Missing/null coordinates stay unavailable. TSV/TXT sources are limited to {fmtBytes(SEAL_MAX_BYTES)}; CSV, JSON and .tlog conversion to 16 MiB. To seal any other log file byte for byte, use Seal &amp; send.</p></div></details><button className="button secondary" type="button" onClick={() => { sealPickerRef.current = true; workbenchFileRef.current?.click(); }}>Choose telemetry source</button>{csvDraft && <CsvMappingEditor draft={csvDraft} setDraft={setCsvDraft} onConvert={convertCsvDraft} onCancel={() => { setCsvDraft(null); if (workbenchFileRef.current) workbenchFileRef.current.value = ''; setOperationStatus('CSV mapping canceled. No source was converted or sealed.'); }} busy={!!busy} />}{sealSourceMetadata && <TelemetrySourcePreview source={sealSourceMetadata} original={sealSourceOriginal} />}{signingKeyControls}<label className="field-label" htmlFor="receipt-interval">Receipt interval (records)</label><input id="receipt-interval" type="number" min="1" max="1000000" value={sealInterval} onChange={(e) => { invalidateCheck(); setSealInterval(e.target.value); }} /><button className="button primary" type="button" disabled={!sealFileInput || !!busy} onClick={runSeal}>Seal and verify</button>{sealOutput && <div className="seal-outputs"><p>Generated from <strong>{sealOutput.filename}</strong>.</p><button className="button secondary" onClick={() => download('sealed.fseal', sealOutput.log, 'application/octet-stream')}>Download sealed log</button><button className="button secondary" onClick={() => download('sealed.receipts', sealOutput.receipts)}>Download receipts</button><button className="button secondary" onClick={() => download('sealed-public-key.txt', sealOutput.publicKey + '\n')}>Download public key</button><p>Keep receipts and public key with a separate witness. The private key is not included in these outputs.</p><label className="output-ack"><input type="checkbox" checked={sealOutputAcknowledged} onChange={(e) => setSealOutputAcknowledged(e.target.checked)} /> I saved these files or no longer need them</label></div>}</div></section>
+          <section className="panel"><div className="panel-head"><FileCheck2 aria-hidden="true" size={18} /><h2>Seal</h2></div><div className="panel-body"><p>Create a sealed file from a timestamped source.</p><p className="field-hint">TSV, CSV, JSON or MAVLink <code>.tlog</code>. Converted values are canonicalized; MAVLink frame CRC is not checked.</p><details className="report-details import-details"><summary>Import details <ChevronDown size={17} aria-hidden="true" /></summary><div className="prose"><p>TSV/TXT uses <code>timestamp_us&lt;TAB&gt;payload</code>. CSV opens a bounded preview and requires explicit column and unit mapping before conversion. JSON accepts an array of objects with an unsigned <code>timestamp_us</code>. MAVLink .tlog records use their 8-byte big-endian timestamps; frame checksum/CRC_EXTRA validation is not performed.</p><p>CSV timestamp units must be microseconds. Coordinates require both latitude and longitude in degrees; altitude is mapped in meters and speed in meters per second. All original CSV columns remain in each payload and the mapping is saved in provenance. Unsupported/conflicting unit labels are rejected. JSON fields use the documented names and units; unknown names are not guessed. Missing/null coordinates stay unavailable. TSV/TXT sources are limited to {fmtBytes(SEAL_MAX_BYTES)}; CSV, JSON and .tlog conversion to 16 MiB. To seal any other file byte for byte, use Seal &amp; send.</p></div></details><button className="button secondary" type="button" onClick={() => { sealPickerRef.current = true; workbenchFileRef.current?.click(); }}>Choose telemetry source</button>{csvDraft && <CsvMappingEditor draft={csvDraft} setDraft={setCsvDraft} onConvert={convertCsvDraft} onCancel={() => { setCsvDraft(null); if (workbenchFileRef.current) workbenchFileRef.current.value = ''; setOperationStatus('CSV mapping canceled. No source was converted or sealed.'); }} busy={!!busy} />}{sealSourceMetadata && <TelemetrySourcePreview source={sealSourceMetadata} original={sealSourceOriginal} />}{signingKeyControls}<label className="field-label" htmlFor="receipt-interval">Receipt interval (records)</label><input id="receipt-interval" type="number" min="1" max="1000000" value={sealInterval} onChange={(e) => { invalidateCheck(); setSealInterval(e.target.value); }} /><button className="button primary" type="button" disabled={!sealFileInput || !!busy} onClick={runSeal}>Seal and verify</button>{sealOutput && <div className="seal-outputs"><p>Generated from <strong>{sealOutput.filename}</strong>.</p><button className="button secondary" onClick={() => download('sealed.fseal', sealOutput.log, 'application/octet-stream')}>Download sealed file</button><button className="button secondary" onClick={() => download('sealed.receipts', sealOutput.receipts)}>Download receipts</button><button className="button secondary" onClick={() => download('sealed-public-key.txt', sealOutput.publicKey + '\n')}>Download public key</button><p>Keep receipts and public key with a separate witness. The private key is not included in these outputs.</p><label className="output-ack"><input type="checkbox" checked={sealOutputAcknowledged} onChange={(e) => setSealOutputAcknowledged(e.target.checked)} /> I saved these files or no longer need them</label></div>}</div></section>
         </div>
       </section>}
 
       {screen === 'verify' && <section className="screen verify-layout" aria-labelledby="verify-title">
         {__REGISTRY_URL__ && shareToken && <RegistryBoundary><ShareRecordPanel token={shareToken} /></RegistryBoundary>}
+        <section className="panel verify-check" aria-labelledby="check-title"><div className="panel-head"><ShieldCheck aria-hidden="true" size={18} /><h2 id="check-title">Check a sealed file</h2></div><div className="panel-body">
+          <p>For whoever kept the receipt: an operator's company, a client, an insurer or an investigator.</p>
+          <label className="field-label" htmlFor="check-file">Sealed file <span>(.fseal)</span></label>
+          <input id="check-file" type="file" accept=".fseal,application/octet-stream" onChange={(e) => { invalidateCheck(); setCheckFile(e.target.files?.[0] || null); setProtectResult(null); setRestored(null); setError(''); }} />
+          <label className="field-label" htmlFor="check-text">Receipt message you were sent</label>
+          <textarea id="check-text" className="mono-input" rows={6} value={checkText} spellCheck="false" aria-describedby="check-text-hint" onChange={(e) => { invalidateCheck(); setCheckText(e.target.value); setProtectResult(null); setRestored(null); setError(''); }} />
+          <p id="check-text-hint" className="field-hint">Use the copy you received when the flight was sealed, not one that arrives with the file now.</p>
+          <button className="button primary" type="button" disabled={!checkFile || !checkText.trim() || !!busy} onClick={runProtectCheck}>Check this file</button>
+          {result && result === protectResult && checkFile && result.file === checkFile && <p className="field-hint" role="note">This result compares the file with the receipt message you pasted. It means something only if you received that message directly from the pilot or operator when the flight was sealed.</p>}
+          {resultTimes && <TimeFields fields={resultTimes} />}
+          {restored && restored !== 'none' && result === protectResult && <div className="restored">
+            <h3>{restored.matches ? 'Original file recovered' : BYTES_DIFFER.title}</h3>
+            <dl className="detail-grid"><dt>Name</dt><dd className="wrap">{restored.name}</dd><dt>Size</dt><dd>{fmtBytes(restored.bytes)}</dd><dt>SHA-256</dt><dd><code>{restored.actualSha256}</code></dd></dl>
+            {restored.matches ? <button className="button secondary" type="button" onClick={() => download(restored.name, restored.data, 'application/octet-stream')}><Download aria-hidden="true" size={16} />Download original file</button> : <p>{BYTES_DIFFER.text}</p>}
+            <details className="report-details protect-options"><summary>More options <ChevronDown size={17} aria-hidden="true" /></summary><div className="manifest-options-body">
+              <label className="field-label" htmlFor="compare-copy">Compare with a copy you have</label>
+              <input id="compare-copy" type="file" onChange={(e) => compareCopy(e.target.files?.[0] || null)} />
+              {copyCompare?.for === result && <div className="compare-result" role="status"><span className={`status-label ${copyCompare.matches ? 'ok' : 'warn'}`}>{copyCompare.matches ? 'Matches' : BYTES_DIFFER.title}</span> <span className="wrap">{copyCompare.name} · {fmtBytes(copyCompare.bytes)}</span><code className="wrap">{copyCompare.sha256}</code>{!copyCompare.matches && <p>{BYTES_DIFFER.text}</p>}</div>}
+            </div></details>
+          </div>}
+          {restored === 'none' && result === protectResult && <p className="field-hint">This log holds decoded flight records rather than a whole sealed file, so there is no original file to download.</p>}
+        </div></section>
         <section className="panel verify-demo" aria-labelledby="verify-demo-title"><div className="panel-head"><FlaskConical aria-hidden="true" size={18} /><h2 id="verify-demo-title">Try a sample integrity check</h2></div><div className="panel-body">
           <p>Check whether a sealed flight log has changed and review its signed receipts.</p>
           <p className="field-hint">Included synthetic sample: 800 records, 8 receipts. The bundled demo signer identifies this fixture only.</p>
@@ -1592,13 +1747,16 @@ function App() {
         </div></section>
         <div className="panel verify-panel"><div className="panel-head"><ShieldCheck aria-hidden="true" size={18} /><h2 id="verify-title">Verification inputs</h2></div><div className="panel-body input-grid"><div><label className="field-label" htmlFor="log-input">HashWing / FlightSeal .fseal log <span>(up to {fmtBytes(MAX_UI_BYTES)})</span></label><input id="log-input" type="file" accept=".fseal,application/octet-stream" onChange={(e) => chooseLog(e.target.files?.[0] || null)} /></div><div><label className="field-label" htmlFor="receipt-input">Witness receipts <span>(optional)</span></label><input id="receipt-input" ref={receiptInputRef} type="file" accept=".receipts,text/plain" aria-invalid={receiptInputError ? 'true' : undefined} aria-describedby={receiptInputError ? 'receipt-input-error' : undefined} onChange={(e) => chooseReceipts(e.target.files?.[0] || null)} />{receiptLoading && <p className="field-hint" role="status">Reading receipts…</p>}{receiptInputError && <p id="receipt-input-error" className="field-hint receipt-error">{receiptInputError}</p>}{receiptSelected && <button className="button secondary remove-receipts" type="button" onClick={removeReceipts}>Remove receipts</button>}</div><div className="field-wide"><label className="field-label" htmlFor="trusted-key">Public key for receipt check <span>(64 lowercase hexadecimal digits)</span></label><input id="trusted-key" className="mono-input" value={keyText} onChange={(e) => { invalidateCheck(); setKeyText(e.target.value); }} autoComplete="off" spellCheck="false" /><TrustedKeyPinControls value={keyText} onUse={(value) => { invalidateCheck(); setKeyText(value); }} /></div><div className="field-wide actions-row"><button className="button primary" type="button" disabled={!logFile || logFile.size > MAX_UI_BYTES || receiptLoading || !!receiptInputError || !!busy} onClick={verifyPicked}>Run check</button><button className="button secondary" type="button" disabled={!!busy} onClick={() => loadDemo(false)}>Load included 800-record demo</button></div></div></div>{result && <ResultPanel result={result} resultTitle={resultTitle} reportText={reportText} onDownloadText={() => download('hashwing-verification-report.txt', reportText)} onDownloadMarkdown={() => download('hashwing-evidence-report.md', reportMarkdown, 'text/markdown;charset=utf-8')} onDownloadJson={() => download('hashwing-verification-report.json', reportJson, 'application/json')} onNavigate={navigate} onShare={() => setShareDialogOpen(true)} trust={shownTrust} />}</section>}
 
+      {/* Always mounted (hidden elsewhere), so a running check of large files survives a visit to another page. */}
+      <section className="screen" aria-label="Large files" hidden={screen !== 'verify'}><ManifestCheck onActiveChange={setManifestCheckActive} incoming={pastedManifestReceipt} /></section>
+
       {screen === 'records' && <section className="screen">{!result ? <EmptyState onNavigate={navigate} /> : <div className="records-layout"><section className="panel records-panel"><div className="panel-head"><List aria-hidden="true" size={18} /><h2>Records <span className="subcount">{fmtBig(result.native.records)}</span></h2></div><ol className="record-list">{pageRows.map((row, localIndex) => { const index = Number(row.index ?? rowStart + localIndex); const broken = !!result.indexed.problem && index === Number(result.indexed.problem.record); return <li key={index} className={`${broken ? 'record-broken' : 'record-pass'} ${index === selectedRecord ? 'selected' : ''}`}><button type="button" aria-current={index === selectedRecord ? 'true' : undefined} onClick={() => setSelectedRecord(index)}><span className="record-index">{fmtBig(index)}</span><span className="record-status">{broken ? `${problemLabel(result.indexed.problem.token)} (${result.indexed.problem.token})` : 'Checked'}</span><span className="record-bytes">{row.len == null ? 'problem row' : fmtBytes(row.len)}</span></button></li>; })}</ol><div className="pagination"><button className="button secondary" disabled={page === 0} onClick={() => setPage(0)}>First</button><button className="button secondary" disabled={page === 0} onClick={() => setPage((v) => Math.max(0, v - 1))}>Previous</button><span>Page {page + 1} of {pageCount}</span><button className="button secondary" disabled={page >= pageCount - 1} onClick={() => setPage((v) => Math.min(pageCount - 1, v + 1))}>Next</button><button className="button secondary" disabled={page >= pageCount - 1} onClick={() => setPage(pageCount - 1)}>Last</button></div></section><section className="panel detail-panel" aria-labelledby="record-detail-title"><div className="panel-head"><FileCheck2 aria-hidden="true" size={18} /><h2 id="record-detail-title">Record {fmtBig(selectedRecord)}</h2></div><div className="panel-body">{recordError ? <div role="alert" className="alert error-alert"><p>{recordError}</p><button className="button secondary" onClick={() => loadRecord(selectedRecord)}>Retry</button></div> : !recordDetail ? <p className="muted" role="status">Loading record…</p> : <><div className="detail-actions"><button className="button secondary" type="button" onClick={() => navigate('video')}>Video</button></div><RecordDetail record={recordDetail} /></>}</div></section></div>}</section>}
 
       {screen === 'receipts' && <section className="screen">{!result ? <EmptyState onNavigate={navigate} /> : <section className="panel"><div className="panel-head"><Stamp aria-hidden="true" size={18} /><h2 id="receipt-heading">Receipts</h2></div><p className="receipt-overview">{fmtBig(result.receiptCoverage?.covered ?? result.native.covered)} records covered by {keyTrust?.for === result && keyTrust.status === 'trusted' ? 'a trusted receipt' : 'a receipt signed by the key you entered'} · {fmtBig(result.receiptCoverage?.uncovered ?? result.native.uncovered)} uncovered</p>{result.needsTrustedKey && <p className="muted">Hash chain checked; receipt signatures remain unchecked until a trusted public key is entered.</p>}{activeReceiptChecks.length ? <div className="table-scroll" role="region" aria-labelledby="receipt-heading" tabIndex="0" onKeyDown={(event) => { if ((event.key === 'ArrowRight' || event.key === 'ArrowLeft') && event.currentTarget.scrollWidth > event.currentTarget.clientWidth) { event.preventDefault(); event.currentTarget.scrollLeft += event.key === 'ArrowRight' ? 48 : -48; } }}><table><thead><tr><th scope="col">Receipt</th><th scope="col">After records</th><th scope="col">Check</th><th scope="col">Head</th><th scope="col">Signing key</th></tr></thead><tbody>{activeReceiptChecks.map((receipt, i) => <tr key={`${receipt.count}-${i}`} id={`receipt-${i+1}`} tabIndex={route.params.get('receipt')===String(i+1)?-1:undefined} aria-current={route.params.get('receipt')===String(i+1)?'true':undefined}><td>{i + 1}</td><td className="numeric">{fmtBig(receipt.count)}</td><td><span className={`status-label ${receipt.check === 'ok' ? 'ok' : receipt.check === 'wrong-key' || receipt.check === 'bad-signature' ? 'bad' : 'warn'}`}>{receipt.description}</span></td><td><code>{receipt.head}</code></td><td><code>{receipt.key}</code></td></tr>)}</tbody></table></div> : <div className="panel-body"><p>{result.receipts ? 'No receipts authenticated.' : 'No receipts provided.'}</p></div>}</section>}</section>}
 
       {screen === 'video' && <section className="screen"><section className="panel"><div className="panel-head"><Video aria-hidden="true" size={18} /><h2>Local clip</h2></div><div className="panel-body video-grid"><label className="field-label" htmlFor="video-input">Video file</label><input id="video-input" type="file" accept="video/*" onChange={(e) => inspectVideo(e.target.files?.[0] || null)} /><video ref={videoRef} src={videoUrl || undefined} controls playsInline aria-label="Selected local video preview" onLoadedMetadata={(e) => { const media = e.currentTarget; const url = videoUrlRef.current; const metadata = { duration: media.duration, width: media.videoWidth, height: media.videoHeight }; if (!url || media.currentSrc !== url) return; setVideoInfo((v) => v && v.url === url ? { ...v, ...metadata, state: 'Browser metadata available. Codec identification is unknown.' } : v); }} onCanPlay={() => setVideoInfo((v) => v && ({ ...v, playable: true }))} onError={() => setVideoInfo((v) => v && ({ ...v, playable: false, state: 'The browser could not read metadata or play this stream. Codec identification is unknown.' }))} />{result && <div className="video-sync-controls"><p className="field-hint">Timestamps may be boot-relative. Alignment is a playback aid, not signed capture-time proof.</p><label className="field-label" htmlFor="video-record-range">Record</label><input id="video-record-range" type="range" min="0" max={Math.max(0, totalRows - 1)} value={Math.min(selectedRecord, Math.max(0, totalRows - 1))} disabled={totalRows < 2} onChange={(e) => { const next = Number(e.target.value); setSelectedRecord(next); setPage(Math.floor(next / PAGE_SIZE)); }} /><p><strong>Selected record {fmtBig(selectedRecord)}</strong>{selectedTelemetryPoint ? ` · telemetry from record ${fmtBig(selectedTelemetryPoint.record)} at ${fmtBig(selectedTelemetryPoint.timestampUs)} µs` : selectedTimestamp == null ? ' · timestamp unavailable' : ` · ${fmtBig(selectedTimestamp)} µs`}{selectedTelemetryPoint?.sourceOffset == null ? '' : ` · source byte ${selectedTelemetryPoint.sourceOffset}`}</p><p>Time base: {firstTimestamp == null ? 'unavailable' : `${fmtBig(firstTimestamp)} µs at first telemetry sample`}</p><label className="field-label" htmlFor="video-offset">Manual offset (seconds)</label><input id="video-offset" type="number" step="any" value={videoOffset} onChange={(e) => setVideoOffset(e.target.value)} /><button className="button primary" type="button" disabled={!videoInfo?.duration || selectedTimestamp == null || firstTimestamp == null} onClick={syncVideo}>Sync to record</button></div>}{videoInfo && <div className="video-meta" role="status"><strong>{videoInfo.name}</strong><span>{fmtBytes(videoInfo.size)}</span>{videoInfo.duration != null && <span>{Number.isFinite(videoInfo.duration) ? `${videoInfo.duration.toFixed(2)} seconds` : 'Duration unavailable'}</span>}{videoInfo.width && <span>{videoInfo.width} × {videoInfo.height} pixels</span>}<p>{videoInfo.state}</p>{videoInfo.syncMessage && <p>{videoInfo.syncMessage}</p>}<p>Video stays local. Codec is not inferred when unavailable.</p></div>}{!result && <p className="muted">Verify a log to align video.</p>}</div></section></section>}
 
-      {screen === 'help' && <section className="screen help-layout"><section className="panel trust-wide"><div className="panel-head"><Building2 aria-hidden="true" size={18} /><h2 id="trusted-companies-title">Trusted companies</h2></div><div className="panel-body"><TrustedCompanies /></div></section><section className="panel trust-wide"><div className="panel-head"><KeyRound aria-hidden="true" size={18} /><h2 id="your-signing-key-title">Your signing key</h2></div><div className="panel-body">{signingKeyControls}</div></section>{__REGISTRY_URL__ && <RegistryBoundary><RegistryPanel /></RegistryBoundary>}<section className="panel"><div className="panel-head"><CircleHelp aria-hidden="true" size={18} /><h2>Trust and limits</h2></div><div className="panel-body prose"><h3>Formats</h3><p>HashWing verifies .fseal logs, FlightSeal receipt v1 files, and supported PX4 ULog captures. Sealed output remains compatible with FlightSeal tools.</p><h3>Integrity and authenticity</h3><p>Sealing happens after download; it does not prove acquisition time or sensor truth. An intact chain confirms internal links only. A supplied public key is not automatically a trusted identity. Receipt v1 has no signed issue time. PX4 samples contain selected decoded records, not every byte of the original ULog. A chain head is not a whole-file SHA-256 digest.</p><h3>Independent witness</h3><p>Coverage reports how many records supplied receipts cover. Detecting a shortened or rebuilt log requires an independent holder to retain those receipts. Confirm the public key with that holder through another channel.</p><h3>Failures</h3><p>Verification stops at the first inconsistent record. A chain break identifies the first bad link, not every changed record. A torn tail may indicate an interrupted write. HashWing does not repair supplied files.</p><h3>Local handling</h3><p>Files are analyzed on this device. Save current run uploads the selected source, checked log, receipts and report to your private server workspace when available. Private signing keys and video are excluded. Exported verification reports contain verdicts, counts and hashes, not record payloads. The C++/OpenSSL WebAssembly engine checks the chain; a separate JavaScript index loads record details. Engine version appears in each report. The app shell and included samples are cached after online setup; the full PX4 sample is fetched separately and may not be available offline. This AI-assisted project requires human review of generated code and documentation.</p><h3>Reports</h3><p>PDF exports carry ordered heading and paragraph tags plus document language, but are not certified PDF/UA. The screen-reader workflow has not been validated; use the text report as the accessible reading alternative or JSON for structured data.</p><p><a href="https://github.com/anirudh763/flightseal" target="_blank" rel="noreferrer">Source and issue tracker</a></p></div></section><section className="panel limits-panel"><div className="panel-head"><h2>Limits</h2></div><div className="panel-body"><dl><dt>Verify file size</dt><dd>{fmtBytes(MAX_UI_BYTES)}</dd><dt>Native import limit</dt><dd>{fmtBytes(IMPORT_MAX_BYTES)}</dd><dt>Seal TSV/TXT source</dt><dd>{fmtBytes(SEAL_MAX_BYTES)}</dd><dt>Seal &amp; send file</dt><dd>{fmtBytes(RAW_MAX_BYTES)}</dd><dt>Manifest items</dt><dd>{MANIFEST_LIMITS.maxItems}</dd><dt>Manifest payload</dt><dd>64 KiB</dd><dt>CSV/JSON/.tlog conversion</dt><dd>16 MiB</dd><dt>Receipt text</dt><dd>4 MiB</dd><dt>Records per page</dt><dd>50</dd><dt>Telemetry plot</dt><dd>1,000 sampled points</dd><dt>Payload display</dt><dd>4 KiB per record</dd></dl></div></section></section>}
+      {screen === 'help' && <section className="screen help-layout"><section className="panel trust-wide"><div className="panel-head"><Building2 aria-hidden="true" size={18} /><h2 id="trusted-companies-title">Trusted companies</h2></div><div className="panel-body"><TrustedCompanies /></div></section><section className="panel trust-wide"><div className="panel-head"><KeyRound aria-hidden="true" size={18} /><h2 id="your-signing-key-title">Your signing key</h2></div><div className="panel-body">{signingKeyControls}</div></section>{__REGISTRY_URL__ && <RegistryBoundary><RegistryPanel /></RegistryBoundary>}<section className="panel"><div className="panel-head"><CircleHelp aria-hidden="true" size={18} /><h2>Trust and limits</h2></div><div className="panel-body prose"><h3>Formats</h3><p>HashWing verifies .fseal logs, FlightSeal receipt v1 files, and supported PX4 ULog captures. Sealed output remains compatible with FlightSeal tools.</p><h3>Integrity and authenticity</h3><p>Sealing happens after download; it does not prove acquisition time or sensor truth. An intact chain confirms internal links only. A supplied public key is not automatically a trusted identity. Receipt v1 has no signed issue time. PX4 samples contain selected decoded records, not every byte of the original ULog. A chain head is not a whole-file SHA-256 digest.</p><h3>Independent witness</h3><p>Coverage reports how many records supplied receipts cover. Detecting a shortened or rebuilt log requires an independent holder to retain those receipts. Confirm the public key with that holder through another channel.</p><h3>Failures</h3><p>Verification stops at the first inconsistent record. A chain break identifies the first bad link, not every changed record. A torn tail may indicate an interrupted write. HashWing does not repair supplied files.</p><h3>Local handling</h3><p>Files are analyzed on this device. Save current run uploads the selected source, checked log, receipts and report to your private server workspace when available. Private signing keys and video are excluded. Exported verification reports contain verdicts, counts and hashes, not record payloads. The C++/OpenSSL WebAssembly engine checks the chain; a separate JavaScript index loads record details. Engine version appears in each report. The app shell and included samples are cached after online setup; the full PX4 sample is fetched separately and may not be available offline. This AI-assisted project requires human review of generated code and documentation.</p><h3>Reports</h3><p>PDF exports carry ordered heading and paragraph tags plus document language, but are not certified PDF/UA. The screen-reader workflow has not been validated; use the text report as the accessible reading alternative or JSON for structured data.</p><p><a className="standalone-link" href="https://github.com/anirudh763/flightseal" target="_blank" rel="noreferrer">Source and issue tracker</a></p></div></section><section className="panel limits-panel"><div className="panel-head"><h2>Limits</h2></div><div className="panel-body"><dl><dt>Verify file size</dt><dd>{fmtBytes(MAX_UI_BYTES)}</dd><dt>Native import limit</dt><dd>{fmtBytes(IMPORT_MAX_BYTES)}</dd><dt>Seal TSV/TXT source</dt><dd>{fmtBytes(SEAL_MAX_BYTES)}</dd><dt>Seal &amp; send file</dt><dd>{fmtBytes(RAW_MAX_BYTES)}</dd><dt>Manifest items</dt><dd>{MANIFEST_LIMITS.maxItems}</dd><dt>Manifest payload</dt><dd>64 KiB</dd><dt>CSV/JSON/.tlog conversion</dt><dd>16 MiB</dd><dt>Receipt text</dt><dd>4 MiB</dd><dt>Records per page</dt><dd>50</dd><dt>Telemetry plot</dt><dd>1,000 sampled points</dd><dt>Payload display</dt><dd>4 KiB per record</dd></dl></div></section></section>}
       {(!canonicalPage || canonicalPage === 'settings') && (offlineStatus || waitingUpdate || installKind !== 'none') && <details className="install-tools" onKeyDown={closeDisclosure}><summary>Offline and installation</summary><section className="offline-controls" aria-label="Offline and installation controls"><p className="offline-note" role="status">{offlineStatus || (offlineReady ? 'Offline verifier is ready on this device.' : 'Offline use needs a one-time online preparation.')}</p><div className="offline-control-actions"><button type="button" className="button secondary" onClick={prepareOffline}>Prepare offline</button>{waitingUpdate && <button type="button" className="button secondary" onClick={activateWaitingUpdate}>Apply safe update</button>}<button type="button" className="button secondary" onClick={installApp}>{installKind === 'ios' ? 'Add to Home Screen help' : installPrompt ? 'Install HashWing' : 'Install help'}</button><button type="button" className="text-action" onClick={() => setFeedbackDialogOpen(true)}>Report a bug</button></div></section></details>}
     </main>
     <FooterLinks onFeedback={() => setFeedbackDialogOpen(true)} onInstall={installApp} />
@@ -1609,172 +1767,7 @@ function App() {
   </div>;
 }
 
-const LANDING_MENUS = [
-  { id: 'features', label: 'Features', columns: [
-    [['Verify a log', 'Check chain integrity and inspect the first failure.', '/app/verify', ShieldCheck], ['Seal after download', 'Create a local hash chain and portable receipts.', '/app/sandbox', FileCheck2]],
-    [['Inspect records', 'Browse indexed records and selected details.', '/app/records', List], ['Review receipts', 'Check signatures and record coverage separately.', '/app/receipts', Stamp]],
-    [['Align local video', 'Use record timestamps as a playback aid.', '/app/video', Video], ['Trust and limits', 'Read what the evidence does and does not establish.', '/app/help', CircleHelp]],
-  ] },
-  { id: 'use-cases', label: 'Use Cases', columns: [
-    [['After a flight', 'Seal a downloaded log without claiming capture-time proof.', '/app/sandbox', FileCheck2], ['Independent review', 'Hand off a log, receipts and public key.', '/app/receipts', Stamp]],
-    [['Changed file', 'Locate the first inconsistent record and byte offset.', '/app/verify', ShieldCheck], ['Local inspection', 'Review selected records and supported telemetry.', '/app/records', MapPin]],
-  ] },
-  { id: 'how-it-works', label: 'How It Works', columns: [
-    [['Choose a source', 'Work with a local .fseal log, ULog or timestamped TSV.', '/app/verify', FileUp], ['Check the chain', 'The browser runs the native C++ verifier locally.', '/app/verify', ShieldCheck]],
-    [['Keep portable evidence', 'Export reports and retain receipts with a separate witness.', '/app/receipts', ArrowRight]],
-  ] },
-  { id: 'trust', label: 'Trust / Docs', columns: [
-    [['Trust boundaries', 'Integrity is separate from sensor truth and key identity.', '/app/help', CircleHelp], ['Source and security', 'Review source, format contracts and reporting guidance.', 'https://github.com/anirudh763/flightseal', LockKeyhole]],
-  ] },
-  { id: 'tools', label: 'More Tools', columns: [SUITE_LINKS.map((tool) => [
-    `${tool.name}${tool.state === 'unavailable' ? ' · currently unavailable (HTTP 404)' : ''}`,
-    tool.state === 'unavailable' ? 'Configured destination; last checked 2026-11-15 and returned 404.' : 'Open this separate tool. No files or account data are transferred.',
-    tool.href,
-    ArrowRight,
-    tool.state,
-  ])] },
-];
-
-function SkipLink({ targetId = 'main' }) {
-  return <a className="skip-link" href={`#${targetId}`} onClick={(event) => { event.preventDefault(); document.getElementById(targetId)?.focus(); }}>{'Skip to content'}</a>;
-}
-
-function LandingPage({ onProtect, onDemo, onContinue, result, busy, error, installKind, onInstall, onFeedback, installOpen, onInstallClose, feedbackOpen, onFeedbackClose, route }) {
-  const [openMenu, setOpenMenu] = useState(null);
-  const [mobileOpen, setMobileOpen] = useState(false);
-  const [slide, setSlide] = useState(0);
-  const [paused, setPaused] = useState(false);
-  const [pointerInside, setPointerInside] = useState(false);
-  const [focusInside, setFocusInside] = useState(false);
-  const [reducedMotion, setReducedMotion] = useState(() => matchMedia('(prefers-reduced-motion: reduce)').matches);
-  const navRef = useRef(null);
-  const menuButtonRefs = useRef(new Map());
-  const clickedMenuRef = useRef(null);
-  const previewRef = useRef(null);
-  const slides = [
-    { title: 'Selected source', text: 'Included 800-record demonstration log', kind: 'source', label: 'intact.fseal', meta: '107 KiB · local file', state: 'Ready to inspect' },
-    { title: 'Separate verdicts', text: 'Integrity, receipt signatures and coverage are distinct checks.', kind: 'verdict', label: 'INTACT', meta: 'Signature checked · 800 covered · 0 uncovered', state: 'Included demonstration fixture' },
-    { title: 'First failure', text: 'A changed file reports the first inconsistent record and byte offset.', kind: 'failure', label: 'First failure', meta: 'Record · offset · expected · actual', state: 'Values come from the selected file' },
-    { title: 'Portable handoff', text: 'Keep the log, receipts and public key together for another reviewer.', kind: 'handoff', label: 'Evidence bundle', meta: 'Log · receipts · public key · text / JSON / PDF', state: 'No cloud custody or legal certification' },
-  ];
-
-  useEffect(() => {
-    const query = matchMedia('(prefers-reduced-motion: reduce)');
-    const update = () => setReducedMotion(query.matches);
-    query.addEventListener?.('change', update);
-    return () => query.removeEventListener?.('change', update);
-  }, []);
-  useEffect(() => {
-    if (paused || pointerInside || focusInside || reducedMotion) return undefined;
-    const timer = setInterval(() => setSlide((current) => (current + 1) % slides.length), 6000);
-    return () => clearInterval(timer);
-  }, [paused, pointerInside, focusInside, reducedMotion, slides.length]);
-  useEffect(() => {
-    const close = (event) => {
-      if (event.key !== 'Escape') return;
-      if (openMenu) {
-        event.preventDefault();
-        const button = menuButtonRefs.current.get(openMenu);
-        setOpenMenu(null);
-        button?.focus();
-      } else if (mobileOpen) {
-        event.preventDefault(); setMobileOpen(false); document.querySelector('.landing-mobile-toggle')?.focus();
-      }
-    };
-    addEventListener('keydown', close);
-    return () => removeEventListener('keydown', close);
-  }, [openMenu, mobileOpen]);
-
-  const renderMenu = (menu) => <div className="landing-nav-item" key={menu.id} onMouseEnter={() => setOpenMenu(menu.id)}>
-    <button ref={(node) => node && menuButtonRefs.current.set(menu.id, node)} type="button" className="landing-nav-trigger" aria-expanded={openMenu === menu.id} aria-controls={`mega-${menu.id}`} onKeyDown={(event) => { if (event.key === 'ArrowDown') { event.preventDefault(); setOpenMenu(menu.id); requestAnimationFrame(() => document.querySelector(`#mega-${menu.id} a`)?.focus()); } }} onClick={() => { if (openMenu === menu.id && clickedMenuRef.current === menu.id) { clickedMenuRef.current = null; setOpenMenu(null); } else { clickedMenuRef.current = menu.id; setOpenMenu(menu.id); } }}>{menu.label}<ChevronDown size={14} aria-hidden="true" /></button>
-    <div id={`mega-${menu.id}`} className="mega-menu" hidden={openMenu !== menu.id}>
-      {menu.columns.map((column, columnIndex) => <div className="mega-column" key={`${menu.id}-${columnIndex}`}>{column.map(([title, description, href, Icon, state]) => { const external = href.startsWith('http'); const target = external ? href : `#${href}`; const unavailable = state === 'unavailable'; return <a key={title} href={target} aria-disabled={unavailable ? 'true' : undefined} target={external && !unavailable ? '_blank' : undefined} rel={external && !unavailable ? 'noreferrer' : undefined} className={`mega-link${unavailable ? ' is-unavailable' : ''}`} onClick={(event) => { if (unavailable) { event.preventDefault(); return; } setOpenMenu(null); setMobileOpen(false); }}><Icon size={17} aria-hidden="true" /><span><strong>{title}</strong><small>{description}</small></span><ArrowRight size={14} aria-hidden="true" /></a>; })}</div>)}
-    </div>
-  </div>;
-
-  return <div className="landing-page">
-    <SkipLink />
-    <header className="landing-header" onMouseLeave={() => { setOpenMenu(null); clickedMenuRef.current = null; }}>
-      <a className="landing-brand" href="#/"><span className="brand-mark" aria-hidden="true">H</span><span>HashWing</span></a>
-      <button className="landing-mobile-toggle" type="button" aria-expanded={mobileOpen} aria-controls="landing-navigation" onClick={() => setMobileOpen((value) => !value)}><Menu size={18} aria-hidden="true" />Menu</button>
-      <nav id="landing-navigation" className={`landing-navigation${mobileOpen ? ' is-open' : ''}`} aria-label="Main navigation" ref={navRef}>
-        <div className="landing-menu-items">{LANDING_MENUS.map(renderMenu)}</div>
-        <div className="landing-actions"><button className="landing-demo" type="button" onClick={onDemo}>Run real verification <ArrowRight size={15} aria-hidden="true" /></button></div>
-      </nav>
-      <nav className="landing-persistent-actions" aria-label="Account and workspace"><a href="#/login">Log in</a><a href="#/signup">Create account</a><button type="button" onClick={onContinue}>Launch Workspace</button></nav>
-    </header>
-    <main id="main" className="landing-main" tabIndex="-1">
-      <section className="landing-hero" aria-labelledby="page-landing">
-        <div className="landing-hero-copy"><p className="landing-kicker">Local flight log verification</p><h1 id="page-landing" tabIndex="-1">Check the log.<br />Keep the evidence.</h1><p className="landing-lede">Seal a downloaded flight log, verify its chain, and hand off receipts for independent review.</p><div className="landing-hero-actions"><button className="landing-demo" type="button" onClick={onProtect}>Seal a flight log <ArrowRight size={16} aria-hidden="true" /></button><button className="landing-secondary-button" type="button" onClick={onDemo} disabled={!!busy}>Run real verification</button><a href="#/signup" className="landing-secondary">Create account</a><button type="button" className="landing-secondary-button" onClick={onContinue}>Launch Workspace</button></div><p className="landing-local-note"><LockKeyhole size={14} aria-hidden="true" />Files are analyzed locally. Uploads require Save current run; private keys and video stay in this tab.</p></div>
-        {busy && <p role="status" className="hero-verify-status">{busy}</p>}
-        {error && <p role="alert" className="hero-verify-error">{error}</p>}
-        {result && <section className="hero-actual-result" aria-label="Live verification result"><div><span>Actual C++ / OpenSSL / WebAssembly result</span><strong>{humanStatus(result.overallVerdict || result.native.verdict)[0]}</strong></div><dl><div><dt>Chain</dt><dd>{humanStatus(result.native.status)[0]}</dd></div><div><dt>Receipts</dt><dd>{result.needsTrustedKey ? 'Signature unchecked' : result.receiptChecks.length ? 'Checked against bundled demo key' : 'Not supplied'}</dd></div><div><dt>Coverage</dt><dd>{fmtBig(result.receiptCoverage?.covered ?? result.native.covered)} / {fmtBig(result.native.records)}</dd></div></dl><p>Integrity does not establish sensor truth, capture time, identity or independent custody.</p><button className="button secondary" type="button" onClick={onContinue}>Inspect records and export <ArrowRight size={15} aria-hidden="true" /></button></section>}
-        <div className="preview-stage" ref={previewRef} aria-label="HashWing product preview" onMouseEnter={() => setPointerInside(true)} onMouseLeave={() => setPointerInside(false)} onFocusCapture={() => setFocusInside(true)} onBlurCapture={(event) => { if (!event.currentTarget.contains(event.relatedTarget)) setFocusInside(false); }}>
-          <div className="preview-stage-head"><span>Product preview</span><span className="fixture-tag">Included fixture</span></div>
-          <div className="preview-slides">{slides.map((item, index) => <article key={item.kind} className={`preview-slide preview-${item.kind}`} hidden={index !== slide} aria-hidden={index !== slide}>
-            <div className="preview-window"><div className="preview-window-top"><span className="preview-glyph">H</span><span>HashWing <small>/ {item.title}</small></span><span className="preview-local">Local</span></div>
-              {item.kind === 'source' && <div className="preview-source"><div><span>Selected source</span><strong>{item.label}</strong><small>{item.meta}</small></div><span className="preview-source-state"><Check size={14} aria-hidden="true" /> {item.state}</span></div>}
-              {item.kind === 'verdict' && <div className="preview-verdict"><div className="preview-result"><span className="result-check"><Check size={17} aria-hidden="true" /></span><span><strong>{item.label}</strong><small>{item.state}</small></span></div><div className="preview-checks"><div><span>Chain integrity</span><b>Intact</b></div><div><span>Receipt signature</span><b>Checked</b></div><div><span>Receipt coverage</span><b>800 / 800</b></div></div><small className="preview-note">{item.meta}</small></div>}
-              {item.kind === 'failure' && <div className="preview-failure"><span className="preview-alert">First failure</span><p>{item.text}</p><dl><dt>Record</dt><dd>From selected file</dd><dt>Byte offset</dt><dd>From selected file</dd><dt>Expected / actual</dt><dd>Shown in report</dd></dl><small>{item.state}</small></div>}
-              {item.kind === 'handoff' && <div className="preview-handoff"><div className="handoff-mark"><Stamp size={22} aria-hidden="true" /><span>{item.label}</span></div><div className="handoff-files"><span>flight.fseal</span><span>flight.receipts</span><span>public-key.txt</span></div><div className="handoff-actions"><span>Download text</span><span>Download JSON</span><span>Export PDF</span></div><small>{item.state}</small></div>}
-            </div>
-            <p className="preview-caption">{item.text}</p>
-          </article>)}</div>
-          <div className="preview-controls"><div role="group" aria-label="Choose product preview">{slides.map((item, index) => <button key={item.kind} type="button" aria-pressed={slide === index} aria-label={`Show ${item.title} preview`} onClick={() => setSlide(index)}>{item.title}</button>)}</div><button className="preview-pause" type="button" disabled={reducedMotion} aria-label={reducedMotion ? 'Autoplay disabled by reduced motion' : paused ? 'Play previews' : 'Pause previews'} onClick={() => setPaused((value) => !value)}>{paused ? <Play size={14} aria-hidden="true" /> : <Pause size={14} aria-hidden="true" />}{reducedMotion ? 'Reduced motion' : paused ? 'Play' : 'Pause'}</button></div>
-        </div>
-      </section>
-      <section className="landing-proof" aria-label="What HashWing checks"><article><h2>Integrity</h2><p>Verify linked records and locate the first failure.</p></article><article><h2>Receipt signatures</h2><p>Check a supplied signature against a key you trust.</p></article><article><h2>Coverage</h2><p>See which records receipts cover and which remain uncovered.</p></article><article><h2>Handoff</h2><p>Keep portable logs, receipts, keys and readable reports.</p></article></section>
-      <section className="mavframe-handoff" aria-labelledby="mavframe-handoff-title"><div><span className="landing-kicker">Separate tool · no file transfer</span><h2 id="mavframe-handoff-title">Continue with a raw telemetry capture</h2><p>Mavframe accepts .tlog and raw MAVLink v1/v2 streams. HashWing accepts .fseal, PX4 .ulg, timestamped TSV/TXT, CSV, JSON and MAVLink .tlog. These formats are not interchangeable. To inspect a capture in Mavframe, open it there separately; no local file is sent in this link.</p></div><a href="https://anirudh763.github.io/mavframe/" target="_blank" rel="noreferrer">Open Mavframe <ArrowRight size={15} aria-hidden="true" /></a></section>
-      <section className="landing-how" aria-labelledby="how-title"><div><span className="landing-kicker">A local workflow</span><h2 id="how-title">From download to review</h2></div><ol><li><span>Choose</span><p>Open a flight log from this device, or start with the included sample.</p></li><li><span>Verify or seal</span><p>Check an existing chain, or seal a downloaded TSV after the flight.</p></li><li><span>Hand off</span><p>Share the log, receipts and public key with a reviewer through a separate channel.</p></li></ol></section>
-      <section className="landing-trust" aria-labelledby="trust-title"><div><span className="landing-kicker">Trust boundaries</span><h2 id="trust-title">Integrity has a clear limit.</h2></div><p>An intact chain does not prove sensor truth, acquisition time, legal certification or independent custody. A supplied public key is not automatically a trusted identity. HashWing runs locally and has no cloud receipt service.</p><a href="/flightseal/console/#/app/help">Read trust and format details <ArrowRight size={15} aria-hidden="true" /></a></section>
-      <section className="team-access" aria-labelledby="team-access-title"><div><span className="landing-kicker">Optional · prospective service</span><h2 id="team-access-title">Team &amp; Cloud Early Access</h2><p>Local verification remains free. This form is for interest in possible future team workflows; no hosted service or waitlist is active unless a remote endpoint is configured.</p></div><TeamAccessForm /></section>
-    </main>
-    <FooterLinks onFeedback={onFeedback} onInstall={onInstall}>
-    <div className="landing-footer"><a className="landing-brand" href="#/"><span className="brand-mark" aria-hidden="true">H</span><span>HashWing</span></a><span>Free local tools · No paid tiers</span><nav aria-label="Footer links"><a href="#/app/help">Trust and docs</a><a href="https://github.com/anirudh763/flightseal" target="_blank" rel="noreferrer">Source</a><a href="#/login">Log in</a></nav></div>
-    </FooterLinks>
-    <InstallGuide open={installOpen} onClose={onInstallClose} ios={installKind === 'ios'} />
-    <FeedbackDialog open={feedbackOpen} onClose={onFeedbackClose} route={route} />
-  </div>;
-}
-
-function TeamAccessForm() {
-  const [email, setEmail] = useState('');
-  const [teamSize, setTeamSize] = useState('');
-  const [useCase, setUseCase] = useState('');
-  const [status, setStatus] = useState('');
-  const [pending, setPending] = useState(false);
-  const [requestError, setRequestError] = useState('');
-  const endpoint = typeof __EARLY_ACCESS_ENDPOINT__ === 'undefined' ? '' : __EARLY_ACCESS_ENDPOINT__;
-  const submit = async (event) => {
-    event.preventDefault(); setStatus(''); setRequestError('');
-    if (!event.currentTarget.reportValidity()) return;
-    const request = { email: email.trim(), teamSize, useCase: useCase.trim() };
-    if (!endpoint || !navigator.onLine) {
-      try {
-        localStorage.setItem('flightseal_early_access_draft_v1', JSON.stringify({ ...request, savedAt: new Date().toISOString(), delivery: 'local-draft-only' }));
-        setStatus('Local draft saved in this browser. No request was sent or remotely received.');
-      } catch { setRequestError('Could not save this local draft. Browser storage may be blocked or full.'); }
-      return;
-    }
-    setPending(true);
-    try {
-      await deliverEarlyAccessRequest(endpoint, request);
-      setStatus('Request received by the configured endpoint.');
-    } catch (cause) { setRequestError(`${cause?.message || 'Could not reach the configured endpoint.'} Your request was not queued; retry explicitly when online or save a local draft.`); }
-    finally { setPending(false); }
-  };
-  return <form className="team-access-form" onSubmit={submit}>
-    <label htmlFor="team-email">Email</label><input id="team-email" type="email" autoComplete="email" maxLength="254" required value={email} onChange={(event) => setEmail(event.target.value)} />
-    <label htmlFor="team-size">Team size</label><select id="team-size" required value={teamSize} onChange={(event) => setTeamSize(event.target.value)}><option value="">Choose a range</option><option>1–5</option><option>6–20</option><option>21–100</option><option>101+</option></select>
-    <label htmlFor="team-use-case">Use case</label><textarea id="team-use-case" maxLength="1000" rows="3" required value={useCase} onChange={(event) => setUseCase(event.target.value)} />
-    <p className="team-access-privacy">{endpoint ? 'On submit, these three fields go to the configured public form endpoint. No logs or files are sent.' : 'No request endpoint is configured. Submit saves only a draft in this browser; it does not enroll you in a waitlist.'} Analytics are disabled.</p>
-    {status && <p role="status" className="team-access-status">{status}</p>}{requestError && <p role="alert" className="team-access-error">{requestError}</p>}
-    <button className="button secondary" type="submit" disabled={pending}>{pending ? 'Sending request…' : endpoint ? 'Send early access request' : 'Save local draft'}</button>
-    {status && !endpoint && <button className="text-action" type="button" onClick={() => { localStorage.removeItem('flightseal_early_access_draft_v1'); setStatus('Local draft removed.'); }}>Remove local draft</button>}
-  </form>;
-}
-
-function AuthPage({ mode, returnTo, guestCanImport, currentSampleName, outputNeedsAck, onReturnToWorkspace, expectedEpoch, isCurrent, onAuthAttempt, onLogin, onSignup, onComplete, onDemo, installKind, onInstall, onFeedback, installOpen, onInstallClose, feedbackOpen, onFeedbackClose, route }) {
+function AuthPage({ mode, returnTo, guestCanImport, currentSampleName, outputNeedsAck, unsavedControl, onReturnToWorkspace, expectedEpoch, isCurrent, onAuthAttempt, onLogin, onSignup, onComplete, onDemo, installKind, onInstall, onFeedback, installOpen, onInstallClose, feedbackOpen, onFeedbackClose, route }) {
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [confirm, setConfirm] = useState('');
@@ -1802,7 +1795,7 @@ function AuthPage({ mode, returnTo, guestCanImport, currentSampleName, outputNee
     <main id="auth-main" className={`auth-layout${creating ? ' auth-signup' : ''}`} tabIndex="-1">
       <section className="auth-context"><span className="landing-kicker">Local profile</span><h1>{creating ? 'Keep your workspace context.' : 'Return to your saved view.'}</h1><p>Profiles are stored only in this browser. They help restore an included-sample view; they do not upload files or create a cloud account.</p><ul><li><Check size={16} aria-hidden="true" />All HashWing tools stay free.</li><li><Check size={16} aria-hidden="true" />Flight logs, receipts and keys are not saved in a profile.</li><li><Check size={16} aria-hidden="true" />Passwords use a salted PBKDF2 verifier on this device.</li></ul><a href="#/app/help">Read local handling and trust limits <ArrowRight size={14} aria-hidden="true" /></a></section>
       <section className="auth-form-wrap" aria-labelledby={`page-${mode}`}><div className="auth-form-card"><p className="landing-kicker">{creating ? 'Create a local account' : 'Log in on this device'}</p><h2 id={`page-${mode}`} tabIndex="-1">{creating ? 'Create account' : 'Log in'}</h2><form onSubmit={submit} noValidate>
-        {outputNeedsAck && <div className="auth-output-warning" role="alert"><p>A sealed output is still waiting to be downloaded or acknowledged in this tab.</p><button type="button" className="auth-return-workspace" onClick={onReturnToWorkspace}>Return to workspace</button></div>}
+        {outputNeedsAck && <div className="auth-output-warning" role="alert"><p>This tab has work that is not saved yet. Download it before you sign in.</p>{unsavedControl}<button type="button" className="auth-return-workspace" onClick={onReturnToWorkspace}>Return to workspace</button></div>}
         <div className="auth-field"><label htmlFor="auth-email">Email</label><input id="auth-email" type="email" name="email" autoComplete="email" inputMode="email" maxLength="254" required value={email} onChange={(event) => setEmail(event.target.value)} /></div>
         <div className="auth-field"><label htmlFor="auth-password">Password</label><div className="auth-password-wrap"><input id="auth-password" type={showPassword ? 'text' : 'password'} name="password" autoComplete={creating ? 'new-password' : 'current-password'} minLength="12" maxLength="128" required value={password} onChange={(event) => setPassword(event.target.value)} aria-describedby="password-help" /><button type="button" className="password-toggle" aria-label={showPassword ? 'Hide password' : 'Show password'} aria-pressed={showPassword} onClick={() => setShowPassword((value) => !value)}>{showPassword ? 'Hide' : 'Show'}</button></div><small id="password-help">Use 12–128 characters. Paste and password managers are supported.</small></div>
         {creating && <div className="auth-field"><label htmlFor="auth-confirm">Confirm password</label><input id="auth-confirm" type={showPassword ? 'text' : 'password'} name="confirm-password" autoComplete="new-password" minLength="12" maxLength="128" required value={confirm} onChange={(event) => setConfirm(event.target.value)} /></div>}
@@ -1812,7 +1805,7 @@ function AuthPage({ mode, returnTo, guestCanImport, currentSampleName, outputNee
         <button className="auth-submit" type="submit" disabled={pending || outputNeedsAck}>{creating ? 'Create account' : 'Log in'} <ArrowRight size={16} aria-hidden="true" /></button>
       </form>
       <div className="auth-switch">{creating ? <>Already have a local profile? <a href="#/login">Log in</a></> : <>New on this device? <a href="#/signup">Create account</a></>}</div>{guestCanImport && <button type="button" className="auth-return-workspace" onClick={onReturnToWorkspace}>Cancel and return to guest workspace</button>}
-      <button className="auth-demo" type="button" disabled={outputNeedsAck} onClick={() => { if (onDemo() === false) setError('Download or acknowledge the pending sealed output first.'); }}><FlaskConical size={16} aria-hidden="true" />Continue with Demo</button>
+      <button className="auth-demo" type="button" disabled={outputNeedsAck} onClick={() => { if (onDemo() === false) setError('Download your unsaved work first.'); }}><FlaskConical size={16} aria-hidden="true" />Continue with Demo</button>
       <p className="auth-recovery-note">No email, password-reset or cloud service is connected. If this browser's profile data is cleared, the profile cannot be recovered.</p>
       </div></section>
     </main>
@@ -1993,7 +1986,7 @@ function EncryptedBackupControls({ profileId, isOwnerCurrent }) {
     <h2>Encrypted backup</h2>
     <label className="field-label" htmlFor="backup-passphrase">Backup passphrase</label>
     <input id="backup-passphrase" type="password" autoComplete="new-password" minLength={12} maxLength={128} value={passphrase} onChange={(event) => { changeInput(); setPassphrase(event.target.value); }} placeholder="12–128 characters" />
-    <button type="button" disabled={busy || !profileId || passphrase.length < 12} onClick={exportBackup}>Download encrypted backup</button>
+    {profileId && <button type="button" disabled={busy || passphrase.length < 12} onClick={exportBackup}>Download encrypted backup</button>}
     <label className="field-label" htmlFor="backup-file">Restore encrypted backup</label>
     <input id="backup-file" type="file" accept="application/vnd.flightseal.profile-backup+json,.json" onChange={(event) => { changeInput(); setFile(event.target.files?.[0] || null); }} />
     <button type="button" disabled={busy || !file || passphrase.length < 12} onClick={inspectBackup}>Check backup and preview</button>
@@ -2003,29 +1996,33 @@ function EncryptedBackupControls({ profileId, isOwnerCurrent }) {
   </section>;
 }
 
-function ProfileMenu({ isCurrent, session, profile, currentSample, savedContext, savedContextError, hasUnacknowledgedOutput, message, onSave, onRestore, onDeleteSaved, onRemoveProfile, onLogout, onNavigateAuth, syncStatus }) {
+function ProfileMenu({ isCurrent, session, profile, currentSample, savedContext, savedContextError, hasUnacknowledgedOutput, unsavedControl, message, onSave, onRestore, onDeleteSaved, onRemoveProfile, onLogout, onNavigateAuth, syncStatus }) {
   const menuRef = useRef(null);
-  const email = profile?.email || (session?.kind === 'guest' ? 'Demo session' : 'Workspace access');
+  const account = session?.kind === 'account';
+  const email = profile?.email || 'Local profile';
+  // AC-61: one menu, "Profile on this device". It shows the open profile's email; company sign-in lives only on Trust.
   return <details className="profile-menu" ref={menuRef} onKeyDown={closeDisclosure}>
-    <summary aria-label={session?.kind === 'account' ? `Profile menu for ${email}` : email}><UserRound size={15} aria-hidden="true" /><span>{email}</span><ChevronDown size={14} aria-hidden="true" /></summary>
+    <summary aria-label={account ? `Profile on this device: ${email}` : 'Profile on this device'}><UserRound size={15} aria-hidden="true" /><span>{account ? email : 'Profile on this device'}</span><ChevronDown size={14} aria-hidden="true" /></summary>
     <div className="profile-menu-panel">
-      <p className="profile-menu-identity"><strong>{email}</strong><span>{session?.kind === 'account' ? 'Local profile · this device only' : session?.kind === 'guest' ? 'Separate guest session' : 'No active session'}</span></p>
-      <EncryptedBackupControls isOwnerCurrent={isCurrent} profileId={session?.kind === 'account' ? profile?.id : null} />
+      <p className="profile-menu-identity"><strong>{account ? email : session?.kind === 'guest' ? 'Demo session' : 'Guest'}</strong><span>{account ? 'Local profile' : session?.kind === 'guest' ? 'Separate from every local profile' : 'No local profile open'}</span></p>
+      <p className="profile-menu-note">Profiles live in this browser. They are not company accounts.</p>
+      {account && <EncryptedBackupControls isOwnerCurrent={isCurrent} profileId={profile?.id} />}
       <p className="profile-menu-note">Cloud sync: {syncStatus === 'configured' ? 'connector configured; local profiles are not cloud credentials' : 'not configured'}. No local logs or keys are uploaded.</p>
-      {session?.kind === 'account' ? <>
+      {account ? <>
         <button type="button" onClick={onSave} disabled={!currentSample || !!savedContextError}>Save included-sample view</button>
         <button type="button" onClick={onRestore} disabled={!savedContext}>Restore saved view{savedContext ? ` · ${savedContext.screen}` : ''}</button>
         {(savedContext || savedContextError) && <button type="button" onClick={onDeleteSaved}>{savedContextError ? 'Remove damaged saved view' : 'Remove saved view'}</button>}
         <p className="profile-menu-note">Files, receipts, keys and payloads are not saved.</p>
-        {hasUnacknowledgedOutput && <p className="profile-menu-message" role="alert">Download or acknowledge the pending output before logging out.</p>}
+        {hasUnacknowledgedOutput && <><p className="profile-menu-message" role="alert">This tab has work that is not saved yet. Download it before you log out.</p>{unsavedControl}</>}
         {savedContextError && <p className="profile-menu-message" role="alert">{savedContextError}</p>}
         {message && <p className="profile-menu-message" role="status">{message}</p>}
         <button type="button" className="profile-logout" disabled={hasUnacknowledgedOutput} onClick={onLogout}>Log out</button><button type="button" className="profile-remove" disabled={hasUnacknowledgedOutput} onClick={onRemoveProfile}>Remove local profile and saved view</button>
       </> : <>
-        {session?.kind === 'guest' && <p className="profile-menu-note">Guest state is separate from every local profile.</p>}
-        <button type="button" onClick={() => onNavigateAuth('signup')}>Create local account</button>
-        <button type="button" onClick={() => onNavigateAuth('login')}>Log in</button>
+        <button type="button" onClick={() => onNavigateAuth('login')}>Use a local profile</button>
+        <button type="button" onClick={() => onNavigateAuth('signup')}>Create a local profile</button>
+        {session?.kind === 'guest' && hasUnacknowledgedOutput && <><p className="profile-menu-message" role="alert">This tab has work that is not saved yet. Download it before you end the session.</p>{unsavedControl}</>}
         {session?.kind === 'guest' && <button type="button" className="profile-logout" disabled={hasUnacknowledgedOutput} onClick={onLogout}>End demo session</button>}
+        <EncryptedBackupControls isOwnerCurrent={isCurrent} profileId={null} />
       </>}
     </div>
   </details>;
@@ -2173,6 +2170,8 @@ async function hashAll(files, signal, onProgress) {
   }
   return out;
 }
+const TOO_LARGE_FOR_SMALL = `This file is larger than ${RAW_MAX_BYTES / 1024 / 1024} MiB. Choose Large files instead.`;
+const PROTECT_STEPS = ['Reading the file', 'Sealing', 'Checking the seal', 'Rebuilding the original to double-check'];
 const percent = (done, size) => (size ? Math.floor((done / size) * 100) : 100);
 function FileProgressList({ files, progress, idPrefix, label, onCancel }) {
   return <ol className="manifest-file-list" aria-label={label}>{files.map((file, index) => {
@@ -2180,11 +2179,11 @@ function FileProgressList({ files, progress, idPrefix, label, onCancel }) {
     const active = progress?.index === index;
     const seconds = active ? (performance.now() - progress.started) / 1000 : 0;
     return <li key={`${index}-${file.name}`}>
-      <div className="manifest-file-row"><span className="manifest-file-name">{file.name}</span><span className="mono-values">{fmtBytes(file.size)}</span></div>
+      <div className="manifest-file-row"><span className="manifest-file-name">{file.name}</span><span className="mono-values">{exactBytes(file.size)}</span></div>
       {done !== null && <div className="manifest-progress">
         <progress id={`${idPrefix}-progress-${index}`} aria-label={`${file.name} progress`} max={Math.max(1, file.size)} value={done} />
         <span className="mono-values">{percent(done, file.size)}%{active && seconds > 0.2 ? ` · ${(done / 1e6 / seconds).toFixed(1)} MB/s` : ''}</span>
-        {active && <button className="button secondary" type="button" onClick={onCancel}>Cancel</button>}
+        {active && onCancel && <button className="button secondary" type="button" onClick={onCancel}>Cancel</button>}
       </div>}
     </li>;
   })}</ol>;
@@ -2195,7 +2194,7 @@ const friendlyLimit = (cause) => cause instanceof RangeError && /exceeds 65536 b
   : / name /.test(cause.message) ? `${cause.message} Rename the file or turn off Include file names under More options, then press Seal again.`
   : `${cause.message} Shorten it under More options, then press Seal again.`;
 
-function ManifestSeal({ signingKey, onActiveChange, onSealed }) {
+function ManifestSeal({ hidden, output, setOutput, carry, common, jobRef, signingKey, onActiveChange, onUnsaved, onSealed, onDone, onSealMore, shareNote }) {
   const [files, setFiles] = useState([]);
   const [includeNames, setIncludeNames] = useState(false);
   const [notes, setNotes] = useState({});
@@ -2204,26 +2203,47 @@ function ManifestSeal({ signingKey, onActiveChange, onSealed }) {
   const [derived, setDerived] = useState({});
   const [progress, setProgress] = useState(null);
   const [phase, setPhase] = useState('');
-  const [output, setOutput] = useState(null);
   const [message, setMessage] = useState('');
+  const [copyStatus, setCopyStatus] = useState('');
   const [error, setError] = useState('');
   const controllerRef = useRef(null);
+  const headingRef = useRef(null);
+  const carriedRef = useRef(false);
   useEffect(() => () => controllerRef.current?.abort(), []);
-  useEffect(() => { onActiveChange(!!phase || (!!output && !output.saved)); }, [phase, output, onActiveChange]);
+  const unsavedList = !!output && !(output.saved.file && output.saved.receipt); // the list and its receipt message, as #37 keeps them
+  useEffect(() => { onActiveChange(!!phase || unsavedList); }, [phase, unsavedList, onActiveChange]);
+  useEffect(() => { onDone(!!output); if (output) headingRef.current?.focus(); }, [output?.log]); // eslint-disable-line react-hooks/exhaustive-deps -- seal finished: the handoff heading
+  const fail = (text) => { setError(text); requestAnimationFrame(() => document.getElementById('manifest-files')?.focus()); }; // the message is read with the field
   useEffect(() => () => onActiveChange(false), [onActiveChange]);
-  const reset = () => { controllerRef.current?.abort(); setOutput(null); setMessage(''); setError(''); };
+  useEffect(() => { // the sealed list and its receipt, until the list is downloaded; kept after this panel unmounts
+    if (!output) return;
+    onUnsaved(!unsavedList ? null : { files: [{ name: output.log.name, blob: output.log }, { name: `${output.base}.receipt.txt`, bytes: new TextEncoder().encode(output.handover) }], markSaved: () => { // only this exact result, never a newer one
+      setOutput((current) => (current?.log === output.log ? { ...current, saved: { file: true, receipt: true } } : current)); onUnsaved((current) => (current?.files?.[0]?.blob === output.log ? null : current)); } });
+  }, [output, unsavedList, onUnsaved]); // eslint-disable-line react-hooks/exhaustive-deps
+  const reset = () => { controllerRef.current?.abort(); setOutput(null); setMessage(''); setCopyStatus(''); setError(''); };
+  useEffect(() => { // a file too large for Small file arrives already chosen, ready for "Seal the list"
+    if (!carry || output || phase) return;
+    choose([carry.file]); carriedRef.current = true;
+  }, [carry]); // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => { // enabled now; the native field names the carried file too, instead of "No file chosen"
+    if (!carriedRef.current || !files.length) return;
+    carriedRef.current = false;
+    try { const list = new DataTransfer(); files.forEach((file) => list.items.add(file)); document.getElementById('manifest-files').files = list.files; } catch { /* the list below still names it */ }
+    document.getElementById('manifest-seal')?.focus();
+  }, [files]);
   const choose = (list) => {
     reset(); setNotes({}); setEdited({}); setDerived({}); setLandingLocal(''); // a landing time belongs to one batch
     const picked = [...(list || [])];
-    if (picked.length > MANIFEST_LIMITS.maxItems) { setFiles([]); setError(`You picked ${picked.length} files. Choose up to ${MANIFEST_LIMITS.maxItems} at a time, and seal the rest as a second list.`); return; }
+    if (picked.length > MANIFEST_LIMITS.maxItems) { setFiles([]); fail(`You picked ${picked.length} files. Choose up to ${MANIFEST_LIMITS.maxItems} at a time, and seal the rest as a second list.`); return; }
     setFiles(picked);
   };
   const itemsFor = (digests) => files.map((file, index) => ({ bytes: digests ? digests[index].bytes : file.size, sha256: digests ? digests[index].sha256 : '0'.repeat(64), name: includeNames ? file.name : '', note: composeNote({ landing: toIsoFromLocal(landingLocal), edited: !!edited[index], derivedFrom: edited[index] ? derived[index] : '', note: notes[index] }) }));
   const seal = async () => {
     reset();
     // Same length as the real payload, so a long note or name fails now rather than after hours of hashing.
-    try { encodeManifest({ salt: '0'.repeat(64), items: itemsFor(null) }); } catch (cause) { setError(cause?.code === 'note-tag' ? cause.message : friendlyLimit(cause)); return; }
+    try { encodeManifest({ salt: '0'.repeat(64), items: itemsFor(null) }); } catch (cause) { fail(cause?.code === 'note-tag' ? cause.message : friendlyLimit(cause)); return; }
     const controller = new AbortController(); controllerRef.current = controller;
+    const sealStart = __REGISTRY_URL__ && onSealed ? registrySealStart() : null; // hashing can take hours: bind to the owner signed in now
     setPhase('hashing');
     try {
       const hashed = await hashAll(files, controller.signal, setProgress);
@@ -2243,35 +2263,58 @@ function ManifestSeal({ signingKey, onActiveChange, onSealed }) {
       const base = `hashwing-${stamp()}`;
       const fingerprint = await fingerprintHex(sealed.publicKey);
       setOutput({
-        base, publicKey: sealed.publicKey, fingerprint, items: items.length, total: hashed.reduce((sum, item) => sum + item.bytes, 0), saved: false,
+        base, publicKey: sealed.publicKey, fingerprint, items: items.length, total: hashed.reduce((sum, item) => sum + item.bytes, 0), savedKey: !!signingKey?.privateKeyPem, saved: { file: false, receipt: false }, names: files.map((file) => file.name), jobRef: jobRef.trim(),
         log: new File([sealed.log], `${base}.manifest.fseal`, { type: 'application/octet-stream' }),
         handover: manifestHandoverText({ items: items.length, receipts: sealed.receipts, publicKey: sealed.publicKey, sealedAt: new Date().toISOString() }),
       });
-      setMessage('Sealed and checked on this device.');
-      onSealed?.(sealed.receipts, `${items.length} file${items.length === 1 ? '' : 's'}`);
+      setMessage(`Sealed ${items.length} file${items.length === 1 ? '' : 's'}.`);
+      onSealed?.(sealed.receipts, `${items.length} file${items.length === 1 ? '' : 's'}`, sealStart);
     } catch (cause) {
-      if (cause?.name === 'AbortError') setMessage('Cancelled');
-      else setError(cause?.message || 'Something went wrong. Press Seal again.');
+      if (cause?.name === 'AbortError') { setMessage('Sealing cancelled. Your files are still chosen.'); requestAnimationFrame(() => document.getElementById('manifest-seal')?.focus()); }
+      else fail(cause?.message || 'Something went wrong. Press Seal the list again.');
     } finally { if (controllerRef.current === controller) { controllerRef.current = null; setPhase(''); setProgress(null); } }
   };
+  const markList = (log, part) => setOutput((current) => (current?.log === log ? { ...current, saved: { ...current.saved, [part]: true } } : current)); // only this exact result
   const copy = async () => {
-    try { await navigator.clipboard.writeText(output.handover); setMessage('Receipt message copied. Paste it into an email or chat to the person who will keep it.'); }
-    catch { setMessage('Your browser blocked copying. Select the text in the box and copy it, or press Download receipt.'); }
+    const log = output.log;
+    try { await navigator.clipboard.writeText(output.handover); markList(log, 'receipt'); setCopyStatus('Receipt message copied. Paste it into an email or chat to the person who will keep it.'); }
+    catch { setCopyStatus('Your browser blocked copying. Select the text in the box and copy it, or press Download receipt.'); }
+  };
+  // "Seal more files" after the list was downloaded, or "Discard it": this result and its selection go, and so does its
+  // place in the unsaved work (only this exact result), so a discarded list never blocks a logout.
+  const sealMore = () => {
+    const log = output?.log;
+    reset(); setFiles([]); setNotes({}); setEdited({}); setDerived({}); setLandingLocal('');
+    if (log) onUnsaved((current) => (current?.files?.[0]?.blob === log ? null : current));
+    onSealMore();
   };
   const busy = !!phase;
-  const step = output ? 3 : files.length ? 2 : 1;
-  return <section className="panel" aria-labelledby="manifest-seal-title"><div className="panel-head"><FileLock2 aria-hidden="true" size={18} /><h2 id="manifest-seal-title">Seal large files</h2></div><div className="panel-body manifest-body">
-    <ol className="manifest-steps" aria-label="Steps">{['Choose files', 'Seal', 'Send'].map((label, index) => <li key={label} aria-current={step === index + 1 ? 'step' : undefined}>{label}</li>)}</ol>
+  const total = files.reduce((sum, file) => sum + file.size, 0);
+  const doneBytes = progress ? files.slice(0, progress.index).reduce((sum, file) => sum + file.size, 0) + progress.done : 0;
+  const quarter = total && progress ? Math.floor((doneBytes / total) * 4) : 0; // announced at 25%, 50% and 75%; "Sealing…" follows
+  const sizes = `${fmtBytes(doneBytes)} of ${fmtBytes(total)}`;
+  if (hidden) return null;
+  const live = <p className="visually-hidden" role="status">{phase === 'hashing' ? (quarter > 0 ? `${quarter * 25}% read · ${sizes}` : '') : phase === 'sealing' ? 'Sealing…' : output ? message : ''}</p>;
+  if (output) return <>{live}<Handoff headingRef={headingRef} headingId="manifest-handoff-title"
+    summary={`Sealed · ${output.items} file${output.items === 1 ? '' : 's'} · ${exactBytes(output.total)}${output.jobRef ? ` · ${output.jobRef}` : ''}`}
+    kind="list" fileName={output.log.name} unsaved={unsavedList} downloaded={output.saved.file} receiptSaved={output.saved.receipt} originals={output.names}
+    onDownload={() => download(output.log.name, output.log, 'application/octet-stream')} onSaved={() => markList(output.log, 'file')} onDownloadReceipt={() => download(`${output.base}.receipt.txt`, output.handover)} onReceiptSaved={() => markList(output.log, 'receipt')}
+    handoverId="manifest-handover-text" handover={output.handover} onCopy={copy} copyStatus={copyStatus}
+    actions={<><button className="button secondary" type="button" onClick={() => download(`${output.base}.public-key.txt`, `${output.publicKey}\n`)}><Download aria-hidden="true" size={16} />Download public key</button></>}
+    details={<>{output.savedKey && <SenderFingerprint fingerprint={output.fingerprint} />}<dl className="detail-grid"><dt>Public key</dt><dd><code className="wrap">{output.publicKey}</code></dd></dl></>}
+    shareNote={shareNote} onSealMore={sealMore} />
+    </>;
+  return <>{live}<div className="manifest-body">
     <p className="manifest-notice"><strong>This keeps a fingerprint, not a copy.</strong> Keep your original files.</p>
     <details className="report-details manifest-help"><summary>What is this? <ChevronDown size={17} aria-hidden="true" /></summary><div className="manifest-options-body prose">
       <p>HashWing reads each file on this device and records its size and SHA-256 fingerprint. That list (a manifest) is signed and saved as a small .manifest.fseal file. The files themselves are not stored or uploaded. A manifest is not a backup.</p>
       <p>Later, anyone with the receipt message and your public key can check copies of the files against the list. A random salt makes each list unique; it does not hide the fingerprints.</p>
     </div></details>
     <label className="field-label" htmlFor="manifest-files">Files <span>(up to {MANIFEST_LIMITS.maxItems})</span></label>
-    <input id="manifest-files" type="file" multiple disabled={busy} onChange={(e) => choose(e.target.files)} />
-    {files.length > 0 && <FileProgressList files={files} progress={progress} idPrefix="manifest-seal" label="Selected files" onCancel={() => controllerRef.current?.abort()} />}
-    {progress && <p className="visually-hidden" role="status">Reading file {progress.index + 1} of {files.length}</p>}
-    {phase === 'sealing' && <p role="status">Sealing…</p>}
+    <input id="manifest-files" type="file" multiple disabled={busy} aria-invalid={error ? 'true' : undefined} aria-describedby={error ? 'manifest-error' : undefined} onChange={(e) => choose(e.target.files)} />
+    {error && <p id="manifest-error" className="field-hint receipt-error">{error}</p>}
+    {files.length > 0 && <><FileProgressList files={files} progress={progress} idPrefix="manifest-seal" label="Selected files" /><FileTotals rows={files} /></>}
+    {common}
     <details className="report-details manifest-options"><summary>More options <ChevronDown size={17} aria-hidden="true" /></summary><div className="manifest-options-body">
       <label className="check-row"><input id="manifest-include-names" type="checkbox" checked={includeNames} disabled={busy} onChange={(e) => { reset(); setIncludeNames(e.target.checked); }} />Include file names</label>
       <label className="field-label" htmlFor="manifest-landing">Reported landing time <span>(optional, for all files, this computer's time zone)</span></label>
@@ -2283,24 +2326,11 @@ function ManifestSeal({ signingKey, onActiveChange, onSealed }) {
       </div>)}
       <p className="field-hint">Receipt interval: 1 record. {signingKey?.privateKeyPem ? 'Signed with the key loaded under Trust.' : 'No signing key loaded: a one-time key signs this list and is then discarded.'}</p>
     </div></details>
-    <button className="button primary" type="button" disabled={!files.length || busy || !!output} onClick={seal}>Seal</button>
-    {error && <p className="field-hint receipt-error" role="alert">{error}</p>}
+    <button id="manifest-seal" className="button primary" type="button" disabled={!files.length || busy} onClick={seal}>Seal the list</button>
+    {phase === 'hashing' && <div className="seal-progress"><label htmlFor="manifest-seal-progress">Sealing {(progress?.index ?? 0) + 1} of {files.length} · {sizes}</label><progress id="manifest-seal-progress" max={Math.max(1, total)} value={doneBytes} aria-valuetext={sizes} /><button className="button secondary" type="button" onClick={() => controllerRef.current?.abort()}>Cancel</button></div>}
+    {phase === 'sealing' && <p aria-hidden="true">Sealing…</p>}
     {message && <p className="field-hint" role="status">{message}</p>}
-    {output && <div className="handover">
-      <h3>Send this receipt to someone else now</h3>
-      <dl className="detail-grid"><dt>Files</dt><dd className="mono-values">{output.items} · {fmtBytes(output.total)}</dd><dt>Public key</dt><dd><code className="wrap">{output.publicKey}</code></dd></dl>
-      <SenderFingerprint fingerprint={output.fingerprint} />
-      <label className="field-label" htmlFor="manifest-handover-text">Receipt message</label>
-      <textarea id="manifest-handover-text" className="mono-input" readOnly rows={8} value={output.handover} />
-      <div className="actions-row">
-        <button className="button primary" type="button" onClick={copy}><Copy aria-hidden="true" size={16} />Copy message</button>
-        <button className="button secondary" type="button" onClick={() => download(`${output.base}.receipt.txt`, output.handover)}><Download aria-hidden="true" size={16} />Download receipt</button>
-        <button className="button secondary" type="button" onClick={() => download(`${output.base}.public-key.txt`, `${output.publicKey}\n`)}><Download aria-hidden="true" size={16} />Download public key</button>
-      </div>
-      <h3>Keep the sealed list</h3>
-      <button className="button secondary" type="button" onClick={() => { download(output.log.name, output.log, 'application/octet-stream'); setOutput((current) => current && { ...current, saved: true }); }}><Download aria-hidden="true" size={16} />Download sealed list</button>
-    </div>}
-  </div></section>;
+  </div></>;
 }
 
 function ItemNote({ note, showLanding }) {
@@ -2308,9 +2338,10 @@ function ItemNote({ note, showLanding }) {
   return <>{showLanding && landing && <span className="manifest-note">Reported landing time: {landing} (operator-entered, signed)</span>}{derivedFrom && <span className="manifest-note">Edited copy of: {derivedFrom} (operator-entered, signed)</span>}{text && <span className="manifest-note">Operator note: {text}</span>}</>;
 }
 const STATUS_KIND = { match: 'ok', 'bytes-differ': 'warn', missing: 'grey', 'not-in-manifest': 'neutral' };
-function ManifestCheck({ onActiveChange }) {
+function ManifestCheck({ onActiveChange, incoming }) {
   const [sealed, setSealed] = useState(null);
   const [text, setText] = useState('');
+  useEffect(() => { if (incoming) setText(incoming.text); }, [incoming]); // a receipt message pasted on Seal & send
   const [key, setKey] = useState('');
   const [locals, setLocals] = useState([]);
   const [progress, setProgress] = useState(null);

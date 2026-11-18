@@ -44,10 +44,14 @@ async function loadFreshDemo(page) {
 }
 async function loadLandingDemo(page) {
   await page.goto(url);
-  await page.getByRole('button', { name: /Run real verification/ }).first().click();
-  await page.waitForFunction(() => document.querySelector('.hero-actual-result')?.innerText.includes('Intact'), null, { timeout: 30000 });
-  await page.getByRole('button', { name: 'Inspect records and export' }).click();
+  await page.getByRole('link', { name: 'Try a sample' }).click(); // the front door opens Samples, which runs the real engine
   await waitResult(page, 'Intact');
+}
+// The one "Profile on this device" menu in the command bar (AC-61).
+async function profileMenuAction(page, name) {
+  const menu = page.locator('.profile-menu');
+  if (!(await menu.evaluate((d) => d.open))) await menu.locator('summary').click();
+  await menu.getByRole('button', { name, exact: true }).click();
 }
 // Samples, Video, Benchmarks and System sit behind the rail's "More tools" disclosure.
 async function clickNav(page, name) {
@@ -111,10 +115,8 @@ try {
   page.on('console', (message) => { if (message.type() === 'error') runtimeErrors.push(`${message.text()} (${message.location().url})`); });
   const initialStarted = performance.now();
   await page.goto(url);
-  assert.equal(await page.locator('#page-landing').textContent().then((text) => text.includes('Check the log.')), true, 'first load is the editorial landing page');
-  await page.getByRole('button', { name: /Run real verification/ }).first().click();
-  await page.waitForFunction(() => document.querySelector('.hero-actual-result')?.innerText.includes('Intact'));
-  await page.getByRole('button', { name: 'Inspect records and export' }).click();
+  assert.equal(await page.locator('#page-landing').textContent(), 'HashWing', 'first load is the front door');
+  await page.getByRole('link', { name: 'Try a sample' }).click();
   await waitResult(page, 'Intact');
   await page.waitForFunction(() => document.querySelector('.result-stat')?.textContent.includes('800'));
   assert.equal(await page.getByLabel('Choose source or sealed log').count(), 1, 'the shared upload control has a direct action name');
@@ -694,9 +696,9 @@ try {
     assert.equal(await page.locator(':focus').getAttribute('class'), 'skip-link');
     await page.keyboard.press('Enter');
     assert.equal(await page.locator(':focus').getAttribute('id'), 'main');
-    assert.equal(await page.getByRole('navigation', { name: 'Primary navigation' }).getByRole('link', { name: /Records/ }).isVisible(), false);
+    assert.equal(await page.getByRole('navigation', { name: 'Primary navigation' }).getByRole('link', { name: 'Verify', exact: true }).isVisible(), false);
     await page.getByRole('button', { name: 'Menu' }).click();
-    assert.equal(await page.getByRole('navigation', { name: 'Primary navigation' }).getByRole('link', { name: 'Records' }).isVisible(), true);
+    assert.equal(await page.getByRole('navigation', { name: 'Primary navigation' }).getByRole('link', { name: 'Verify', exact: true }).isVisible(), true);
     await page.evaluate(() => { location.hash = '#/verify'; });
     await page.waitForFunction(() => document.activeElement?.id === 'page-verify' && document.title === 'Verify · HashWing').catch(async () => assert.fail(`legacy Verify route did not restore focus/title: ${location.hash}; focus=${await page.evaluate(() => document.activeElement?.id)}; title=${await page.title()}`));
     await page.evaluate(() => history.back());
@@ -761,18 +763,20 @@ try {
     assert.equal(await rail.getByRole('link', { name: 'Samples', exact: true }).getAttribute('aria-current'), 'page');
     await page.getByRole('navigation', { name: 'Primary navigation' }).getByRole('link', { name: 'Verify' }).click();
     await page.locator('#trusted-key').fill('editing');
-    await page.getByRole('navigation', { name: 'Primary navigation' }).getByRole('link', { name: 'Records' }).click();
-    assert.equal(await page.evaluate(() => location.hash), '#/app/records?sample=intact&record=799');
+    await clickNav(page, 'Records');
+    assert.match(await page.evaluate(() => location.hash), /^#\/app\/records\?sample=intact&record=\d+$/, 'Records keeps the sample and record in its link');
     await page.getByRole('navigation', { name: 'Primary navigation' }).getByRole('link', { name: 'Verify' }).click();
     assert.equal(await page.locator('#trusted-key').inputValue(), 'editing');
     await page.goto(`${url}#/protect`); await page.waitForSelector('#page-protect');
     await page.waitForFunction(() => document.querySelector('.nav-more')?.open === false, null, { timeout: 3000 }).catch(() => assert.fail('More tools starts closed on a primary page'));
-    for (const name of ['Samples', 'Video', 'Benchmarks', 'System']) assert.equal(await rail.getByRole('link', { name, exact: true }).isVisible(), false, `${name} is behind More tools`);
-    assert.equal(await rail.locator('a:visible').count(), 5, 'only the five primary links show');
+    // AC-04, changed on purpose: the primary links are Seal & send, Verify and Trust (Jobs joins when its page lands);
+    // Records and Receipts moved under More tools with their routes kept.
+    for (const name of ['Records', 'Receipts', 'Samples', 'Video', 'Benchmarks', 'System']) assert.equal(await rail.getByRole('link', { name, exact: true }).isVisible(), false, `${name} is behind More tools`);
+    assert.deepEqual(await rail.locator('a:visible').allTextContents(), ['Seal & send', 'Verify', 'Trust'], 'only the primary links show, in order');
     assert.equal(await page.locator('.session-strip').isVisible(), false, 'Seal & send hides the workbench session strip');
     assert.equal(await page.locator('.source-actions').isVisible(), false, 'Seal & send hides the workbench source actions');
     await rail.locator('.nav-more summary').click();
-    assert.equal(await rail.getByRole('link', { name: 'Benchmarks', exact: true }).isVisible(), true);
+    assert.deepEqual(await rail.locator('.nav-more a').allTextContents(), ['Records', 'Receipts', 'Samples', 'Video', 'Benchmarks', 'System'], 'More tools holds the six secondary pages, in order');
     await rail.locator('.nav-more summary').press('Escape');
     assert.equal(await rail.locator('.nav-more').evaluate((d) => d.open), false, 'Escape closes More tools');
     await page.goto(`${url}#/video`); await page.waitForSelector('#page-video');
@@ -786,10 +790,71 @@ try {
     await page.setViewportSize({ width: 1440, height: 900 });
   });
 
+  await check('page shell: workbench strip only on Verify and More tools, one profile menu, full-height rail, 44px shell targets', async () => {
+    await page.setViewportSize({ width: 1440, height: 900 });
+    // AC-66
+    for (const [screen, shown] of [['protect', false], ['help', false], ['verify', true], ['records', true], ['receipts', true], ['sandbox', true], ['video', true], ['benchmarks', true], ['system', true]]) {
+      await page.goto(`${url}#/app/${screen}`); await page.waitForSelector(`#page-${screen}`);
+      assert.equal(await page.locator('.session-strip').isVisible(), shown, `${screen}: session strip ${shown ? 'shown' : 'hidden'}`);
+      assert.equal(await page.locator('.source-actions').isVisible(), shown, `${screen}: Source and report actions ${shown ? 'shown' : 'hidden'}`);
+    }
+    // AC-61: one menu, "Profile on this device"; company sign-in is not in the bar.
+    await page.goto(`${url}#/app/protect`); await page.waitForSelector('#page-protect');
+    const bar = page.locator('.commandbar');
+    assert.equal(await bar.locator('.profile-menu').count(), 1);
+    assert.equal(await bar.getByRole('link').count(), 0, 'the bar has no separate Log in / Create account links');
+    const summary = bar.locator('.profile-menu > summary');
+    assert.equal(await summary.getAttribute('aria-label'), 'Profile on this device');
+    assert.match(await summary.innerText(), /Profile on this device/);
+    await summary.click();
+    const panel = bar.locator('.profile-menu-panel');
+    assert.match(await panel.innerText(), /Profiles live in this browser\. They are not company accounts\./);
+    for (const name of ['Use a local profile', 'Create a local profile']) assert.equal(await panel.getByRole('button', { name, exact: true }).isVisible(), true, `menu offers ${name}`);
+    assert.equal(await panel.locator('button').first().innerText(), 'Use a local profile', 'profile entries come before the backup form');
+    assert.equal(await panel.getByRole('button', { name: 'Download encrypted backup' }).count(), 0, 'no export button without an open profile');
+    assert.equal(await bar.getByText(/Company registry|Sign in to the company/).count(), 0, 'no company sign-in in the bar');
+    await page.keyboard.press('Escape');
+    assert.equal(await page.locator('.profile-menu').getAttribute('open'), null, 'Escape closes the profile menu');
+    assert.equal(await summary.evaluate((el) => el === document.activeElement), true, 'focus returns to the menu summary');
+    // The rail column reaches the bottom of a page taller than the window (it stopped at 900px in full-page views).
+    await page.goto(`${url}#/app/help`); await page.waitForSelector('#page-help');
+    const height = await page.evaluate(() => document.documentElement.scrollHeight);
+    assert.ok(height > 1200, `Trust is taller than the window (${height}px)`);
+    const png = await page.screenshot({ fullPage: true, clip: { x: 100, y: height - 4, width: 1, height: 1 } });
+    const { inflateSync } = await import('node:zlib');
+    let offset = 8, idat = [];
+    while (offset < png.length) { const length = png.readUInt32BE(offset), type = png.toString('latin1', offset + 4, offset + 8); if (type === 'IDAT') idat.push(png.subarray(offset + 8, offset + 8 + length)); offset += length + 12; }
+    const pixel = [...inflateSync(Buffer.concat(idat)).subarray(1, 4)].map((v) => v.toString(16).padStart(2, '0')).join('');
+    assert.equal(pixel, 'eaf0f7', `rail colour at the page bottom is #${pixel}`);
+    // AC-13: standalone shell controls are at least 44 by 44px.
+    for (const width of [320, 768, 1440]) {
+      await page.setViewportSize({ width, height: 900 });
+      await page.goto(`${url}#/app/help`); await page.waitForSelector('#page-help');
+      if (await page.locator('.rail-menu').isVisible()) await page.locator('.rail-menu').click();
+      await page.locator('.install-tools > summary').click();
+      const small = await page.evaluate(() => [...document.querySelectorAll('#primary-nav a, .nav-more summary, .rail-menu, .brand, .profile-menu > summary, .workspace-tools-menu summary, .install-tools > summary, .offline-control-actions .button, .offline-control-actions .text-action, .trust-footer nav a, .trust-footer nav button, .help-layout .prose p > a:only-child')]
+        .filter((el) => el.getClientRects().length).map((el) => ({ name: el.textContent.trim().slice(0, 40), width: Math.round(el.getBoundingClientRect().width), height: Math.round(el.getBoundingClientRect().height) }))
+        .filter((box) => box.width < 44 || box.height < 44));
+      assert.deepEqual(small, [], `${width}px: undersized shell targets ${JSON.stringify(small)}`);
+    }
+    await page.setViewportSize({ width: 1440, height: 900 });
+    // At 768px and below "Other apps" is part of the Menu panel, after More tools, not a row of its own under the brand.
+    for (const width of [375, 768]) {
+      await page.setViewportSize({ width, height: 900 });
+      await page.goto(`${url}#/app/help`); await page.waitForSelector('#page-help');
+      assert.equal(await page.locator('.workbench-rail .workspace-tools-menu:visible').count(), 0, `${width}px: Other apps is hidden while the menu is closed`);
+      await page.locator('.rail-menu').click();
+      assert.equal(await page.locator('#primary-nav > :last-child').evaluate((el) => el.matches('.workspace-tools-menu') && !!el.getClientRects().length && el.previousElementSibling.matches('.nav-more')), true, `${width}px: Other apps is inside the open menu, after More tools`);
+      assert.equal(await page.locator('.workbench-rail .workspace-tools-menu:visible').count(), 1);
+      await page.locator('.rail-menu').click();
+    }
+    await page.setViewportSize({ width: 1440, height: 900 });
+  });
+
   await check('direct routes and root hash resolve to their own current screens', async () => {
     await page.goto(`${url}#/`);
     await page.waitForSelector('#page-landing');
-    assert.match(await page.locator('#page-landing').textContent(), /Check the log\./);
+    assert.equal(await page.locator('#page-landing').textContent(), 'HashWing');
     const paths = [['#/sandbox', 'Samples'], ['#/verify', 'Verify'], ['#/records', 'Records'], ['#/receipts', 'Receipts'], ['#/video', 'Video'], ['#/help', 'Trust']];
     for (const [hash, title] of paths) {
       await page.goto(`${url}${hash}`);
@@ -841,14 +906,15 @@ try {
     const password = 'flightseal browser password 123';
     const backupPassphrase = 'separate backup passphrase 456';
     await page.goto(url);
-    await page.getByRole('button', { name: /Run real verification/ }).first().click();
-    await page.waitForFunction(() => document.querySelector('.hero-actual-result')?.innerText.includes('Intact'));
-    await page.getByRole('navigation', { name: 'Account and workspace' }).getByRole('link', { name: 'Create account' }).click();
+    await page.getByRole('link', { name: 'Try a sample' }).click();
+    await waitResult(page, 'Intact');
+    await profileMenuAction(page, 'Create a local profile');
     await page.locator('#auth-email').fill(email); await page.locator('#auth-password').fill(password); await page.locator('#auth-confirm').fill(password);
     await page.getByLabel(/Import this guest session/).check();
     await page.getByRole('button', { name: 'Create account' }).click();
     await page.waitForFunction(() => document.querySelector('.profile-menu > summary')?.textContent.includes('backup-'));
-    assert.equal(await page.getByRole('navigation', { name: 'Account and workspace' }).isVisible(), false, 'signed-in account sees no Log in / Create account links');
+    assert.equal(await page.locator('.profile-menu > summary').getAttribute('aria-label'), `Profile on this device: ${email}`, 'the one profile menu names the open local profile');
+    assert.equal(await page.getByRole('navigation', { name: 'Account and workspace' }).count(), 0, 'the command bar has no second set of account links');
     await page.locator('.profile-menu').locator('summary').click();
     await page.locator('#backup-passphrase').fill(backupPassphrase);
     const [backupDownload] = await Promise.all([page.waitForEvent('download'), page.getByRole('button', { name: 'Download encrypted backup' }).click()]);
@@ -870,14 +936,14 @@ try {
     await restorePage.getByRole('button', { name: 'Check backup and preview' }).click();
     await restorePage.waitForFunction((expected) => document.querySelector('.profile-backup [role="status"]')?.textContent.includes(`Restore preview: local profile ${expected}`), email);
     await restorePage.getByRole('button', { name: 'Restore this profile' }).click();
-    await restorePage.getByRole('navigation', { name: 'Account and workspace' }).getByRole('link', { name: 'Log in' }).click();
+    await profileMenuAction(restorePage, 'Use a local profile');
     await restorePage.locator('#auth-email').fill(email); await restorePage.locator('#auth-password').fill(password);
     await restorePage.getByRole('button', { name: 'Log in' }).click();
     await restorePage.waitForFunction(() => document.querySelector('.profile-menu > summary')?.textContent.includes('backup-'));
     assert.match(restorePage.url(), /sample=intact/, 'saved included-sample view is restored without copying source files');
     await restorePage.locator('.profile-menu > summary').click();
     await restorePage.getByRole('button', { name: 'Log out' }).click();
-    await restorePage.getByRole('navigation', { name: 'Account and workspace' }).getByRole('link', { name: 'Log in' }).click();
+    await restorePage.locator('footer').getByRole('link', { name: 'Use a local profile' }).click(); // logout lands on the front door
     await restorePage.locator('#auth-email').fill(email); await restorePage.locator('#auth-password').fill(password);
     await restorePage.getByRole('button', { name: 'Log in' }).click();
     await restorePage.waitForFunction(() => document.querySelector('.profile-menu > summary')?.textContent.includes('backup-'));
@@ -900,36 +966,54 @@ try {
     const evidence = join(EVIDENCE, 'seal-send'); mkdirSync(evidence, { recursive: true });
     await page.setViewportSize({ width: 1440, height: 900 });
     await page.goto(url); await page.reload();
-    await page.getByRole('button', { name: /Seal a flight log/ }).click();
+    await page.getByRole('link', { name: 'Seal files', exact: true }).click(); // the front door's primary action
     await page.waitForFunction(() => location.hash === '#/app/protect' && document.querySelector('.commandbar h1')?.textContent === 'Seal & send');
     await page.locator('#protect-file').setInputFiles(ulg);
     const pad = (n) => String(n).padStart(2, '0');
     const landed = new Date(Math.floor((Date.now() - 3600e3) / 1000) * 1000);
     await page.locator('.protect-options summary').first().click();
     await page.locator('#protect-landing').fill(`${landed.getFullYear()}-${pad(landed.getMonth() + 1)}-${pad(landed.getDate())}T${pad(landed.getHours())}:${pad(landed.getMinutes())}:${pad(landed.getSeconds())}`.replace(/:00$/, '')); // Chrome normalises zero seconds away, and fill() rejects a value that changes
-    await page.getByRole('button', { name: 'Seal this log' }).click();
+    await page.locator('#job-ref').fill('JOB-REF-7Q2X');
+    await page.getByRole('button', { name: 'Seal this file' }).click();
     await page.waitForSelector('#handover-text', { timeout: 60000 });
+    // R18 / AC-53: the handoff leads, its heading has focus, and Download is the one primary action until it is used.
+    await page.waitForFunction(() => document.activeElement?.id === 'handoff-title');
+    assert.equal(await page.locator('#handoff-title').innerText(), 'Send these to your client');
+    assert.equal(await page.locator('.seal-summary').innerText(), 'Sealed · 1 file · JOB-REF-7Q2X');
+    assert.deepEqual(await page.locator('.handoff-step-title').allInnerTexts(), ['Download the sealed file', 'Send the receipt message']);
+    assert.deepEqual(await page.locator('.seal-panel .button.primary').allInnerTexts(), ['Download']);
+    assert.equal(await page.locator('#seal-what-title').count(), 0, 'the step panel gives way to the handoff');
+    assert.equal(await page.locator('.result-panel').count(), 0, 'no checker result on Seal & send (R15)');
+    assert.equal(await page.locator('#check-file').count(), 0, 'the checker lives on Verify');
     const handover = await page.locator('#handover-text').inputValue();
+    assert.ok(!handover.includes('JOB-REF-7Q2X'), 'the job reference is not in the receipt message');
+    assert.match(handover, /open \S+#\/app\/verify and paste/, 'the message sends the recipient to Verify');
     assert.match(handover, new RegExp(`Original file: ${original.length} bytes, SHA-256 ${sha(original)}`));
     assert.equal(handover.split('\n')[2], `Reported landing time: ${landed.toISOString()} (operator-entered, not signed, not verified)`);
-    const senderFingerprint = await page.locator('.handover .fingerprint').innerText();
+    assert.equal(await page.locator('.handover .fingerprint').count(), 0, 'a one-time key has no fingerprint to hand out (m2)');
+    const senderFingerprint = (await page.evaluate(async (hex) => [...new Uint8Array(await crypto.subtle.digest('SHA-256', Uint8Array.from(hex.match(/../g), (b) => parseInt(b, 16))))].map((b) => b.toString(16).padStart(2, '0')).join(''), /Public key:\s*([0-9a-f]{64})/.exec(handover)[1])).match(/.{4}/g).join(' '); // what a recipient would pin for this key
     assert.match(senderFingerprint, /^([0-9a-f]{4} ){15}[0-9a-f]{4}$/);
     assert.equal(await page.locator('.trust-line').count(), 0, "the sender's own seal shows no recipient trust line");
     assert.equal(handover.split('\n').filter((line) => line.startsWith('fseal-receipt v1 ')).length, 1);
     assert.match(await page.getByRole('link', { name: 'Email it' }).getAttribute('href'), /^mailto:\?subject=HashWing%20receipt/);
-    await waitResult(page, 'Intact');
     const [sealedDownload] = await Promise.all([page.waitForEvent('download'), page.getByRole('button', { name: 'Download sealed file' }).click()]);
     assert.equal(sealedDownload.suggestedFilename(), 'px4-sample.ulg.fseal');
     const sealedPath = join(evidence, 'sealed.fseal');
     await sealedDownload.saveAs(sealedPath);
+    assert.ok(!readFileSync(sealedPath).includes(Buffer.from('JOB-REF-7Q2X')), 'the job reference is not in the sealed file');
+    assert.deepEqual(await page.locator('.seal-panel .button.primary').allInnerTexts(), ['Yes, saved'], 'a Download click is not proof: the one primary action is to confirm it finished');
+    await page.locator('.handoff-confirm').getByRole('button', { name: 'Yes, saved' }).click();
+    await page.waitForFunction(() => document.activeElement?.textContent === 'Copy message');
+    assert.deepEqual(await page.locator('.seal-panel .button.primary').allInnerTexts(), ['Copy message'], 'after the confirmed download, Copy message is the one primary action');
     await auditAxe(page, '1440px seal handover');
     await page.screenshot({ path: join(evidence, 'sealed-1440.png'), fullPage: true });
 
-    // The witness, in a fresh page load, with the message quoted and wrapped as an email reply would.
+    // The witness, in a fresh page load on Verify, with the message quoted and wrapped as an email reply would.
     await page.reload();
+    await route(page, 'verify');
     await page.locator('#check-file').setInputFiles(sealedPath);
     await page.locator('#check-text').fill(handover.split('\n').flatMap((line) => line.match(/.{1,72}/g) || ['']).map((line) => `> ${line}`).join('\n'));
-    await page.getByRole('button', { name: 'Check this log' }).click();
+    await page.getByRole('button', { name: 'Check this file' }).click();
     await waitResult(page, 'Intact');
     await page.waitForSelector('.restored', { timeout: 30000 });
     assert.match(await page.locator('.restored h3').textContent(), /Original file recovered/);
@@ -966,7 +1050,7 @@ try {
     await pinPage.getByRole('button', { name: 'Add company' }).click();
     await pinPage.waitForFunction(() => document.querySelector('.company-list')?.textContent.includes('Pilot Co'));
     await pinPage.close();
-    await page.getByRole('button', { name: 'Check this log' }).click();
+    await page.getByRole('button', { name: 'Check this file' }).click();
     await waitResult(page, 'Intact');
     await page.waitForSelector('.restored', { timeout: 30000 });
     const trusted = 'Signed by a key you trust: Pilot Co (added from phone call with a known contact)';
@@ -997,28 +1081,280 @@ try {
     const editedPath = join(evidence, 'edited.fseal'); writeFileSync(editedPath, edited);
     await page.locator('#check-file').setInputFiles(editedPath);
     await page.locator('#check-text').fill(handover);
-    await page.getByRole('button', { name: 'Check this log' }).click();
+    await page.getByRole('button', { name: 'Check this file' }).click();
     await waitResult(page, 'Tampered');
     assert.equal(await page.locator('.restored').count(), 0);
 
     // The real attack: the holder changes the log and seals it again with a fresh key.
     const changed = Buffer.from(original); changed[original.length >> 1] ^= 1;
     const changedPath = join(evidence, 'px4-sample.ulg'); writeFileSync(changedPath, changed);
+    await page.getByRole('navigation', { name: 'Primary navigation' }).getByRole('link', { name: 'Seal & send' }).click();
     await page.locator('#protect-file').setInputFiles(changedPath);
-    await page.getByRole('button', { name: 'Seal this log' }).click();
+    await page.getByRole('button', { name: 'Seal this file' }).click();
     await page.waitForSelector('#handover-text', { timeout: 60000 });
     const [forgedDownload] = await Promise.all([page.waitForEvent('download'), page.getByRole('button', { name: 'Download sealed file' }).click()]);
     const forgedPath = join(evidence, 'forged.fseal'); await forgedDownload.saveAs(forgedPath);
+    await route(page, 'verify');
     await page.locator('#check-file').setInputFiles(forgedPath);
     await page.locator('#check-text').fill(handover);
-    await page.getByRole('button', { name: 'Check this log' }).click();
+    await page.getByRole('button', { name: 'Check this file' }).click();
     await waitResult(page, 'Tampered');
     assert.equal(await page.locator('.restored').count(), 0);
 
     // No receipt pasted: refused with a reason rather than a weaker check.
     await page.locator('#check-text').fill('no receipt here');
-    await page.getByRole('button', { name: 'Check this log' }).click();
+    await page.getByRole('button', { name: 'Check this file' }).click();
     assert.match(await page.getByRole('alert').first().textContent(), /Paste the receipt message/);
+  });
+
+  await check('Seal & send: one task at a time — signing line, the files survive Trust, Cancel keeps them, errors sit on the field, the handoff and its N3 confirm', async () => {
+    await page.setViewportSize({ width: 1440, height: 900 });
+    await page.goto(`${url}#/app/protect`); await page.reload(); await page.waitForSelector('#seal-what-title');
+    const panel = page.locator('.seal-panel');
+    // R17 / AC-52: the one-time-key signing line, one primary action, and the checker moved to Verify.
+    assert.equal((await panel.locator('.signing-line').innerText()).replace(/\n+/g, '\n'), "Signing\nOne-time key for this file. Your client can't check who sealed it. Set up a company key on Trust.");
+    assert.deepEqual(await panel.locator('.button.primary').allInnerTexts(), ['Seal this file']);
+    // Old receipts say "open #/app/protect and paste": the Verify pointer comes first on the panel, and a pasted
+    // receipt message goes to Verify's receipt box, never to sealing.
+    assert.equal(await panel.locator('a').first().innerText(), 'Checking a receipt someone sent you? Go to Verify');
+    const oldReceipt = ['HashWing receipt for flight.ulg', "Sealed: 2026-05-01T10:00:00.000Z (from the sealing computer's clock, not independently verified)", `Original file: 12 bytes, SHA-256 ${'a'.repeat(64)}`, `Public key: ${'b'.repeat(64)}`, `fseal-receipt v1 count=1 head=${'c'.repeat(64)} key=${'b'.repeat(64)} sig=${'d'.repeat(128)}`, '', 'Keep this message. It is what proves the file was not changed later.', 'To check the file, open https://anirudh763.github.io/flightseal/console/#/app/protect and paste this whole message.', ''].join('\n');
+    await page.evaluate((text) => { const data = new DataTransfer(); data.setData('text/plain', text); document.body.dispatchEvent(new ClipboardEvent('paste', { clipboardData: data, bubbles: true, cancelable: true })); }, oldReceipt);
+    await page.waitForSelector('#page-verify');
+    assert.equal(await page.locator('#check-text').inputValue(), oldReceipt, 'the pasted message is in Verify\'s receipt box');
+    await page.waitForFunction(() => document.activeElement?.id === 'check-file');
+    assert.equal(await page.locator('.seal-file-list').count(), 0, 'nothing was chosen for sealing');
+    await page.locator('#check-text').fill('');
+    await page.goto(`${url}#/app/protect`); await page.waitForSelector('#seal-what-title');
+    const listReceipt = `HashWing manifest receipt\nFiles listed: 2\nfseal-receipt v1 count=1 head=${'c'.repeat(64)}\n`; // a list's message fills the list box
+    await page.evaluate((text) => { const data = new DataTransfer(); data.setData('text/plain', text); document.body.dispatchEvent(new ClipboardEvent('paste', { clipboardData: data, bubbles: true, cancelable: true })); }, listReceipt);
+    await page.waitForFunction(() => document.activeElement?.id === 'manifest-check-file');
+    assert.equal(await page.locator('#manifest-check-text').inputValue(), listReceipt);
+    assert.equal(await page.locator('#check-text').inputValue(), '');
+    await page.locator('#manifest-check-text').fill('');
+    await page.goto(`${url}#/app/protect`); await page.waitForSelector('#seal-what-title');
+    // While a seal runs, a pasted receipt is ignored: no route change, no cancel; the seal still completes.
+    await page.locator('#protect-file').setInputFiles({ name: 'paste-busy.bin', mimeType: 'application/octet-stream', buffer: Buffer.alloc(3 * 1024 * 1024, 5) });
+    const ignored = await page.evaluate(async (text) => {
+      document.getElementById('protect-seal').click();
+      for (let i = 0; i < 50 && !document.getElementById('protect-progress'); i++) await new Promise((r) => setTimeout(r, 0));
+      const data = new DataTransfer(); data.setData('text/plain', text);
+      const event = new ClipboardEvent('paste', { clipboardData: data, bubbles: true, cancelable: true });
+      document.body.dispatchEvent(event);
+      return { prevented: event.defaultPrevented, running: !!document.getElementById('protect-progress') };
+    }, oldReceipt);
+    assert.deepEqual(ignored, { prevented: false, running: true }, `the paste was ignored while sealing ${JSON.stringify(ignored)}`);
+    await page.waitForSelector('#handover-text', { timeout: 60000 });
+    assert.match(page.url(), /#\/app\/protect/);
+    assert.equal(await page.locator('.seal-summary').innerText(), 'Sealed · 1 file', 'the seal finished on Seal & send');
+    await page.getByRole('button', { name: 'Seal more files' }).click();
+    await page.getByRole('button', { name: 'Discard it' }).click();
+    await page.waitForFunction(() => document.activeElement?.id === 'seal-what-title');
+    assert.equal(await page.locator('#check-file').count(), 0);
+    // An error is read with its field: focus moves there, and no alert is raised on top.
+    await page.locator('#protect-file').setInputFiles({ name: 'empty.bin', mimeType: 'application/octet-stream', buffer: Buffer.alloc(0) });
+    await page.getByRole('button', { name: 'Seal this file' }).click();
+    await page.waitForFunction(() => document.activeElement?.id === 'protect-file');
+    assert.equal(await page.locator('#protect-file').getAttribute('aria-describedby'), 'protect-file-error');
+    assert.equal(await page.locator('#protect-file-error').innerText(), 'This file is empty; there is nothing to seal.');
+    assert.equal(await page.locator('main [role=alert]').count(), 0);
+    // Files and job reference survive a visit to Trust, in both modes.
+    const big = Buffer.alloc(12 * 1024 * 1024, 7);
+    await page.locator('#protect-file').setInputFiles({ name: 'flight-12.ulg', mimeType: 'application/octet-stream', buffer: big });
+    assert.equal(await panel.locator('.seal-file-list').innerText(), 'flight-12.ulg\n12,582,912 bytes');
+    assert.equal(await panel.locator('.seal-total').innerText(), 'Total 1 file\n12,582,912 bytes');
+    await page.locator('#job-ref').fill('Roof survey 12');
+    await panel.getByRole('link', { name: 'Set up a company key on Trust' }).click();
+    await page.waitForSelector('#page-help');
+    await page.getByRole('navigation', { name: 'Primary navigation' }).getByRole('link', { name: 'Seal & send' }).click();
+    await page.waitForSelector('#page-protect');
+    assert.equal(await panel.locator('.seal-file-list').innerText(), 'flight-12.ulg\n12,582,912 bytes', 'the chosen file is still there');
+    assert.equal(await page.locator('#job-ref').inputValue(), 'Roof survey 12');
+    assert.equal(await page.getByRole('button', { name: 'Seal this file' }).isEnabled(), true);
+    await page.getByLabel('Large files: fingerprint only, files stay where they are').check();
+    await page.locator('#manifest-files').setInputFiles([1, 2].map((n) => ({ name: `clip-${n}.mp4`, mimeType: 'video/mp4', buffer: Buffer.alloc(1000 * n, n) })));
+    await route(page, 'help');
+    await page.getByRole('navigation', { name: 'Primary navigation' }).getByRole('link', { name: 'Seal & send' }).click();
+    assert.equal(await panel.locator('.seal-total').innerText(), 'Total 2 files\n3,000 bytes');
+    assert.deepEqual(await panel.locator('.button.primary').allInnerTexts(), ['Seal the list']);
+    await page.getByLabel('Small file: seal the whole file, up to 45 MiB').check();
+    // Progress is a <progress> with a text value; Cancel keeps the file and puts focus back on Seal.
+    const progress = await page.evaluate(async () => {
+      document.getElementById('protect-seal').click();
+      for (let i = 0; i < 50 && !document.getElementById('protect-progress'); i++) await new Promise((r) => setTimeout(r, 0));
+      const bar = document.getElementById('protect-progress');
+      const seen = bar && { text: bar.getAttribute('aria-valuetext'), max: bar.max };
+      document.querySelector('.seal-progress button')?.click();
+      return seen;
+    });
+    assert.deepEqual(progress, { text: 'Step 1 of 4: Reading the file', max: 4 });
+    await page.waitForFunction(() => document.activeElement?.id === 'protect-seal');
+    assert.match(await page.locator('main').innerText(), /Sealing cancelled\. Your files are still chosen\./);
+    assert.equal(await panel.locator('.seal-file-list').innerText(), 'flight-12.ulg\n12,582,912 bytes');
+    assert.equal(await page.locator('#handover-text').count(), 0);
+
+    // Oversize: the spec message on the field, and "Use Large files" moves the same file across, ready to seal.
+    const huge = { name: 'huge.bin', mimeType: 'application/octet-stream', buffer: Buffer.alloc(45 * 1024 * 1024 + 1, 1) };
+    await page.locator('#protect-file').setInputFiles(huge);
+    await page.getByRole('button', { name: 'Seal this file' }).click();
+    await page.waitForFunction(() => document.activeElement?.id === 'protect-file');
+    assert.equal(await page.locator('#protect-file-error').innerText(), 'This file is larger than 45 MiB. Choose Large files instead.');
+    assert.deepEqual(await panel.locator('.button.primary').allInnerTexts(), ['Seal this file']);
+    assert.equal(await page.getByRole('button', { name: 'Use Large files' }).getAttribute('class'), 'button secondary');
+    await page.getByRole('button', { name: 'Use Large files' }).click();
+    await page.waitForFunction(() => document.activeElement?.id === 'manifest-seal');
+    assert.equal(await page.getByLabel('Large files: fingerprint only, files stay where they are').isChecked(), true);
+    assert.equal(await panel.locator('.seal-total').innerText(), 'Total 1 file\n47,185,921 bytes', 'the file is still chosen');
+    await page.getByLabel('Small file: seal the whole file, up to 45 MiB').check();
+    assert.equal(await page.locator('#protect-file-error').count(), 0);
+    await page.getByLabel('Large files: fingerprint only, files stay where they are').check();
+    await page.locator('#manifest-files').setInputFiles([]);
+    await page.getByLabel('Small file: seal the whole file, up to 45 MiB').check();
+
+    // AC-53 N3: "Seal more files" before the download asks first, with Download focused and primary. Escape keeps the result.
+    await page.locator('#protect-file').setInputFiles({ name: 'n3.bin', mimeType: 'application/octet-stream', buffer: Buffer.from(`n3 ${Date.now()}`) });
+    await page.getByRole('button', { name: 'Seal this file' }).click();
+    await page.waitForSelector('#handover-text', { timeout: 60000 });
+    await page.getByRole('button', { name: 'Seal more files' }).click();
+    assert.equal(await page.locator('#seal-more-ask').innerText(), "You haven't downloaded n3.bin.fseal. Download it first?");
+    assert.equal(await page.evaluate(() => document.activeElement?.textContent), 'Download', 'Download has focus');
+    assert.deepEqual(await page.locator('.confirm-box .button.primary').allInnerTexts(), ['Download']);
+    assert.deepEqual(await panel.locator('.button.primary').allInnerTexts(), ['Download'], 'one primary on screen: the question\'s, not also the step\'s');
+    await page.keyboard.press('Escape');
+    await page.waitForFunction(() => !document.getElementById('seal-more-ask') && document.activeElement?.textContent === 'Seal more files');
+    assert.equal(await page.locator('#handover-text').count(), 1, 'Escape kept the result');
+    await page.getByRole('button', { name: 'Seal more files' }).click();
+    const [n3] = await Promise.all([page.waitForEvent('download'), page.keyboard.press('Enter')]);
+    assert.equal(n3.suggestedFilename(), 'n3.bin.fseal');
+    // A click is not proof the save finished: the question stays, now asking for the confirmation.
+    await page.waitForFunction(() => document.getElementById('seal-more-ask')?.textContent === 'Did the download of n3.bin.fseal finish?' && document.activeElement?.textContent === 'Yes, saved');
+    // The file is kept, but the receipt message is not (a one-time key cannot make another): the question turns to it.
+    await page.keyboard.press('Enter'); // "Yes, saved"
+    await page.waitForFunction(() => document.getElementById('seal-more-ask')?.textContent === "You haven't kept the receipt message. Copy it first?" && document.activeElement?.textContent === 'Copy message');
+    assert.deepEqual(await page.locator('.confirm-box .button.primary').allInnerTexts(), ['Copy message']);
+    assert.equal(await panel.locator('.button.primary').count(), 1, 'one primary on screen: the question\'s Copy message only');
+    assert.equal(await page.locator('.confirm-box').getByRole('button', { name: 'Yes, receipt saved' }).count(), 0, 'no receipt download yet, so nothing to confirm');
+    await page.locator('.confirm-box').getByRole('button', { name: 'Keep it' }).click(); // visible "Keep it" = Escape
+    await page.waitForFunction(() => !document.getElementById('seal-more-ask') && document.activeElement?.textContent === 'Seal more files');
+    await page.getByRole('button', { name: 'Seal more files' }).click();
+    await page.keyboard.press('Escape'); // and Escape does the same
+    await page.waitForFunction(() => !document.getElementById('seal-more-ask') && document.activeElement?.textContent === 'Seal more files');
+    assert.equal(await page.evaluate(() => { const e = new Event('beforeunload', { cancelable: true }); window.dispatchEvent(e); return e.defaultPrevented; }), true, 'an unkept receipt still warns before reload');
+    // Download receipt is a click too: it needs its own "Yes, receipt saved" before the question stops.
+    await Promise.all([page.waitForEvent('download'), page.getByRole('button', { name: 'Download receipt' }).click()]);
+    await page.getByText('Did the receipt download finish?').waitFor();
+    await page.getByRole('button', { name: 'Seal more files' }).click();
+    assert.equal(await page.locator('#seal-more-ask').innerText(), "You haven't kept the receipt message. Copy it first?", 'a receipt download click alone does not count');
+    // m1: with the clipboard denied, a started receipt download can be confirmed right in the question.
+    await page.locator('.confirm-box').getByRole('button', { name: 'Yes, receipt saved' }).click();
+    await page.waitForFunction(() => !document.getElementById('seal-more-ask') && document.activeElement?.textContent === 'Seal more files');
+    await page.getByRole('button', { name: 'Seal more files' }).click(); // file and receipt kept: no question
+    await page.waitForFunction(() => document.activeElement?.id === 'seal-what-title');
+    assert.equal(await panel.locator('.seal-file-list').count(), 0, 'the selection is cleared');
+    assert.equal(await page.locator('#job-ref').inputValue(), '');
+
+    // M1: a copy of result A that finishes after A was discarded and C sealed must not mark C's receipt kept.
+    await page.evaluate(() => { Object.defineProperty(navigator, 'clipboard', { configurable: true, value: { writeText: () => new Promise((resolve) => { window.__releaseCopy = resolve; }) } }); });
+    await page.locator('#protect-file').setInputFiles({ name: 'copy-a.bin', mimeType: 'application/octet-stream', buffer: Buffer.from(`a ${Date.now()}`) });
+    await page.getByRole('button', { name: 'Seal this file' }).click();
+    await page.waitForSelector('#handover-text', { timeout: 60000 });
+    await page.getByRole('button', { name: 'Copy message' }).click(); // held until __releaseCopy
+    await page.getByRole('button', { name: 'Seal more files' }).click();
+    await page.getByRole('button', { name: 'Discard it' }).click();
+    await page.waitForFunction(() => document.activeElement?.id === 'seal-what-title');
+    await page.locator('#protect-file').setInputFiles({ name: 'copy-c.bin', mimeType: 'application/octet-stream', buffer: Buffer.from(`c ${Date.now()}`) });
+    await page.getByRole('button', { name: 'Seal this file' }).click();
+    await page.waitForSelector('#handover-text', { timeout: 60000 });
+    await Promise.all([page.waitForEvent('download'), page.getByRole('button', { name: 'Download sealed file' }).click()]);
+    await page.locator('.handoff-confirm').getByRole('button', { name: 'Yes, saved' }).click();
+    await page.evaluate(() => window.__releaseCopy());
+    await page.waitForTimeout(300);
+    await page.getByRole('button', { name: 'Seal more files' }).click();
+    assert.equal(await page.locator('#seal-more-ask').innerText(), "You haven't kept the receipt message. Copy it first?", "A's late copy did not mark C's receipt kept");
+    await page.getByRole('button', { name: 'Discard it' }).click();
+    await page.waitForFunction(() => document.activeElement?.id === 'seal-what-title');
+
+    // R79: confirming an old download after sealing something new leaves the new result unsaved.
+    const sealOne = async (name) => {
+      await page.locator('#protect-file').setInputFiles({ name, mimeType: 'application/octet-stream', buffer: Buffer.from(`${name} ${Date.now()}`) });
+      await page.getByRole('button', { name: 'Seal this file' }).click();
+      await page.waitForSelector('#handover-text', { timeout: 60000 });
+    };
+    // A download that was cancelled or blocked never counts: Download, no "Yes, saved", then Seal more files still asks
+    // and #/login still warns (the receipt is confirmed, so only the unconfirmed file keeps it unsaved).
+    await sealOne('cancelled.bin');
+    await page.getByRole('button', { name: 'Download receipt' }).click();
+    await page.getByRole('button', { name: 'Yes, receipt saved' }).click();
+    await Promise.all([page.waitForEvent('download'), page.getByRole('button', { name: 'Download sealed file' }).click()]);
+    await page.locator('.handoff-confirm').getByText('Did the download finish?').waitFor();
+    await page.getByRole('button', { name: 'Seal more files' }).click();
+    assert.equal(await page.locator('#seal-more-ask').innerText(), 'Did the download of cancelled.bin.fseal finish?', 'an unconfirmed download still asks');
+    await page.keyboard.press('Escape');
+    await page.goto(`${url}#/login`);
+    await page.getByText('This tab has work that is not saved yet. Download it before you sign in.').waitFor({ timeout: 5000 })
+      .catch(() => assert.fail('an unconfirmed download was counted as saved'));
+    await page.goto(`${url}#/app/protect`); await page.waitForSelector('#handover-text');
+    await page.getByRole('button', { name: 'Seal more files' }).click();
+    await page.getByRole('button', { name: 'Discard it' }).click();
+    await page.waitForFunction(() => document.activeElement?.id === 'seal-what-title');
+
+    await sealOne('first.bin');
+    await page.goto(`${url}#/login`);
+    await page.getByText('This tab has work that is not saved yet. Download it before you sign in.').waitFor();
+    await Promise.all([page.waitForEvent('download'), page.getByRole('button', { name: 'Download unsaved work' }).click()]);
+    await page.getByText('Did the download finish?').waitFor();
+    await page.goto(`${url}#/app/protect`); await page.waitForSelector('#handover-text');
+    await page.getByRole('button', { name: 'Seal more files' }).click();
+    await page.getByRole('button', { name: 'Discard it' }).click();
+    await page.waitForFunction(() => document.activeElement?.id === 'seal-what-title');
+    await sealOne('second.bin');
+    await page.goto(`${url}#/login`);
+    await page.getByRole('button', { name: 'Yes, saved' }).click(); // confirms the first download only
+    await page.getByText('This tab has work that is not saved yet. Download it before you sign in.').waitFor({ timeout: 3000 })
+      .catch(() => assert.fail('the new result was marked saved by the old download'));
+    assert.equal(await page.getByRole('button', { name: 'Download unsaved work' }).count(), 1);
+    await page.goto(`${url}#/app/protect`); await page.waitForSelector('#handover-text');
+    assert.equal(await page.locator('.seal-summary').innerText(), 'Sealed · 1 file');
+    assert.deepEqual(await page.locator('.seal-panel .button.primary').allInnerTexts(), ['Download'], 'second.bin is still not downloaded');
+    await page.getByRole('button', { name: 'Seal more files' }).click();
+    await page.getByRole('button', { name: 'Discard it' }).click();
+
+    // Large-file mode: the list vs the originals that travel separately (first five, then Show all), and discarding
+    // an undownloaded list removes it from the unsaved work, so it no longer blocks signing in.
+    await page.getByLabel('Large files: fingerprint only, files stay where they are').check();
+    await page.locator('#manifest-files').setInputFiles(Array.from({ length: 7 }, (_, i) => ({ name: `roof-${i + 1}.mp4`, mimeType: 'video/mp4', buffer: Buffer.alloc(100 + i, i) })));
+    await page.getByRole('button', { name: 'Seal the list' }).click();
+    await page.waitForSelector('#manifest-handover-text', { timeout: 60000 });
+    await page.waitForFunction(() => document.activeElement?.id === 'manifest-handoff-title');
+    assert.deepEqual(await page.locator('.handoff-step-title').allInnerTexts(), ['Download the list', 'Send the receipt message']);
+    assert.deepEqual(await page.locator('.handoff-original-list li').allInnerTexts(), ['roof-1.mp4', 'roof-2.mp4', 'roof-3.mp4', 'roof-4.mp4', 'roof-5.mp4']);
+    await page.getByRole('button', { name: 'Show all 7' }).click();
+    assert.equal(await page.locator('.handoff-original-list li').count(), 7);
+    assert.deepEqual(await page.locator('.seal-panel .button.primary').allInnerTexts(), ['Download']);
+    assert.equal(await page.locator('.handover .fingerprint').count(), 0, 'a one-time key has no fingerprint to hand out (m2)');
+    const listName = await page.locator('.handoff-step-head code').first().innerText();
+    await page.goto(`${url}#/login`);
+    await page.getByText('This tab has work that is not saved yet. Download it before you sign in.').waitFor();
+    await page.goto(`${url}#/app/protect`);
+    await page.waitForSelector('#manifest-handover-text', { timeout: 10000 }).catch(() => assert.fail('M2: the unsaved list lost its handoff after #/login'));
+    assert.equal(await page.locator('.handoff-step-head code').first().innerText(), listName, 'the same list is back');
+    await page.getByRole('button', { name: 'Seal more files' }).click();
+    assert.match(await page.locator('#seal-more-ask').innerText(), /^You haven't downloaded hashwing-\d{8}-\d{6}\.manifest\.fseal\. Download it first\?$/);
+    await page.keyboard.press('Escape');
+    // A kept list with an unkept receipt message still asks, and still counts as unsaved work.
+    await Promise.all([page.waitForEvent('download'), page.getByRole('button', { name: 'Download sealed list' }).click()]);
+    await page.locator('.handoff-confirm').getByRole('button', { name: 'Yes, saved' }).click();
+    await page.getByRole('button', { name: 'Seal more files' }).click();
+    assert.equal(await page.locator('#seal-more-ask').innerText(), "You haven't kept the receipt message. Copy it first?");
+    assert.equal(await page.evaluate(() => document.activeElement?.textContent), 'Copy message');
+    assert.deepEqual(await panel.locator('.button.primary').allInnerTexts(), ['Copy message'], 'list: one primary while the receipt question is open');
+    assert.equal(await panel.locator('.confirm-box .button.primary').count(), 1);
+    assert.equal(await page.evaluate(() => { const e = new Event('beforeunload', { cancelable: true }); window.dispatchEvent(e); return e.defaultPrevented; }), true, 'the list\'s unkept receipt still warns before reload');
+    await page.getByRole('button', { name: 'Discard it' }).click();
+    await page.waitForFunction(() => document.activeElement?.id === 'seal-what-title');
+    assert.equal(await page.locator('.seal-total').count(), 0);
+    await page.goto(`${url}#/login`); await page.waitForSelector('#auth-email, form');
+    assert.equal(await page.getByText('This tab has work that is not saved yet.').count(), 0, 'a discarded list does not block sign-in');
+    await auditAxe(page, 'login after discard');
   });
 
   await context.close();
