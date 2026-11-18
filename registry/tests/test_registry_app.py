@@ -56,6 +56,24 @@ def test_unexpected_fields_are_400_and_write_nothing():
     assert (s, out["error"]) == (400, "bad_json")
 
 
+def test_no_route_accepts_private_key_material():
+    # R71: an invitation or enrollment never moves a company private key; every POST route refuses one.
+    app, table, clock, pilot = setup()
+    admin = token(clock, role="admin", sub="admin-1")
+    before = dict(table.items)
+    for field in ("private_key", "privateKeyPem", "seed"):
+        secret = {field: SEED_B.hex()}
+        for path, tok, body in (
+                ("/v1/envelopes", pilot, {}), ("/v1/epoch", admin, {}), (f"/v1/keys/{'ab' * 32}/compromised", admin, {}),
+                ("/v1/keys", admin, {"public_key": "00" * 32, "nonce": "n", "signature": "00" * 64}),
+                ("/v1/registrations", pilot, {"receipt": "r", "idempotency_key": "idem-key-0000000001", "envelope_id": "e"}),
+                ("/v1/shares", pilot, {"registration_id": "0" * 32, "token_hash": "0" * 64,
+                                       "idempotency_key": "idem-key-0000000001"})):
+            s, out, _ = call(app, "POST", path, tok, {**body, **secret})
+            assert (s, out["error"]) == (400, "unexpected_field"), (path, field)
+    assert table.items == before
+
+
 def test_malformed_receipt_is_400():
     app, _, _, pilot = setup()
     s, out, _ = register(app, pilot, line(SEED_A, 5) + " extra")
