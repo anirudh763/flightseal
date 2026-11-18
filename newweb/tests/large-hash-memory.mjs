@@ -1,6 +1,7 @@
 // Manual, local only: memory while the built console hashes a sparse file larger than 2 GiB, on both Large-files
 // paths (Seal, then Check files). Run after `npm --prefix newweb run build`:
 //   node newweb/tests/large-hash-memory.mjs [runs=3]
+// Seal and Check each run on a freshly loaded page in a new browser context.
 // Baseline: the console page loaded with the SHA-256 worker already created and idle (the page's next
 // `new Worker(hash-worker)` is handed that worker). Then RSS of every process in the launched Chrome's tree is sampled
 // every 100 ms while hashing. A dedicated worker is a thread of the page's renderer, so its memory is inside the
@@ -67,20 +68,25 @@ try {
     try {
       const roots = ps().filter((r) => r.ppid === process.pid && /chrom/i.test(r.cmd));
       assert.equal(roots.length, 1, 'one browser child of this process');
-      const context = await browser.newContext({ acceptDownloads: true, viewport: { width: 1440, height: 900 } });
-      await context.addInitScript(() => {
-        const Native = window.Worker;
-        let warm = null;
-        window.__prewarmHashWorker = (u) => { warm = new Native(u, { type: 'module' }); };
-        window.Worker = function Worker(u, options) {
-          if (warm && String(u).includes('hash-worker')) { const w = warm; warm = null; return w; }
-          return new Native(u, options);
-        };
-        window.Worker.prototype = Native.prototype;
-      });
-      const page = await context.newPage();
-      await page.goto(`${rootUrl}console/#/app/protect`);
-      await page.getByLabel('Large files (fingerprint only)').check();
+      // Each path gets a freshly loaded page in a new context, as a sender and a recipient would.
+      const openConsole = async () => {
+        const context = await browser.newContext({ acceptDownloads: true, viewport: { width: 1440, height: 900 } });
+        await context.addInitScript(() => {
+          const Native = window.Worker;
+          let warm = null;
+          window.__prewarmHashWorker = (u) => { warm = new Native(u, { type: 'module' }); };
+          window.Worker = function Worker(u, options) {
+            if (warm && String(u).includes('hash-worker')) { const w = warm; warm = null; return w; }
+            return new Native(u, options);
+          };
+          window.Worker.prototype = Native.prototype;
+        });
+        const page = await context.newPage();
+        await page.goto(`${rootUrl}console/#/app/protect`);
+        await page.getByLabel('Large files (fingerprint only)').check();
+        return { context, page };
+      };
+      let { context, page } = await openConsole();
       await page.locator('#manifest-files').setInputFiles(path);
       await page.locator('.manifest-options summary').click();
       await page.getByLabel('Include file names').check();
@@ -94,6 +100,8 @@ try {
       await download.saveAs(sealedPath);
       const item = /item=1,(\d+),([0-9a-f]{64}),/.exec(readFileSync(sealedPath, 'latin1'));
       assert.deepEqual([Number(item?.[1]), item?.[2]], [size, expected], 'sealed digest equals openssl dgst -sha256');
+      await context.close();
+      ({ context, page } = await openConsole());
 
       await page.locator('#manifest-check-file').setInputFiles(sealedPath);
       await page.locator('#manifest-check-text').fill(handover);

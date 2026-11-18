@@ -161,7 +161,7 @@ backup" are explained in a "What is this?" disclosure.
 ### Memory gate: 128 MiB extra while hashing (2026-11-17, passes after the fix)
 
 The target is at most 128 MiB of extra memory while one file larger than 2 GiB is hashed. It was not met before the
-fix (worst run +269.6 MiB) and is met after it (worst run +94.0 MiB).
+fix (worst run +250.3 MiB) and is met after it (worst run +55.1 MiB), with each path on a freshly loaded page.
 
 **Cause.** Each 4 MiB `File.slice().arrayBuffer()` read was a new `ArrayBuffer` that stayed alive until the worker's
 next garbage collection. The Wasm heap did not grow (33,554,432 bytes before and after), there are no `postMessage`
@@ -181,8 +181,8 @@ read through the page cache. SHA-256 `16ace5cf19c483ce9de45aed0e83b551dc7aef8738
 **Method** (`node newweb/tests/large-hash-memory.mjs 3`, after `npm --prefix newweb run build`; manual, local only):
 
 - It drives the built console. **Seal path**: Seal & send → Large files → the file → Include file names → Seal.
-  **Check path**: on the same page, the sealed list, the handover text and the public key → the same file → Check
-  files; the row must say Matches.
+  **Check path**: a new browser context and a freshly loaded console (as a recipient would open it) → Large files →
+  the sealed list, the handover text and the public key → the same file → Check files; the row must say Matches.
 - Baseline: the page is loaded and the SHA-256 worker is already created and idle. The page's next
   `new Worker(hash-worker…)` gets that worker. Then 3 s of settling and one sample.
 - During hashing, `ps -o rss` for every process in the launched Chrome's tree is sampled every 100 ms. Each process's
@@ -201,6 +201,29 @@ renderer processes.
 
 | Run | Path | Code | Seconds | MiB/s | Renderer idle → peak (Δ) | GPU idle → peak (Δ) | Browser Δ | Other Δ | Same-instant tree Δ | **Gate value** | Timer lag |
 |---|---|---|---|---|---|---|---|---|---|---|---|
+| 1 | Seal | before | 13.14 | 156.3 | 191.0 → 387.4 (+196.4) | 86.5 → 91.5 (+5.0) | +1.8 | +0.1 | +115.9 | **203.3 fail** | 27 ms |
+| 1 | Check | before | 12.97 | 158.2 | 156.8 → 391.9 (+235.1) | 61.3 → 66.3 (+5.0) | +3.7 | 0.0 | +110.6 | **243.8 fail** | 34 ms |
+| 2 | Seal | before | 13.16 | 156.0 | 152.5 → 388.9 (+236.4) | 80.0 → 84.9 (+4.9) | +4.2 | +0.5 | +122.4 | **246.0 fail** | 27 ms |
+| 2 | Check | before | 12.50 | 164.2 | 163.0 → 407.4 (+244.3) | 65.3 → 71.2 (+5.9) | 0.0 | +0.1 | +165.0 | **250.3 fail** | 29 ms |
+| 3 | Seal | before | 12.80 | 160.4 | 200.6 → 414.0 (+213.3) | 84.4 → 88.1 (+3.8) | 0.0 | +0.3 | +100.2 | **217.4 fail** | 11 ms |
+| 3 | Check | before | 12.50 | 164.2 | 152.9 → 391.8 (+238.9) | 70.2 → 75.8 (+5.7) | +1.4 | +0.1 | +180.4 | **246.1 fail** | 11 ms |
+| 1 | Seal | after | 13.00 | 157.9 | 154.3 → 197.4 (+43.1) | 79.2 → 81.0 (+1.9) | +0.8 | 0.0 | +22.6 | **45.8 pass** | 2 ms |
+| 1 | Check | after | 12.67 | 162.0 | 152.8 → 193.3 (+40.5) | 69.0 → 75.0 (+6.0) | +2.0 | +0.2 | +48.2 | **48.7 pass** | 31 ms |
+| 2 | Seal | after | 12.60 | 162.9 | 189.5 → 210.0 (+20.5) | 85.7 → 90.8 (+5.1) | +0.2 | 0.0 | +25.8 | **25.8 pass** | 13 ms |
+| 2 | Check | after | 12.49 | 164.4 | 203.0 → 224.4 (+21.4) | 67.0 → 71.9 (+4.9) | 0.0 | 0.0 | +15.1 | **26.3 pass** | 28 ms |
+| 3 | Seal | after | 12.73 | 161.2 | 186.8 → 200.9 (+14.1) | 87.4 → 87.4 (0.0) | 0.0 | +0.2 | 0.0 | **14.3 pass** | 37 ms |
+| 3 | Check | after | 12.52 | 164.0 | 156.2 → 200.9 (+44.7) | 68.6 → 74.5 (+6.0) | +4.3 | +0.1 | +54.3 | **55.1 pass** | 28 ms |
+
+Worst gate value: before 250.3 MiB (fail), after 55.1 MiB (pass). Some "after" idles were higher than others (renderer
+152–203 MiB), which makes the smallest deltas (14.3, 25.8) less informative; the gate depends on the largest ones.
+Throughput moved within the run-to-run noise of this busy machine. The main thread stayed responsive (timer lag at
+most 37 ms).
+
+An earlier set ran Check on the same page right after Seal, so the Check baseline was not a fresh page. That set is
+kept for the record; its worst run was after 94.0 MiB (pass) and before 269.6 MiB (fail):
+
+| Run | Path | Code | Seconds | MiB/s | Renderer idle → peak (Δ) | GPU idle → peak (Δ) | Browser Δ | Other Δ | Same-instant tree Δ | **Gate value** | Timer lag |
+|---|---|---|---|---|---|---|---|---|---|---|---|
 | 1 | Seal | before | 13.42 | 153.0 | 154.1 → 380.4 (+226.3) | 79.2 → 84.5 (+5.4) | +2.2 | +0.1 | +118.0 | **234.0 fail** | 1 ms |
 | 1 | Check | before | 14.85 | 138.3 | 155.8 → 404.9 (+249.1) | 68.4 → 74.4 (+6.0) | +6.1 | +8.4 | +222.6 | **269.6 fail** | 2 ms |
 | 2 | Seal | before | 13.32 | 154.1 | 155.3 → 406.0 (+250.7) | 79.9 → 84.9 (+4.9) | +1.9 | +0.3 | +179.6 | **257.8 fail** | 22 ms |
@@ -216,8 +239,7 @@ renderer processes.
 | 4 | Seal | before, rerun after the "after" runs | 13.68 | 150.0 | 156.9 → 386.3 (+229.4) | 79.5 → 84.8 (+5.2) | +2.4 | +0.1 | +140.6 | **237.1 fail** | 8 ms |
 | 4 | Check | before, rerun after the "after" runs | 12.83 | 160.0 | 176.9 → 412.2 (+235.4) | 73.4 → 78.8 (+5.4) | +0.6 | +13.8 | +187.1 | **255.2 fail** | 10 ms |
 
-Worst gate value: before 269.6 MiB (fail), after 94.0 MiB (pass, 34 MiB under the target). Throughput moved within the run-to-run noise of this busy machine.
-The main thread stayed responsive (timer lag at most 24 ms). Cancel is unchanged: the worker is terminated, and
+Cancel is unchanged: the worker is terminated, and
 `node --test tests/wasm/hash-browser.test.mjs` and `npm --prefix newweb run test:browser` ("Cancel stops hashing and
 the UI is usable again") pass.
 
@@ -243,8 +265,9 @@ A second run of the same two commands on the same machine gave: browser 12.12 s,
 600.8 → 760.3 MiB (+159.5 MiB), WebAssembly heap 33,554,432 bytes, page JS heap 2.3 MiB; CLI 1.60 s, 1,279.5 MiB/s,
 child peak RSS 22.1 MiB.
 
-At the time these runs did not show the 128 MiB target was met: the browser RSS delta was 140.3 and 159.5 MiB, with
-no per-component breakdown. The breakdown above found the cause in the renderer.
+The proposed target was at most 128 MiB of extra payload working memory. These runs do not show that it is met.
+The browser RSS delta was 140.3 and 159.5 MiB. It also counts things that are not payload memory: worker start-up,
+the Wasm module and its fixed 32 MiB heap, and Chrome's own caching. No per-component breakdown was measured.
 
 How those browser numbers were measured:
 
