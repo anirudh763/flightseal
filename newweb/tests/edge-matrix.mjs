@@ -164,7 +164,7 @@ try {
     assert.ok(indexedRows > 0 && indexedRows <= 50, `expected one paginated slice, found ${indexedRows} rows`);
     await route(page, 'receipts');
     assert.equal(await page.locator('tbody tr').count(), 13);
-    assert.match(await page.locator('.receipt-overview').textContent(), /64,542 records covered by a trusted receipt · 0 uncovered/);
+    assert.match(await page.locator('.receipt-overview').textContent(), /64,542 records covered by a receipt signed by the key you entered · 0 uncovered/);
     await route(page, 'sandbox');
     return { bytes: 30294365, records: 64542, receiptRows: 13, paginatedIndexRows: indexedRows, workerUrls, elapsedMs: metrics.fullPx4ElapsedMs, eventLoopTicks: heartbeat.ticks, heartbeatMaxGapMs: metrics.fullPx4HeartbeatMaxGapMs, heartbeatBoundMs: 1500, fullFixturePrecached: false };
   });

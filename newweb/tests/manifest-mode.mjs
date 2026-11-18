@@ -405,6 +405,43 @@ try {
     assert.equal(await page.locator('#manifest-landing').inputValue(), '', 'a landing time is never carried into the next batch');
   });
 
+  await check('A key marked compromised while files are hashing shows compromised on screen and in every export', async () => {
+    const ctx = await browser.newContext({ acceptDownloads: true, viewport: { width: 1440, height: 900 } });
+    try {
+      const checker = await ctx.newPage();
+      checker.on('pageerror', (error) => runtimeErrors.push(`stale-trust: ${error}`));
+      const admin = await ctx.newPage(); // "another tab" sharing this browser's trusted companies
+      await admin.goto(`${url}#/app/settings`);
+      await admin.locator('.trusted-companies-details > summary').click();
+      await admin.locator('#tc-name').fill('Late Co');
+      await admin.locator('#tc-fingerprint').fill(fingerprintOf(publicKey));
+      await admin.getByLabel('contract or invoice', { exact: true }).check();
+      await admin.getByRole('button', { name: 'Add company' }).click();
+      await admin.getByRole('button', { name: 'Mark as compromised: Late Co' }).waitFor();
+      await checker.goto(`${url}#/app/protect`);
+      await checker.getByLabel('Large files (fingerprint only)').check();
+      const big = join(dir, 'slow.bin'); const fd = openSync(big, 'w'); ftruncateSync(fd, 1536 * 1024 * 1024); closeSync(fd);
+      await checker.locator('#manifest-check-file').setInputFiles(sealedPath);
+      await checker.locator('#manifest-check-text').fill(handover);
+      await checker.locator('#manifest-trusted-key').fill(publicKey);
+      await checker.locator('#manifest-local-files').setInputFiles(big);
+      await checker.getByRole('button', { name: 'Check files' }).click();
+      await checker.locator('#manifest-check-progress-0').waitFor({ timeout: 30000 });
+      await admin.getByRole('button', { name: 'Mark as compromised: Late Co' }).click();
+      await admin.locator('.confirm-box').getByRole('button', { name: 'Mark as compromised' }).click();
+      assert.equal(await checker.locator('#manifest-check-progress-0').count(), 1, 'still hashing when the key was marked');
+      const line = checker.locator('.manifest-outcome .trust-line');
+      await line.waitFor({ timeout: 120000 });
+      await checker.waitForFunction(() => /marked as compromised: Late Co/.test(document.querySelector('.manifest-outcome .trust-line')?.textContent || ''), null, { timeout: 5000 });
+      const save = async (name) => { const [d] = await Promise.all([checker.waitForEvent('download'), checker.getByRole('button', { name, exact: true }).click()]); return readFileSync(await d.path()); };
+      for (const name of ['Download text report', 'Download Markdown report']) assert.match((await save(name)).toString('utf8'), /Key trust: Signed by a key you marked as compromised: Late Co/, name);
+      assert.equal(JSON.parse((await save('Download JSON')).toString('utf8')).keyTrust.status, 'compromised');
+      const pdf = (await save('Download PDF')).toString('latin1');
+      assert.ok(pdf.startsWith('%PDF-')); // its lines come from the same report object as the text export
+      rmSync(big);
+    } finally { await ctx.close(); }
+  });
+
   await check('No request body contains the marker or source-file bytes', async () => {
     const bodies = requests.map((r) => r.postDataBuffer()).filter(Boolean);
     for (const body of bodies) for (const secret of secrets) assert.equal(body.includes(secret), false, 'file bytes in a request body');

@@ -225,7 +225,7 @@ try {
     assert.match(await page.locator('.sample-note').textContent(), /selected decoded records/);
     await route(page, 'receipts');
     assert.equal(await page.locator('tbody tr').count(), 13);
-    assert.match(await page.locator('.receipt-overview').textContent(), /64,542 records covered by a trusted receipt · 0 uncovered/);
+    assert.match(await page.locator('.receipt-overview').textContent(), /64,542 records covered by a receipt signed by the key you entered · 0 uncovered/);
     await route(page, 'sandbox');
   });
 
