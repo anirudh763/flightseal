@@ -85,7 +85,7 @@ flowchart TD
 
 - **Binds:** R7, `app.py` register path, outbox
 - **Prevents:** duplicate registrations after a lost ack, a second share from a replay, a quota charged twice, a partial write on 429
-- **Rule:** The registration id is derived from org, fingerprint, head and count. One `TransactWriteItems` puts REG, puts IDEM and increments the month's quota, all or nothing. Same idempotency key and payload returns the original ack and `received_at`; same key, different payload 409. The same receipt under a new idempotency key returns the original ack (or 410 if deleted) when its envelope has expired, or when its envelope is valid and its signing key is still active; with a valid envelope after a rotation or compromise it answers 403. Clients keep the original idempotency key for every retry. A retry never creates a share. The client keeps one owner/payload-bound idempotency key per receipt for the life of its retries.
+- **Rule:** The registration id is derived from org, fingerprint, head and count. One `TransactWriteItems` puts REG, puts IDEM and increments the month's quota, all or nothing. Same idempotency key and payload returns the original ack and `received_at`; same key, different payload 409. The same receipt under a new idempotency key returns the original ack (or 410 if deleted) when its envelope has expired, or when its envelope is valid and its signing key is still active; with a valid envelope after a rotation or compromise it answers 403. The server's payload hash covers exactly the receipt and `envelope_id`, so the client key is base64url(SHA-256(owner, receipt, `envelope_id`)): it is kept for every retry under one bound envelope and changes only when `retryNow(id)` binds a new envelope after `envelope_expired`, `sub_mismatch` or `epoch_mismatch`. A stored key is never sent with a different `envelope_id`. A retry never creates a share.
 
 ### AD-6 — Withdrawal and deletion are state plus tombstone, checked on read [ADOPTED]
 
@@ -145,7 +145,19 @@ flowchart TD
 
 - **Binds:** R7, R10, `newweb/src/outbox.mjs`, `newweb/src/registry-client.mjs`, console registry UI
 - **Prevents:** queued work counted as witnessed, cross-owner dispatch, private data in browser storage, client and server disagreeing on what a response means
-- **Rule:** An outbox row holds only the envelope id, expiry and epoch, receipt v1, one owner/payload-bound idempotency key and retry state; never original media, manifests, salts or signing keys, and none of these go to telemetry. Enqueue and ack-persist are each one transaction. Logout or owner change stops dispatch and drops late results; the token's owner must match the outbox owner before every send. Attempts and storage are bounded, with exponential backoff and jitter. Queued work reads "Not yet registered" until an ack is persisted; after storage eviction the UI never implies the lost queue can still export. Response handling, as merged in `outbox.mjs`: 429 `quota_exceeded` moves the row to `needs_attention` (reason `quota_exceeded`) and is never retried automatically, only by an explicit `retryNow(id)`; any other 429 (API Gateway throttling), network errors, timeouts, 408 and 5xx back off with exponential delay and jitter until `attempts_exhausted`; the three envelope codes move to `needs_attention` and need a new envelope via `retryNow(id)`; other 4xx codes, including 410 `registration_deleted`, are terminal `needs_attention`. A 200 ack with `disposition: "deleted"` reads "Registered, later deleted". The epoch is read once per open before dispatch. `busy()` reports whether a dispatch pass is running, and callers use it instead of guessing from row states. Share creation reuses one client token, hash and idempotency key per attempt (AD-9).
+- **Rule:** An outbox row holds only the envelope id, expiry and epoch, receipt v1, one owner/payload-bound idempotency key and retry state; never original media, manifests, salts or signing keys, and none of these go to telemetry. Enqueue and ack-persist are each one transaction. Logout or owner change stops dispatch and drops late results; the token's owner must match the outbox owner before every send. Attempts and storage are bounded, with exponential backoff and jitter. Queued work reads "Not yet registered" until an ack is persisted; after storage eviction the UI never implies the lost queue can still export. Response handling, as merged in `outbox.mjs`: 429 `quota_exceeded` moves the row to `needs_attention` (reason `quota_exceeded`) and is never retried automatically, only by an explicit `retryNow(id)`; any other 429 (API Gateway throttling), network errors, timeouts, 408 and 5xx back off with exponential delay and jitter until `attempts_exhausted`; the three envelope codes move to `needs_attention` and need a new envelope via `retryNow(id)`; 403 `key_not_enrolled` and `key_not_active` move to `needs_attention` and are retried only by an explicit `retryNow(id)` with the same binding; the remaining 4xx (410 `registration_deleted`, 409, 400, 413, 422 `bad_signature`) are terminal `needs_attention`. A 200 ack with `disposition: "deleted"` reads "Registered, later deleted". The epoch is read once per open before dispatch. `busy()` reports whether a dispatch pass is running, and callers use it instead of guessing from row states. Share creation reuses one client token, hash and idempotency key per attempt (AD-9). The "Registry acceptance" line on Verify and in every report comes only from this device's saved outbox row whose receipt line matches a checked one (`registryTimeField` in `newweb/src/registry-ui.jsx`), never from a live registry lookup: "Registered at" plus the saved `received_at`, with basis "the registry's clock; the registry's statement, not proof of the files", "Registered, later deleted", "Needs attention" or "Not yet registered" from a row or this tab's unsent in-memory list, otherwise "Not signed in", "Not available yet" or "No registry record on this device". A build without a registry keeps "Not registered" / "no registry was used".
+
+### AD-16 — Registry UI ships only with a baked-in URL; test sign-in only on loopback [ADOPTED]
+
+- **Binds:** R2, R10, `newweb/vite.config.js`, `newweb/src/main.jsx`, `newweb/src/registry-ui.jsx`, the Pages build
+- **Prevents:** registry code, requests or an outbox database in a build without a registry, a runtime switch turning the registry on, or a paste-a-token form pointed at a real registry
+- **Rule:** Every registry render and call in `main.jsx` sits behind the build-time constant `__REGISTRY_URL__`, set from `VITE_REGISTRY_URL` (a public URL, origin plus optional path, not a secret: https, or http only on a loopback host; no credentials, query or fragment; checked in `vite.config.js`). Empty, as on GitHub Pages, means no registry code ships (`newweb/tests/registry-wiring.mjs` scans `docs/console`). "Test sign-in (local only)", which takes a pasted token kept in tab memory and `sessionStorage` only, appears only when that URL's host is `localhost`, `127.0.0.1` or `[::1]`; any other registry says sign-in is not available in this build. Real sign-in (Cognito, AD-3) needs its own change.
+
+### AD-17 — Sign-out and logout reach every tab without a token [ADOPTED]
+
+- **Binds:** R7, R10, `newweb/src/registry-ui.jsx`, every `main.jsx` path that calls `registryLogout()` (through `clearSensitiveWorkspace()`)
+- **Prevents:** a duplicated tab still sending as a signed-out user, a token crossing tabs, or the unsent proofs of a user who logged out sent or shown under the next app user
+- **Rule:** Registry sign-out and app logout are broadcast on `BroadcastChannel('hashwing-registry')`. A message is `{type: 'signout', owner}` (only tabs of that `<org>/<sub>` drop their token and close the outbox) or `{type: 'logout'}` (every tab); it never carries a token. On `logout`, every open tab also discards the unsent proofs held in memory and the display names; they belong to the user who left and are never put back for the next one. Saved outbox rows are closed, not deleted, and stay bound to their owner (AD-15). `logout` is sent by every path through `clearSensitiveWorkspace()`: app logout, logout from another tab, app sign-in or account switch, and starting the demo while a session is open. Receivers are idempotent. Tabs that are frozen, discarded or lack `BroadcastChannel` miss the message and, when they wake, sign back in with their saved `sessionStorage` token (docs/OUTBOX.md, Limits). Whether in-memory proofs should be tagged with the registry owner they were sealed under, and whether `logout` should reach tabs of other local profiles, are open (Deferred).
 
 ## Consistency Conventions
 
@@ -158,7 +170,7 @@ flowchart TD
 | Request order | CORS preflight (Lambda layer, before identity) → restore 503 → size 413 → route 404 → identity 401/403 → schema 400 → idempotency replay → receipt 400 → signature 422 → envelope 422 `envelope_expired` / `sub_mismatch` / `epoch_mismatch` (or committed ack) → key state 403 → transaction; nothing reveals whether a registration exists before the signature check |
 | Config | environment variables only (`IDENTITY_ADAPTER`, `TABLE_NAME`, `REG_QUOTA_PER_MONTH`, `DEDUPE_SECONDS`, `ENVELOPE_SECONDS`, `RESTORED_FROM`, `RESTORE_ID`, `CORS_ORIGINS` for the Lambda layer only); `DEV_*` never in the stack |
 | Crypto | stdlib-only Ed25519 in the Lambda; no native wheels |
-| Client labels | "Not yet registered" until an ack is persisted; Sealed locally / Waiting for connection / Registering / Registered / Needs attention; registry key states are `active`, `rotated`, `compromised` in the API and data; "replaced" is the UI display label for `rotated` (the recipient pin store in `newweb/src/trusted-keys.mjs` uses `replaced` as its own status) |
+| Client labels | "Not registered" only when the build has no registry (flag off, basis "no registry was used"); "Not yet registered" while a proof waits, until an ack is persisted; Sealed locally / Waiting for connection / Registering / Registered / Needs attention; registry key states are `active`, `rotated`, `compromised` in the API and data; "replaced" is the UI display label for `rotated` (the recipient pin store in `newweb/src/trusted-keys.mjs` uses `replaced` as its own status); the other Verify-line values are listed in AD-15 |
 
 ## Stack
 
@@ -167,7 +179,7 @@ Versions from `infra/package.json`, `.github/workflows/ci.yml` and `docs/aws/COV
 | Name | Version |
 | --- | --- |
 | Python (Lambda runtime and CI tests) | 3.12 |
-| Node.js (CI, infra) | 22 |
+| Node.js | 22 (infra and most CI jobs); 24 (console CI job) |
 | boto3 in Lambda | runtime-included, unpinned |
 | aws-cdk-lib | 2.277.0 |
 | constructs | 10.8.1 |
@@ -194,7 +206,8 @@ flowchart LR
     G --> L[Lambda] --> D[(DynamoDB on demand)]
     L --> W[CloudWatch Logs 7 d]
   end
-  Pages[GitHub Pages static console] -. optional calls .-> G
+  Pages["GitHub Pages console<br/>VITE_REGISTRY_URL empty: no registry code"]
+  Flag["Console built with VITE_REGISTRY_URL<br/>(loopback dev registry only today)"] -. optional calls .-> G
 ```
 
 ### Registration and check flow
@@ -240,15 +253,15 @@ erDiagram
 | Capability / Area | Lives in | Governed by |
 | --- | --- | --- |
 | R1 IaC + LocalStack + coverage | `infra/`, `registry/localstack/`, `docs/aws/COVERAGE.md` | AD-13 |
-| R2 originals local, registry optional | local core, `newweb/` | AD-1, paradigm |
+| R2 originals local, registry optional | local core, `newweb/` | AD-1, AD-16, paradigm |
 | R3 receipt-only storage | `registry/registry/app.py`, `store.py` | AD-2 |
 | R4 key enrollment, org from token | `identity.py`, key routes | AD-3, AD-4, AD-14 |
 | R5 time vs retention | docs, console labels | AD-10, AD-14 |
 | R6 withdrawal, deletion, restore | `app.py`, `restore.py`, RUNBOOK_AWS.md | AD-6, AD-7, AD-8 |
-| R7 idempotent retries | `app.py`, outbox | AD-5, AD-11, AD-15 |
+| R7 idempotent retries | `app.py`, outbox | AD-5, AD-11, AD-15, AD-17 |
 | R8 public check by link | `GET /v1/shares/<token>`, `create_share`, public route throttle | AD-9, AD-12 |
 | R9 region and cost envelope | `infra/lib/stack.ts`, COST.md | AD-12, AD-11 |
-| R10 identity adapter | `identity.py`, `infra/` | AD-3 |
+| R10 identity adapter | `identity.py`, `infra/`, console sign-in | AD-3, AD-16, AD-17 |
 | R11 static hosting | GitHub Pages; Amplify artifacts prepared | AD-1 |
 
 ## Deferred
@@ -264,9 +277,13 @@ erDiagram
 | Lambda and API persistence across LocalStack restart | Community 4.12.0 drops them; DynamoDB data survives | Owner supplies an auth token for the current `localstack/localstack` image (and `deploy_cdklocal.sh` is re-pinned), or a redeploy script |
 | One answer for a deleted registration: today an original-key replay within `DEDUPE_SECONDS` is 200 `disposition: "deleted"` (with `received_at`) and any other path is 410 | AD-15 fixes how the client shows each; no data is exposed beyond the original ack | Next change to the register path |
 | CI test that diffs the `app.py` and `stack.ts` route lists | Today only the authorizer split is asserted, not set equality with `app.py` | Next change to either route list |
-| Offline outbox wiring into the console | Client modules are merged but `main.jsx` does not use them yet | The console owner wires them |
 | Data-loss fixes | Named by the owner. One found in review: a backup restore replays only revoking tombstones, so registrations and shares created after the backup are lost while the client shows Registered. Proposed: journal creations as never-expiring TOMB items and re-create them before revocations | Owner lists the defects; fix before PITR or real data |
 | Static hosting on Amplify | Artifacts prepared; Pages is enough while the registry is local | Owner wants custom headers enforced |
 | Per-user rate limits, WAF, custom domain, managed keys (KMS) | Fixed-fee or out of scope under AD-12 | Abuse or a customer requirement appears |
 | Multi-region and disaster recovery (PITR is off by default; Cognito Lite user pools have no point-in-time restore, so org assignments cannot be restored) | Single-company pilot with disposable data (AD-12) | Before real customer data |
 | Python 3.12 Lambda runtime end of support (2028-10-31) | Years away | Next runtime bump, or before 2028-10 |
+| Node.js 22 end of life (2027-04-30) | Infra and most CI jobs; the console job already runs Node 24 | Before 2027-04 |
+| Owner of an unsent in-memory proof: today it has none, so a registry sign-out keeps it and the next registry sign-in in that tab, under any owner, enqueues it | Pilot is one company; app logout already discards these | Before more than one registry user shares a browser, or real sign-in lands |
+| Scope of the every-tab `logout`: it also fires on app sign-in, account switch and demo start, and reaches tabs of other local profiles; a receiving tab re-announces it | Lost work is limited to unsent in-memory proofs (docs/OUTBOX.md, Limits) | Next change to the logout paths |
+| A Verify line that is only one tab's view: another tab's new ack, or acks pruned past 1000, are not reflected; a flag-on report built without a checked receipt can fall back to "Not registered" | Display only; nothing is sent or stored wrongly | Next change to `registryTimeField` or the reports |
+| Test for the non-loopback branch of AD-16 ("Registry sign-in isn't available in this build yet") | `registry-wiring.mjs` builds only flag-off and loopback flag-on | Next change to the registry panel, or before any non-loopback build |

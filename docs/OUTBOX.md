@@ -33,8 +33,11 @@ What the console does with the flag on:
   Registry sign-out and app logout are also broadcast (`BroadcastChannel('hashwing-registry')`, never carrying a
   token) to the other open tabs. A sign-out names the owner `<org>/<sub>`, and only that owner's tabs drop their copy of
   the token (a duplicated tab copies `sessionStorage`) and stop sending; an app logout signs every tab out of the
-  registry. Proofs the logged-out user sealed in this tab are never kept for the next one, and
-  a new owner neither sees the previous owner's file names nor hears them announced.
+  registry. Logging out of the app (and the other paths that send the same message: signing in to the app or switching
+  account, and starting the demo while a session is open) also throws away, in every open tab, the unsent proofs held in memory (those sealed
+  while signed out of the registry) and their file names: they belong to the user who left and are never kept for the
+  next one. Rows already saved in the outbox database stay there, closed, for that user's next sign-in. A new owner
+  neither sees the previous owner's file names nor hears them announced.
 
 ## Owners and storage
 
@@ -117,6 +120,10 @@ idempotency window. A malformed `token`, or a page without Web Crypto (not a sec
 - Cross-tab sign-out reaches only tabs that are running. A tab the browser froze or discarded, or one closed and
   restored with its `sessionStorage`, misses the message and signs back in with its saved token when it wakes; sign out
   there too. Browsers without `BroadcastChannel` sign out only the current tab.
+- **Possible lost work: app logout drops unsent in-memory proofs in every tab.** A proof sealed while signed out of the
+  registry waits only in that tab's memory. If anyone logs out of the app in any open tab (or signs in, switches
+  account or starts the demo while a session is open), every tab discards those proofs, and nothing asks first. The sealed files and receipt messages are not affected, but those proofs will not
+  register unless they are sealed again or were exported first ("Export pending proofs").
 
 ## Commands
 

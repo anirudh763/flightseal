@@ -225,5 +225,6 @@ nothing is served from a partial read. All reads are strongly consistent.
 
 ## Not built
 
-Per-user rate limits beyond the stage throttle, a WAF, custom domains, managed keys, and a console screen. These
-are either fixed-fee services excluded by the cost target or out of scope for this packet.
+Per-user rate limits beyond the stage throttle, a WAF, custom domains, managed keys, and real (Cognito) sign-in in
+the console. The console's registry screens ship only in a build with `VITE_REGISTRY_URL` ([OUTBOX.md](../OUTBOX.md)).
+The rest are either fixed-fee services excluded by the cost target or out of scope for this packet.
