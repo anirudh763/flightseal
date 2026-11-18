@@ -74,3 +74,23 @@ def test_restore_reapplies_compromised_keys_and_the_epoch():
     assert (s, out["error"]) == (422, "epoch_mismatch")
     s, out, _ = register(restored, pilot, line(SEED_A, 7), idem="idem-key-0000000009")
     assert (s, out["error"]) == (403, "key_not_active")
+
+
+def test_restore_never_reopens_a_registration_made_and_deleted_after_the_backup():
+    """Registered and deleted after the backup: the restored table has no REG, so a fresh retry must still get 410."""
+    app, live, clock = make_app()
+    enroll(app, clock)
+    pilot, admin = token(clock), token(clock, role="admin")
+    backup = MemoryTable()
+    backup.items = {k: dict(v) for k, v in live.items.items()}  # taken before the registration exists
+    _, reg, _ = register(app, pilot, line(SEED_A, 4), idem="idem-key-0000000011")
+    rid = reg["registration_id"]
+    assert call(app, "DELETE", f"/v1/registrations/{rid}", admin)[0] == 200
+
+    restored, _, _ = make_app(table=backup, RESTORED_FROM="live", RESTORE_ID="r1", TABLE_NAME="restored")
+    restored.clock = clock
+    apply_tombstones(live, backup, source_name="live", target_name="restored", restore_id="r1", served="live")
+    s, out, _ = register(restored, pilot, line(SEED_A, 4), idem="idem-key-0000000012")  # new key: no replay record
+    assert (s, out["error"]) == (410, "registration_deleted")
+    rows = call(restored, "GET", "/v1/registrations", pilot)[1]["registrations"]
+    assert [(r["registration_id"], r["disposition"]) for r in rows] == [(rid, "deleted")]

@@ -334,8 +334,10 @@ class App:
         items, last = self.t.query(f"ORG#{ident.org_id}", "REG#", int(limit), "REG#" + cursor if cursor else None)
         out = []
         for reg in items:
-            row = {"registration_id": reg["SK"][4:], "count": reg["count"], "head": reg["head"],
-                   "key_fingerprint": reg["fp"], "disposition": reg["state"]}
+            row = {"registration_id": reg["SK"][4:], "disposition": reg["state"]}
+            for name, field in (("count", "count"), ("head", "head"), ("key_fingerprint", "fp")):
+                if field in reg:  # a restored deleted stub has only its id and state
+                    row[name] = reg[field]
             if "received_at" in reg:
                 row["received_at"] = _iso(reg["received_at"])
             out.append(row)
