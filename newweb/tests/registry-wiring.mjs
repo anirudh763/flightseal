@@ -772,7 +772,8 @@ try {
       assert.equal(await reloadWarns(a), true, 'a Download click is not proof the save finished');
       // No question after a download; the sign-in gate is where the user says it saved, without downloading again.
       await a.evaluate(() => { location.hash = '/login'; });
-      await a.locator('#auth-main').getByRole('button', { name: 'I saved it' }).click();
+      await a.locator('#auth-main').getByText('You started a download of reload-flight.ulg.fseal and reload-flight.ulg.receipt.txt. Did they save?').waitFor();
+      await a.locator('#auth-main').getByRole('button', { name: 'I saved both' }).click();
       await a.waitForFunction(() => !document.querySelector('.auth-output-warning'));
       await a.evaluate(() => { location.hash = '/app/protect'; });
       await a.locator('#handover-text').waitFor();
@@ -803,7 +804,7 @@ try {
       // A cancelled or blocked download never clears the only copy: the notice stays until the user says it finished.
       const [cancelled] = await Promise.all([a.waitForEvent('download'), notice.getByRole('button', { name: 'Download unsaved work' }).click()]);
       await cancelled.cancel();
-      await notice.getByText('Did the download finish?').waitFor();
+      await notice.getByText('Download started: hashwing-unsaved-work.zip. Check your Downloads folder. Did it save?').waitFor();
       assert.equal(await notice.count(), 1, 'the kept work is still here after a cancelled download');
       assert.equal(await reloadWarns(a), true, 'and reload still warns');
       await notice.getByRole('button', { name: 'Discard' }).click();
@@ -813,7 +814,7 @@ try {
       assert.equal(download.suggestedFilename(), 'hashwing-unsaved-work.zip');
       const zip = readFileSync(await download.path()).toString('latin1');
       for (const name of ['kept-flight.ulg.fseal', 'kept-flight.ulg.receipt.txt']) assert.ok(zip.includes(name), `zip has ${name}`);
-      await notice.getByRole('button', { name: 'Yes, saved' }).click();
+      await notice.getByRole('button', { name: 'I saved it' }).click();
       await notice.waitFor({ state: 'detached' });
       assert.equal(await reloadWarns(a), false);
       assert.equal(await a.evaluate(() => sessionStorage.getItem('hashwing-registry-token')), null);
@@ -864,7 +865,8 @@ try {
       const [started] = await Promise.all([a.waitForEvent('download'), menu.getByRole('button', { name: 'Download unsaved work' }).click()]);
       await started.cancel();
       assert.equal(await menu.getByRole('button', { name: 'Log out', exact: true }).isDisabled(), true, 'a started download alone does not unlock Log out');
-      await menu.getByRole('button', { name: 'Yes, saved' }).click();
+      await menu.getByRole('button', { name: 'I saved it' }).click();
+      await a.waitForFunction(() => document.activeElement?.classList.contains('profile-logout')); // focus moves on to Log out
       await menu.getByRole('button', { name: 'Log out', exact: true }).click();
       await a.waitForFunction(() => location.hash === '#/');
       await a.goto(`${flagOn.url}#/app/protect`);
@@ -894,11 +896,11 @@ try {
       await menu.getByRole('button', { name: 'Download unsaved work' }).click();
       await menu.getByText(/Couldn't make one download \(blocked in this test\)/).waitFor();
       await Promise.all([a.waitForEvent('download'), menu.getByRole('button', { name: 'part-a.ulg.fseal', exact: true }).click()]);
-      await menu.getByText('1 of 5 files downloaded. Download the rest, then confirm.').waitFor();
-      assert.equal(await menu.getByRole('button', { name: 'These finished' }).count(), 0, 'no part is complete yet');
+      await menu.getByText('Download started for 1 of 5 files. Download the rest.').waitFor();
+      assert.equal(await menu.getByRole('button', { name: 'I saved these' }).count(), 0, 'no part is complete yet');
       await Promise.all([a.waitForEvent('download'), menu.getByRole('button', { name: 'part-a.ulg.receipt.txt', exact: true }).click()]);
-      await menu.getByText('2 of 5 files downloaded. Download the rest, then confirm.').waitFor();
-      await menu.getByRole('button', { name: 'These finished' }).click();
+      await menu.getByText('Download started for 2 of 5 files. Download the rest.').waitFor();
+      await menu.getByRole('button', { name: 'I saved these' }).click();
       assert.equal(await menu.getByRole('button', { name: 'Log out', exact: true }).isDisabled(), true, 'the Samples result was never downloaded');
       assert.equal(await reloadWarns(a), true);
       await menu.getByRole('button', { name: 'Download unsaved work' }).click();
@@ -926,7 +928,7 @@ try {
       const zip = readFileSync(await download.path()).toString('latin1');
       assert.match(zip, /hashwing-\d{8}-\d{6}\.manifest\.fseal/, 'the zip holds the sealed list');
       assert.match(zip, /hashwing-\d{8}-\d{6}\.receipt\.txt/, 'and its receipt message');
-      await a.locator('#auth-main').getByRole('button', { name: 'Yes, saved' }).click();
+      await a.locator('#auth-main').getByRole('button', { name: 'I saved it' }).click();
       await a.waitForFunction(() => !document.querySelector('.auth-output-warning'));
       assert.equal(await reloadWarns(a), false);
     } finally { await c.close(); }

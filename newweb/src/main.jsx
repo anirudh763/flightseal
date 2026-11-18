@@ -307,16 +307,29 @@ function App() {
   const askDone = unsavedAsk ? askFiles.filter((f) => unsavedAsk.done.has(f.name)).length : 0;
   const askComplete = unsavedAsk ? unsavedAsk.listed.some((p) => p.files.every((f) => unsavedAsk.done.has(f.name))) : false;
   // Sealed results whose every unsaved part was downloaded from the handoff: the user can confirm them without a second download.
-  const startedParts = [...(protectUnsaved && startedAll(protectSealed) ? [{ name: protectSealed.log.name, markSaved: () => { markProtectSaved(protectSealed.log, 'file'); markProtectSaved(protectSealed.log, 'receipt'); } }] : []), ...(manifestUnsaved?.requested ? [manifestUnsaved] : [])];
+  // Each names what "I saved it" would confirm: the file, plus its receipt when only the receipt's download was started.
+  const startedName = (r, name) => (r.saved?.receipt ? [name] : [name, `${name.replace(/(\.manifest)?\.fseal$/, '')}.receipt.txt`]);
+  const startedParts = [...(protectUnsaved && startedAll(protectSealed) ? [{ names: startedName(protectSealed, protectSealed.log.name), markSaved: () => { markProtectSaved(protectSealed.log, 'file'); markProtectSaved(protectSealed.log, 'receipt'); } }] : []),
+    ...(manifestUnsaved?.requested ? [{ ...manifestUnsaved, names: startedName(manifestOutput || {}, manifestUnsaved.name) }] : [])];
+  const startedNames = startedParts.flatMap((p) => p.names);
+  const savedLabel = (n) => (n > 2 ? 'I saved them' : n === 2 ? 'I saved both' : 'I saved it');
+  // After "I saved it" the control goes away: focus moves on to the action it was blocking (Log out, the sign-in form).
+  const focusNext = (event) => {
+    const root = event.currentTarget.closest('.profile-menu, #auth-main');
+    requestAnimationFrame(() => {
+      const next = root?.isConnected && (root.querySelector('.profile-logout:not([disabled]), #auth-email') || root.querySelector('button:not([disabled]), input:not([disabled])'));
+      (next || document.getElementById('main') || document.querySelector('main'))?.focus(); // the rescue notice goes away entirely: its page
+    });
+  };
   const unsavedControl = <div className="unsaved-download">
     {unsavedError && <><p className="receipt-error" role="alert">{unsavedError}</p>
       <div className="actions-row">{askFiles.map((file) => <button key={file.name} type="button" className="button secondary" onClick={() => downloadOneUnsaved(file)}>{file.name}</button>)}</div></>}
-    {askDone > 0 && askDone === askFiles.length ? <><p role="status">Did the download finish?</p>
-      <div className="actions-row"><button type="button" className="button primary" onClick={confirmUnsavedSaved}>Yes, saved</button><button type="button" className="button secondary" onClick={downloadUnsaved}>Download again</button></div></>
-      : askDone > 0 ? <><p role="status">{askDone} of {askFiles.length} files downloaded. Download the rest, then confirm.</p>
-        {askComplete && <div className="actions-row"><button type="button" className="button secondary" onClick={confirmUnsavedSaved}>These finished</button></div>}</>
-      : !unsavedError && <>{startedParts.length > 0 && <p role="status">You started a download of {startedParts.map((p) => p.name).join(', ')}. Did it save?</p>}
-        <div className="actions-row"><button type="button" className="button primary" onClick={downloadUnsaved}><Download aria-hidden="true" size={16} />Download unsaved work</button>{startedParts.length > 0 && <button type="button" className="button secondary" onClick={() => startedParts.forEach((p) => p.markSaved())}>I saved it</button>}</div></>}
+    {askDone > 0 && askDone === askFiles.length ? <><p role="status">{unsavedError ? `Download started for ${askDone} of ${askFiles.length} files.` : 'Download started: hashwing-unsaved-work.zip. Check your Downloads folder.'} Did {askDone > 1 && unsavedError ? 'they' : 'it'} save?</p>
+      <div className="actions-row"><button type="button" className="button primary" onClick={(e) => { confirmUnsavedSaved(); focusNext(e); }}>{unsavedError ? savedLabel(askDone) : 'I saved it'}</button><button type="button" className="button secondary" onClick={downloadUnsaved}>Download again</button></div></>
+      : askDone > 0 ? <><p role="status">Download started for {askDone} of {askFiles.length} files. Download the rest.</p>
+        {askComplete && <div className="actions-row"><button type="button" className="button secondary" onClick={(e) => { confirmUnsavedSaved(); focusNext(e); }}>I saved these</button></div>}</>
+      : !unsavedError && <>{startedParts.length > 0 && <p role="status">You started a download of {startedNames.join(' and ')}. Did {startedNames.length > 1 ? 'they' : 'it'} save?</p>}
+        <div className="actions-row"><button type="button" className="button primary" onClick={downloadUnsaved}><Download aria-hidden="true" size={16} />Download unsaved work</button>{startedParts.length > 0 && <button type="button" className="button secondary" onClick={(e) => { startedParts.forEach((p) => p.markSaved()); focusNext(e); }}>{savedLabel(startedNames.length)}</button>}</div></>}
   </div>;
   const protectDone = protectMode === 'embedded' ? !!protectSealed : manifestSealed;
   useEffect(() => { // old receipts say "open #/app/protect and paste this whole message"
