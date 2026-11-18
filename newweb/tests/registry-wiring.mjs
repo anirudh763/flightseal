@@ -727,6 +727,7 @@ try {
       await sealSmall(a, 'reload-flight.ulg');
       assert.equal(await reloadWarns(a), true, 'a fresh seal warns before reload');
       await Promise.all([a.waitForEvent('download'), a.getByRole('button', { name: 'Download receipt' }).click()]);
+      await a.getByRole('button', { name: 'Yes, receipt saved' }).click();
       await Promise.all([a.waitForEvent('download'), a.getByRole('button', { name: 'Download sealed file' }).click()]);
       assert.equal(await reloadWarns(a), true, 'a Download click is not proof the save finished');
       await a.locator('.handoff-confirm').getByRole('button', { name: 'Yes, saved' }).click();

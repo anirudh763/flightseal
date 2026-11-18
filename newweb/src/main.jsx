@@ -1656,11 +1656,10 @@ function App() {
           </>}
           {protectMode === 'embedded' && protectSealed && <Handoff headingRef={handoffRef} headingId="handoff-title"
             summary={`Sealed · 1 file${protectSealed.jobRef ? ` · ${protectSealed.jobRef}` : ''}`}
-            kind="file" fileName={protectSealed.log.name} downloaded={!!protectSealed.saved?.file}
-            onDownload={() => download(protectSealed.log.name, protectSealed.log, 'application/octet-stream')} onSaved={() => markProtectSaved('file')}
+            kind="file" fileName={protectSealed.log.name} unsaved={protectUnsaved} downloaded={!!protectSealed.saved?.file} receiptSaved={!!protectSealed.saved?.receipt}
+            onDownload={() => download(protectSealed.log.name, protectSealed.log, 'application/octet-stream')} onSaved={() => markProtectSaved('file')} onDownloadReceipt={() => download(`${protectSealed.name}.receipt.txt`, protectSealed.handover)} onReceiptSaved={() => markProtectSaved('receipt')}
             handoverId="handover-text" handover={protectSealed.handover} onCopy={copyHandover} copyStatus={copyStatus}
-            actions={<><a className="button secondary" href={`mailto:?subject=${encodeURIComponent(`HashWing receipt for ${protectSealed.name}`)}&body=${encodeURIComponent(protectSealed.handover)}`}><Mail aria-hidden="true" size={16} />Email it</a>
-              <button className="button secondary" type="button" onClick={() => { download(`${protectSealed.name}.receipt.txt`, protectSealed.handover); markProtectSaved('receipt'); }}><Download aria-hidden="true" size={16} />Download receipt</button></>}
+            actions={<><a className="button secondary" href={`mailto:?subject=${encodeURIComponent(`HashWing receipt for ${protectSealed.name}`)}&body=${encodeURIComponent(protectSealed.handover)}`}><Mail aria-hidden="true" size={16} />Email it</a></>}
             details={<><SenderFingerprint fingerprint={protectSealed.fingerprint} /><details className="report-details handoff-about"><summary>What is this? <ChevronDown size={17} aria-hidden="true" /></summary><div className="manifest-options-body prose"><p>{protectSealed.savedKey ? 'Signed with the key loaded under Trust. Anyone holding that private key can sign other files, so keep its backup private.' : 'The signing key was made for this file only and was discarded, never stored or exported, so no further receipt can be made with it.'} Anyone can seal a different file with another key; that is why the receipt you send now is what counts later. Sealing shows the file has not changed since now; it cannot show what happened before you sealed it.</p></div></details></>}
             shareNote={__REGISTRY_URL__ ? <RegistryShareNote /> : null}
             onSealMore={sealMoreProtect} />}
@@ -2185,21 +2184,27 @@ function ManifestSeal({ hidden, carry, common, jobRef, signingKey, onActiveChang
   const headingRef = useRef(null);
   const carriedRef = useRef(false);
   useEffect(() => () => controllerRef.current?.abort(), []);
-  useEffect(() => { onActiveChange(!!phase || (!!output && !output.saved)); }, [phase, output, onActiveChange]);
+  const unsavedList = !!output && !(output.saved.file && output.saved.receipt); // the list and its receipt message, as #37 keeps them
+  useEffect(() => { onActiveChange(!!phase || unsavedList); }, [phase, unsavedList, onActiveChange]);
   useEffect(() => { onDone(!!output); if (output) headingRef.current?.focus(); }, [output?.log]); // eslint-disable-line react-hooks/exhaustive-deps -- seal finished: the handoff heading
   const fail = (text) => { setError(text); requestAnimationFrame(() => document.getElementById('manifest-files')?.focus()); }; // the message is read with the field
   useEffect(() => () => onActiveChange(false), [onActiveChange]);
   useEffect(() => { // the sealed list and its receipt, until the list is downloaded; kept after this panel unmounts
     if (!output) return;
-    onUnsaved(output.saved ? null : { files: [{ name: output.log.name, blob: output.log }, { name: `${output.base}.receipt.txt`, bytes: new TextEncoder().encode(output.handover) }], markSaved: () => { // only this exact result, never a newer one
-      setOutput((current) => (current?.log === output.log ? { ...current, saved: true } : current)); onUnsaved((current) => (current?.files?.[0]?.blob === output.log ? null : current)); } });
-  }, [output, onUnsaved]);
+    onUnsaved(!unsavedList ? null : { files: [{ name: output.log.name, blob: output.log }, { name: `${output.base}.receipt.txt`, bytes: new TextEncoder().encode(output.handover) }], markSaved: () => { // only this exact result, never a newer one
+      setOutput((current) => (current?.log === output.log ? { ...current, saved: { file: true, receipt: true } } : current)); onUnsaved((current) => (current?.files?.[0]?.blob === output.log ? null : current)); } });
+  }, [output, unsavedList, onUnsaved]); // eslint-disable-line react-hooks/exhaustive-deps
   const reset = () => { controllerRef.current?.abort(); setOutput(null); setMessage(''); setCopyStatus(''); setError(''); };
   useEffect(() => { // a file too large for Small file arrives already chosen, ready for "Seal the list"
     if (!carry || output || phase) return;
     choose([carry.file]); carriedRef.current = true;
   }, [carry]); // eslint-disable-line react-hooks/exhaustive-deps
-  useEffect(() => { if (carriedRef.current && files.length) { carriedRef.current = false; document.getElementById('manifest-seal')?.focus(); } }, [files]); // enabled now
+  useEffect(() => { // enabled now; the native field names the carried file too, instead of "No file chosen"
+    if (!carriedRef.current || !files.length) return;
+    carriedRef.current = false;
+    try { const list = new DataTransfer(); files.forEach((file) => list.items.add(file)); document.getElementById('manifest-files').files = list.files; } catch { /* the list below still names it */ }
+    document.getElementById('manifest-seal')?.focus();
+  }, [files]);
   const choose = (list) => {
     reset(); setNotes({}); setEdited({}); setDerived({}); setLandingLocal(''); // a landing time belongs to one batch
     const picked = [...(list || [])];
@@ -2232,7 +2237,7 @@ function ManifestSeal({ hidden, carry, common, jobRef, signingKey, onActiveChang
       const base = `hashwing-${stamp()}`;
       const fingerprint = await fingerprintHex(sealed.publicKey);
       setOutput({
-        base, publicKey: sealed.publicKey, fingerprint, items: items.length, total: hashed.reduce((sum, item) => sum + item.bytes, 0), saved: false, names: files.map((file) => file.name), jobRef: jobRef.trim(),
+        base, publicKey: sealed.publicKey, fingerprint, items: items.length, total: hashed.reduce((sum, item) => sum + item.bytes, 0), saved: { file: false, receipt: false }, names: files.map((file) => file.name), jobRef: jobRef.trim(),
         log: new File([sealed.log], `${base}.manifest.fseal`, { type: 'application/octet-stream' }),
         handover: manifestHandoverText({ items: items.length, receipts: sealed.receipts, publicKey: sealed.publicKey, sealedAt: new Date().toISOString() }),
       });
@@ -2243,8 +2248,10 @@ function ManifestSeal({ hidden, carry, common, jobRef, signingKey, onActiveChang
       else fail(cause?.message || 'Something went wrong. Press Seal the list again.');
     } finally { if (controllerRef.current === controller) { controllerRef.current = null; setPhase(''); setProgress(null); } }
   };
+  const markList = (log, part) => setOutput((current) => (current?.log === log ? { ...current, saved: { ...current.saved, [part]: true } } : current)); // only this exact result
   const copy = async () => {
-    try { await navigator.clipboard.writeText(output.handover); setCopyStatus('Receipt message copied. Paste it into an email or chat to the person who will keep it.'); }
+    const log = output.log;
+    try { await navigator.clipboard.writeText(output.handover); markList(log, 'receipt'); setCopyStatus('Receipt message copied. Paste it into an email or chat to the person who will keep it.'); }
     catch { setCopyStatus('Your browser blocked copying. Select the text in the box and copy it, or press Download receipt.'); }
   };
   // "Seal more files" after the list was downloaded, or "Discard it": this result and its selection go, and so does its
@@ -2264,11 +2271,10 @@ function ManifestSeal({ hidden, carry, common, jobRef, signingKey, onActiveChang
   const live = <p className="visually-hidden" role="status">{phase === 'hashing' ? (quarter > 0 ? `${quarter * 25}% read · ${sizes}` : '') : phase === 'sealing' ? 'Sealing…' : output ? message : ''}</p>;
   if (output) return <>{live}<Handoff headingRef={headingRef} headingId="manifest-handoff-title"
     summary={`Sealed · ${output.items} file${output.items === 1 ? '' : 's'} · ${exactBytes(output.total)}${output.jobRef ? ` · ${output.jobRef}` : ''}`}
-    kind="list" fileName={output.log.name} downloaded={output.saved} originals={output.names}
-    onDownload={() => download(output.log.name, output.log, 'application/octet-stream')} onSaved={() => setOutput((current) => current && { ...current, saved: true })}
+    kind="list" fileName={output.log.name} unsaved={unsavedList} downloaded={output.saved.file} receiptSaved={output.saved.receipt} originals={output.names}
+    onDownload={() => download(output.log.name, output.log, 'application/octet-stream')} onSaved={() => markList(output.log, 'file')} onDownloadReceipt={() => download(`${output.base}.receipt.txt`, output.handover)} onReceiptSaved={() => markList(output.log, 'receipt')}
     handoverId="manifest-handover-text" handover={output.handover} onCopy={copy} copyStatus={copyStatus}
-    actions={<><button className="button secondary" type="button" onClick={() => download(`${output.base}.receipt.txt`, output.handover)}><Download aria-hidden="true" size={16} />Download receipt</button>
-      <button className="button secondary" type="button" onClick={() => download(`${output.base}.public-key.txt`, `${output.publicKey}\n`)}><Download aria-hidden="true" size={16} />Download public key</button></>}
+    actions={<><button className="button secondary" type="button" onClick={() => download(`${output.base}.public-key.txt`, `${output.publicKey}\n`)}><Download aria-hidden="true" size={16} />Download public key</button></>}
     details={<><SenderFingerprint fingerprint={output.fingerprint} /><dl className="detail-grid"><dt>Public key</dt><dd><code className="wrap">{output.publicKey}</code></dd></dl></>}
     shareNote={shareNote} onSealMore={sealMore} />
     </>;
