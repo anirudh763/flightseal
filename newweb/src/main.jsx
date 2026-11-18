@@ -154,10 +154,9 @@ function App() {
   const [copyCompare, setCopyCompare] = useState(null); // { for: result, name, bytes, sha256, expected, matches }
   const [keyTrust, setKeyTrust] = useState(null); // { for: result, status, entry? }
   const pinsVersion = usePinsVersion();
-  // A registry share token rides only in the URL fragment; capture it before any route rewrite. Never stored or logged.
-  const [shareToken, setShareToken] = useState(null);
-  const routeShare = __REGISTRY_URL__ && route.screen === 'verify' ? route.params.get('share') : null;
-  if (routeShare && routeShare !== shareToken) setShareToken(routeShare);
+  // A registry share token rides only in the URL fragment and is read from the current route, so the record panel
+  // shows only while the link is open. Never stored or logged.
+  const shareToken = __REGISTRY_URL__ && route.screen === 'verify' ? route.params.get('share') : null;
   useEffect(() => { if (__REGISTRY_URL__) getRegistry(); }, []); // resume this tab's registry sign-in, if any
   const [copyStatus, setCopyStatus] = useState('');
   const [sealSourceOriginal, setSealSourceOriginal] = useState(null);

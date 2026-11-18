@@ -1061,7 +1061,7 @@ input[type=datetime-local] { width: 100%; max-width: 320px; min-width: 0; min-he
 .registry-dialog { max-width: min(32rem, calc(100vw - 32px)); padding: 20px; border: 1px solid var(--line); border-radius: var(--radius); color: var(--ink); background: var(--surface); }
 .registry-dialog::backdrop { background: rgb(0 0 0 / .35); }
 .registry-dialog h2 { margin: 0 0 8px; font-size: 1.05rem; }
-.button.registry-bad { color: #fff; background: var(--bad); border-color: var(--bad); }
-.button.registry-bad:hover:not(:disabled) { color: #fff; background: var(--bad); border-color: var(--ink); }
+.button.registry-bad { color: var(--surface); background: var(--bad); border-color: var(--bad); }
+.button.registry-bad:hover:not(:disabled) { color: var(--surface); background: var(--bad); border-color: var(--ink); }
 @media (max-width: 480px) { .registry-share-actions .button { flex: 1 1 100%; } }
 @media (forced-colors: active) { .registry-row .status-label { border: 1px solid CanvasText; } .button.registry-bad { border: 2px solid ButtonText; } }

@@ -42,7 +42,7 @@ function claimsOf(jwt) {
     return { org: typeof org === 'string' ? org : '', sub: typeof c.sub === 'string' ? c.sub : '', role: typeof role === 'string' ? role : '', exp: c.exp };
   } catch { return null; }
 }
-const isLoopback = (url) => { try { const h = new URL(url).hostname; return h === 'localhost' || h === '[::1]' || /^127\./.test(h); } catch { return false; } };
+const isLoopback = (url) => { try { return ['localhost', '127.0.0.1', '[::1]'].includes(new URL(url).hostname); } catch { return false; } }; // as vite.config.js
 const storage = { get() { try { return sessionStorage.getItem(TOKEN_KEY) || ''; } catch { return ''; } },
   set(v) { try { if (v) sessionStorage.setItem(TOKEN_KEY, v); else sessionStorage.removeItem(TOKEN_KEY); } catch { /* tab memory only */ } } };
 function saveFile(name, text) {
@@ -84,8 +84,8 @@ function createRegistry() {
     } catch { if (state.outbox === ob) set({ listError: LIST_ERROR }); }
   }
   async function enqueueOn(ob, receipt) {
-    try { await ob.enqueue({ receipt }); set({ enqueueError: '' }); }
-    catch (err) { if (state.outbox === ob) set({ enqueueError: err instanceof RangeError ? FULL : "Couldn't save this proof on this device. Export pending proofs, then try again." }); }
+    try { await ob.enqueue({ receipt }); set({ enqueueError: '' }); return true; }
+    catch (err) { if (state.outbox === ob) set({ enqueueError: err instanceof RangeError ? FULL : "Couldn't save this proof on this device. Export pending proofs, then try again." }); return false; }
   }
   async function importProofs(text) {
     if (!state.outbox) return { ok: false, reason: 'signed_out' };
@@ -118,8 +118,14 @@ function createRegistry() {
     unsubscribe = ob.subscribe(() => refresh(ob));
     const pending = state.pending;
     set({ outbox: ob, pending: [] });
-    for (const p of pending) await enqueueOn(ob, p.receipt);
-    await refresh(ob);
+    for (let i = 0; i < pending.length; i++) {
+      if (await enqueueOn(ob, pending[i].receipt)) continue;
+      // never drop an unsent proof: this one and every later one go back to the in-memory list
+      const back = pending.slice(i).filter((p) => !state.pending.some((q) => q.receipt === p.receipt));
+      set({ pending: [...back, ...state.pending] });
+      break;
+    }
+    if (state.outbox === ob) await refresh(ob);
     return true;
   }
   function signOut() {
@@ -143,10 +149,11 @@ function createRegistry() {
       if (!state.pending.some((p) => p.receipt === receipt)) set({ pending: [...state.pending, { receipt, at: Date.now() }] });
     },
     async exportPending() {
-      if (state.outbox) return state.outbox.exportPending();
-      if (!state.pending.length) return { ok: false, reason: 'needs_previous_export' };
-      return { ok: true, count: state.pending.length,
-        text: JSON.stringify({ format: 'hashwing-outbox-export', version: 1, receipts: state.pending.map((p) => p.receipt) }, null, 2) + '\n' };
+      const queued = state.outbox ? await state.outbox.exportPending() : { ok: false };
+      const receipts = [...new Set([...(queued.ok ? JSON.parse(queued.text).receipts : []), ...state.pending.map((p) => p.receipt)])];
+      if (!receipts.length) return { ok: false, reason: 'needs_previous_export' };
+      return { ok: true, count: receipts.length,
+        text: JSON.stringify({ format: 'hashwing-outbox-export', version: 1, receipts }, null, 2) + '\n' };
     },
   };
 }
@@ -224,7 +231,7 @@ export function SealedOnDevice({ onSignIn }) {
     }
     seen.current = now;
   }, [chipKey]); // eslint-disable-line react-hooks/exhaustive-deps
-  const registered = rows.filter((row) => row.state === 'registered' && !isDeleted(row)).length;
+  const registered = rows.filter((row) => row.state === 'registered').length; // "later deleted" rows were registered too
   const waiting = rows.filter((row) => row.state !== 'registered').length;
   const exportProofs = async () => {
     setExportStatus('');
@@ -346,7 +353,7 @@ function ShareLinks({ row, client }) {
     {link ? <>
       <label className="field-label" htmlFor={`${id}-url`}>Share link</label>
       <input id={`${id}-url`} ref={fieldRef} type="text" className="mono-input" readOnly value={link.url} aria-describedby={`${id}-hint`} onFocus={(e) => e.target.select()} />
-      <p id={`${id}-hint`} className="field-hint">Anyone with this link can see that the registry received this receipt. They still need the files and the receipt message to check the files. This link stops working on {link.expires}.</p>
+      <p id={`${id}-hint`} className="field-hint">Anyone with this link can see that the registry received this receipt. They still need the files and the receipt message to check the files. {link.expires ? `This link stops working on ${link.expires}.` : 'It stops working when it expires.'}</p>
       <div className="actions-row registry-share-actions"><button type="button" className="button secondary" onClick={copy}>Copy link</button><button type="button" className="button secondary" disabled={busy} onClick={withdraw}>Withdraw link</button></div>
     </> : <>
       <div className="actions-row"><button type="button" className="button secondary" disabled={busy} onClick={make}><Link2 aria-hidden="true" size={16} />Make a share link</button></div>
@@ -371,7 +378,13 @@ function DeleteRecord({ row, client, outbox }) {
     setBusy(true); setError('');
     const res = await client.deleteRegistration(row.registration_id);
     setBusy(false);
-    if (res.ok || res.status === 404) { close(); await outbox?.markDeleted(row.id); return; }
+    if (res.ok || res.status === 404) {
+      close();
+      let saved = false;
+      try { saved = (await outbox?.markDeleted(row.id)) === true; } catch { saved = false; }
+      if (!saved) setError("The hosted record was deleted, but this device couldn't update its saved list. Reload to see the change.");
+      return;
+    }
     close();
     setError(res.status === 403 ? 'Only a company admin can delete a hosted record.' : res.kind === 'network' || res.kind === 'timeout' ? "The registry didn't answer. Check your connection, then try again." : "The registry couldn't delete this record right now. Try again in a few minutes.");
   };

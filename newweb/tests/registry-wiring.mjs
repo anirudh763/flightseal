@@ -291,6 +291,10 @@ try {
     const body = await reviewer.locator('body').innerText();
     for (const s of ['Test sign-in', 'Company registry', 'Sealed on this device']) assert.ok(!body.includes(s), `reviewer sees ${s}`);
     await reviewer.locator('#log-input').waitFor(); // file checking stays available below
+    await reviewer.goto(shareUrl.split('?')[0].replace('/verify', '/help'));
+    await reviewer.getByRole('navigation', { name: 'Primary navigation' }).getByRole('link', { name: 'Verify', exact: true }).click();
+    await reviewer.locator('#log-input').waitFor();
+    assert.equal(await reviewer.locator('.registry-record').count(), 0, 'Verify without a link shows no old record');
     await fresh.close();
   });
 

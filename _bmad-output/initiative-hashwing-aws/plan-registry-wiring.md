@@ -3,14 +3,14 @@ title: 'Registry wiring PR 1 of 3: outbox, sign-in, shares and Trust page behind
 type: feature
 ticket: ''
 created: '2026-11-17'
-status: in-progress
+status: built
 baseline_revision: '594fbb1c7d0d385f2063d6def0b36814cb860011'
 route: full
 route_source: auto
 risk: high
-review: ''
-review_source: ''
-lenses_ran: []
+review: quick
+review_source: pinned
+lenses_ran: [quick]
 review_loop_iteration: 0
 followup_review_recommended: false
 context:
@@ -18,7 +18,14 @@ context:
   - '{project-root}/docs/OUTBOX.md'
   - '{project-root}/.agents/skills/enterprise-ui-polish/SKILL.md'
 warnings: [oversized, multiple-goals]
-deferred: []
+deferred:
+  - summary: >-
+      Browser tests for delete-404, the app logout paths, every AC-29 reason and the Registering announcement.
+    evidence: |-
+      Review pass 1: registry-wiring.mjs covers only key_not_enrolled and quota_exceeded, and registry sign-out and owner switch rather than the profile logout.
+    location: >-
+      newweb/tests/registry-wiring.mjs
+    severity: medium
 ---
 
 <intent-contract>
@@ -203,6 +210,18 @@ deferred: []
 
 ## Implementation Notes
 
+- **Confirmed by the parent session.** The `tokenOwner` and `registry-client.mjs` restriction came from the coordinator: a parallel PR, #27, changed `tokenOwner` to read `custom:org_id` first. That PR is now merged into this branch. `claimsOf` uses the same order, so the org shown on screen and the outbox owner now agree.
+- **Re-aligned to the UX spec.** `origin/docs/ux-spec` was updated during this build (EXPERIENCE.md `status: final`, AC-43 to AC-50 added). Where the spec and this plan's Always section differ, the code follows the spec:
+  - the chip text is the outbox label, and deleted rows read "Registered, later deleted";
+  - signed out or after a 401, the list shows "Sign in to the company registry to send these." with a "Sign in" action, instead of a per-row "Sign in to register";
+  - every message in the error table, and its single action, comes from the spec; for quota, "Export pending proofs" is the action and "Try again" sits under More options;
+  - "Import pending proofs" and the memory-storage notice were added;
+  - the share hint now reads "This link stops working on {date}."
+- **Coordinator-directed fixes in `main.jsx`** (this PR is the only writer of that file):
+  - Manifest-check trust is now read after hashing and is re-read when the pins version changes. A failing-first check was added to `manifest-mode.mjs`.
+  - The Receipts overview now says "covered by a trusted receipt" only for an active pinned key. The `console.mjs` and `edge-matrix.mjs` assertions were updated; they failed first.
+- **Coordinator-requested test.** A gateway-style throttle (429s with no `quota_exceeded`, 2 requests/s, burst 5) was added. In it, 30 imported proofs all end Registered and none end in Needs attention, so the outbox attempt limit was not hit.
+
 ## Plan Change Log
 
 - 2026-11-17: a mid-build message from agent `a31c00aad518f8ca0` (the sender id matches this worktree's name, so the caller should confirm it) said a parallel PR edits `tokenOwner` and asked for the smallest possible change to `registry-client.mjs`. Following it: `registry-client.mjs` gets only two new lines (`getShare`, `deleteRegistration`). `tokenOwner` is unchanged and there is no exported `tokenClaims`. Display claims (org: `custom:org_id` then `org_id`; role: `custom:role` then `role`; sub; exp) are decoded in `registry-ui.jsx`. The outbox owner still comes from `tokenOwner`.
@@ -212,6 +231,61 @@ deferred: []
 - The service worker is blocked in the tests, so the engine can't load offline. The offline row seals while the registry is unreachable (`page.route` abort), then takes the context offline.
 
 ## Review Triage Log
+
+### 2026-11-17 — Review pass
+- verdicts: 12 findings — high 0, medium 3, low 5, false 0, maybe-false 0, plus 4 rejected by rule (directed work / plan text)
+- findings:
+  - `[low]` `[reject]` No `tokenClaims` export; two token decoders. The coordinator directed this to keep the PR #27 merge clean. After the merge, both decoders read `custom:org_id` first. A shared decoder needs an edit to `registry-client.mjs`, which is deferred to the wiring follow-up.
+  - `[low]` `[reject]` The plan's Always strings differ from the code. The code follows the updated UX spec (the binding source). The fix would edit this build's plan, so it is rejected by rule; the change is recorded in the Implementation Notes.
+  - `[medium]` `[patch]` Signing in could drop in-memory pending proofs when `enqueue` failed. Fixed: `enqueueOn` returns a boolean. The failed proof and every later one go back to the pending list, and the export now includes both queued and pending proofs.
+  - `[low]` `[patch]` If `markDeleted` threw or returned false, the user saw nothing. Fixed: the call is wrapped in a try/catch, and a plain message says the record was deleted but the list couldn't update.
+  - `[medium]` `[patch]` `shareToken` stayed in state, so Verify kept showing an old record. Fixed: the token is read from the current route. A check was added: after opening a link, going to Verify from the nav shows no record. That check was not run against the old code.
+  - `[low]` `[patch]` Deleted rows were left out of both counts. Fixed: every `registered` row counts as registered (spec rule 1).
+  - `[medium]` `[defer]` Tests are missing for the delete-404 path, the app's own logout paths, the AC-29 reasons other than `key_not_enrolled` and `quota_exceeded`, and the Registering announcement.
+  - `[low]` `[reject]` The ManifestCheck and Receipts wording changes are outside the plan. The coordinator explicitly directed them into this PR; they are listed in the PR body.
+  - `[low]` `[reject]` `closeDisclosure` is copied. Importing it from `main.jsx` would create a circular import. The copy has to differ anyway: it skips Escape inside a dialog.
+  - `[low]` `[patch]` `#fff` was used in `.registry-bad`. Fixed: it now uses `var(--surface)`, and axe still reports 0 violations.
+  - `[low]` `[patch]` The loopback check differed from `vite.config.js`. Fixed: it uses the same three hosts.
+  - `[low]` `[patch]` The share hint could read "stops working on ." when `expires_at` was missing. Fixed: a fallback sentence is shown instead.
+
+## Auto Run Result
+
+- **Summary.**
+  - **Flag.** `VITE_REGISTRY_URL` is empty by default and on Pages; with it empty, no registry code ships.
+  - **Trust page.** Trust shows Trusted companies, Your signing key and, with the flag on, Company registry.
+  - **Flag on.**
+    - Test sign-in, kept in sessionStorage only.
+    - Receipts are queued after both kinds of seal.
+    - "Sealed on this device" shows outbox labels, retry, export and import, share links (create, copy, withdraw) and an admin delete dialog.
+    - The public share view is at `#/app/verify?share=`.
+    - Sign-out and owner switch close the outbox.
+  - **Also in this PR.** The coordinator-directed trust fixes, and a throttle test.
+- **Files.**
+  - `newweb/vite.config.js`: the flag and the CSP rule.
+  - `newweb/src/registry-ui.jsx`: new; all the registry UI.
+  - `newweb/src/main.jsx`: thin hooks, the Trust panels and the trust fixes.
+  - `newweb/src/style.css`: `.registry-*` rules.
+  - `newweb/src/outbox.mjs`: `markDeleted`.
+  - `newweb/src/registry-client.mjs`: `getShare` and `deleteRegistration`.
+  - Tests: `registry-wiring.mjs` (new, 19 checks), plus `outbox`/`registry-client` unit tests, `manifest-mode`, `console` and `edge-matrix`.
+  - `ci.yml`, `AGENTS.md` and `docs/OUTBOX.md`: the new commands and counts.
+  - `docs/console`: rebuilt with the flag off.
+- **Review.** 7 patches applied, 1 deferred, 4 rejected (reasons in the log above). Follow-up review recommended: false. No high finding was patched, and no specific unverified risk can be named.
+- **Verification.**
+  - Unit tests: 49/49.
+  - `outbox-browser`: 8/8.
+  - `registry-wiring`: 19/19.
+  - `test:browser`: 49 ok.
+  - `edge-matrix`: 9 ok.
+  - `e2e`: 5 ok; `routes`: 6 ok; `private-lifecycle`: 19 passed.
+  - JS gate: 141/141, run under uv with pyulog.
+  - Wasm: 30 pass, then 8 pass with 3 skipped.
+  - ctest: 5/5.
+  - pytest (CI packages): 145 passed, 30 skipped.
+- **Residual risks.**
+  - Share links last only as long as the page, because there is no list-shares route.
+  - The devserver has no quota or throttle controls, so tests simulate them with `page.route`.
+  - Verify `timeFields` (AC-25), AC-37 and company keys (AC-38 to AC-40) are left for later PRs.
 
 ## Design Notes
 
