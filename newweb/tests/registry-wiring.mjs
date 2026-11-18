@@ -246,7 +246,8 @@ try {
     await page.getByRole('heading', { name: 'Sealed on this device' }).waitFor();
     await page.getByText('Nothing sealed on this device yet.').waitFor();
     await sealSmall(page, 'local-flight.ulg');
-    localFingerprint = await page.locator('.handover .fingerprint').innerText();
+    assert.equal(await page.locator('.handover .fingerprint').count(), 0, 'a one-time key has no fingerprint to hand out');
+    localFingerprint = (await page.evaluate(async (hex) => [...new Uint8Array(await crypto.subtle.digest('SHA-256', Uint8Array.from(hex.match(/../g), (b) => parseInt(b, 16))))].map((b) => b.toString(16).padStart(2, '0')).join(''), /Public key:\s*([0-9a-f]{64})/.exec(await page.locator('#handover-text').inputValue())[1])).match(/.{4}/g).join(' ');
     await chipIs(page, 'local-flight.ulg', 'Sealed locally');
     const row = await openRow(page, 'local-flight.ulg');
     await row.getByText("Sealed while signed out, so it isn't assigned to a company yet. Sign in to the company registry to assign it, or export it.").waitFor();

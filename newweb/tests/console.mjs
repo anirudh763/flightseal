@@ -990,7 +990,8 @@ try {
     assert.match(handover, /open \S+#\/app\/verify and paste/, 'the message sends the recipient to Verify');
     assert.match(handover, new RegExp(`Original file: ${original.length} bytes, SHA-256 ${sha(original)}`));
     assert.equal(handover.split('\n')[2], `Reported landing time: ${landed.toISOString()} (operator-entered, not signed, not verified)`);
-    const senderFingerprint = await page.locator('.handover .fingerprint').innerText();
+    assert.equal(await page.locator('.handover .fingerprint').count(), 0, 'a one-time key has no fingerprint to hand out (m2)');
+    const senderFingerprint = (await page.evaluate(async (hex) => [...new Uint8Array(await crypto.subtle.digest('SHA-256', Uint8Array.from(hex.match(/../g), (b) => parseInt(b, 16))))].map((b) => b.toString(16).padStart(2, '0')).join(''), /Public key:\s*([0-9a-f]{64})/.exec(handover)[1])).match(/.{4}/g).join(' '); // what a recipient would pin for this key
     assert.match(senderFingerprint, /^([0-9a-f]{4} ){15}[0-9a-f]{4}$/);
     assert.equal(await page.locator('.trust-line').count(), 0, "the sender's own seal shows no recipient trust line");
     assert.equal(handover.split('\n').filter((line) => line.startsWith('fseal-receipt v1 ')).length, 1);
@@ -1197,7 +1198,11 @@ try {
     await page.waitForFunction(() => document.getElementById('seal-more-ask')?.textContent === "You haven't kept the receipt message. Copy it first?" && document.activeElement?.textContent === 'Copy message');
     assert.deepEqual(await page.locator('.confirm-box .button.primary').allInnerTexts(), ['Copy message']);
     assert.equal(await panel.locator('.button.primary').count(), 1, 'one primary on screen: the question\'s Copy message only');
-    await page.keyboard.press('Escape');
+    assert.equal(await page.locator('.confirm-box').getByRole('button', { name: 'Yes, receipt saved' }).count(), 0, 'no receipt download yet, so nothing to confirm');
+    await page.locator('.confirm-box').getByRole('button', { name: 'Keep it' }).click(); // visible "Keep it" = Escape
+    await page.waitForFunction(() => !document.getElementById('seal-more-ask') && document.activeElement?.textContent === 'Seal more files');
+    await page.getByRole('button', { name: 'Seal more files' }).click();
+    await page.keyboard.press('Escape'); // and Escape does the same
     await page.waitForFunction(() => !document.getElementById('seal-more-ask') && document.activeElement?.textContent === 'Seal more files');
     assert.equal(await page.evaluate(() => { const e = new Event('beforeunload', { cancelable: true }); window.dispatchEvent(e); return e.defaultPrevented; }), true, 'an unkept receipt still warns before reload');
     // Download receipt is a click too: it needs its own "Yes, receipt saved" before the question stops.
@@ -1205,12 +1210,34 @@ try {
     await page.getByText('Did the receipt download finish?').waitFor();
     await page.getByRole('button', { name: 'Seal more files' }).click();
     assert.equal(await page.locator('#seal-more-ask').innerText(), "You haven't kept the receipt message. Copy it first?", 'a receipt download click alone does not count');
-    await page.keyboard.press('Escape');
-    await page.getByRole('button', { name: 'Yes, receipt saved' }).click();
+    // m1: with the clipboard denied, a started receipt download can be confirmed right in the question.
+    await page.locator('.confirm-box').getByRole('button', { name: 'Yes, receipt saved' }).click();
+    await page.waitForFunction(() => !document.getElementById('seal-more-ask') && document.activeElement?.textContent === 'Seal more files');
     await page.getByRole('button', { name: 'Seal more files' }).click(); // file and receipt kept: no question
     await page.waitForFunction(() => document.activeElement?.id === 'seal-what-title');
     assert.equal(await panel.locator('.seal-file-list').count(), 0, 'the selection is cleared');
     assert.equal(await page.locator('#job-ref').inputValue(), '');
+
+    // M1: a copy of result A that finishes after A was discarded and C sealed must not mark C's receipt kept.
+    await page.evaluate(() => { Object.defineProperty(navigator, 'clipboard', { configurable: true, value: { writeText: () => new Promise((resolve) => { window.__releaseCopy = resolve; }) } }); });
+    await page.locator('#protect-file').setInputFiles({ name: 'copy-a.bin', mimeType: 'application/octet-stream', buffer: Buffer.from(`a ${Date.now()}`) });
+    await page.getByRole('button', { name: 'Seal this file' }).click();
+    await page.waitForSelector('#handover-text', { timeout: 60000 });
+    await page.getByRole('button', { name: 'Copy message' }).click(); // held until __releaseCopy
+    await page.getByRole('button', { name: 'Seal more files' }).click();
+    await page.getByRole('button', { name: 'Discard it' }).click();
+    await page.waitForFunction(() => document.activeElement?.id === 'seal-what-title');
+    await page.locator('#protect-file').setInputFiles({ name: 'copy-c.bin', mimeType: 'application/octet-stream', buffer: Buffer.from(`c ${Date.now()}`) });
+    await page.getByRole('button', { name: 'Seal this file' }).click();
+    await page.waitForSelector('#handover-text', { timeout: 60000 });
+    await Promise.all([page.waitForEvent('download'), page.getByRole('button', { name: 'Download sealed file' }).click()]);
+    await page.locator('.handoff-confirm').getByRole('button', { name: 'Yes, saved' }).click();
+    await page.evaluate(() => window.__releaseCopy());
+    await page.waitForTimeout(300);
+    await page.getByRole('button', { name: 'Seal more files' }).click();
+    assert.equal(await page.locator('#seal-more-ask').innerText(), "You haven't kept the receipt message. Copy it first?", "A's late copy did not mark C's receipt kept");
+    await page.getByRole('button', { name: 'Discard it' }).click();
+    await page.waitForFunction(() => document.activeElement?.id === 'seal-what-title');
 
     // R79: confirming an old download after sealing something new leaves the new result unsaved.
     const sealOne = async (name) => {
@@ -1269,6 +1296,13 @@ try {
     await page.getByRole('button', { name: 'Show all 7' }).click();
     assert.equal(await page.locator('.handoff-original-list li').count(), 7);
     assert.deepEqual(await page.locator('.seal-panel .button.primary').allInnerTexts(), ['Download']);
+    assert.equal(await page.locator('.handover .fingerprint').count(), 0, 'a one-time key has no fingerprint to hand out (m2)');
+    const listName = await page.locator('.handoff-step-head code').first().innerText();
+    await page.goto(`${url}#/login`);
+    await page.getByText('This tab has work that is not saved yet. Download it before you sign in.').waitFor();
+    await page.goto(`${url}#/app/protect`);
+    await page.waitForSelector('#manifest-handover-text', { timeout: 10000 }).catch(() => assert.fail('M2: the unsaved list lost its handoff after #/login'));
+    assert.equal(await page.locator('.handoff-step-head code').first().innerText(), listName, 'the same list is back');
     await page.getByRole('button', { name: 'Seal more files' }).click();
     assert.match(await page.locator('#seal-more-ask').innerText(), /^You haven't downloaded hashwing-\d{8}-\d{6}\.manifest\.fseal\. Download it first\?$/);
     await page.keyboard.press('Escape');

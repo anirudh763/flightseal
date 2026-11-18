@@ -158,6 +158,7 @@ function App() {
   const [protectStep, setProtectStep] = useState(0); // 1-4 while a small file is being sealed (PROTECT_STEPS)
   const [carryToLarge, setCarryToLarge] = useState(null); // { file }: a too-large small-file pick handed to Large files
   const [protectError, setProtectError] = useState(''); // shown under the file field, which names it through aria-describedby
+  const [manifestOutput, setManifestOutput] = useState(null); // ManifestSeal's result: kept here so it survives a route trip, like protectSealed
   const [manifestSealed, setManifestSealed] = useState(false); // ManifestSeal has a result, so its handoff replaces the step panel
   const protectRunRef = useRef(0);
   const handoffRef = useRef(null);
@@ -254,7 +255,9 @@ function App() {
   };
   const unsavedRef = useRef(unsavedParts);
   unsavedRef.current = unsavedParts;
-  const markProtectSaved = (part) => setProtectSealed((current) => current && { ...current, saved: { ...current.saved, [part]: true } });
+  const protectLogRef = useRef(null);
+  protectLogRef.current = protectSealed?.log;
+  const markProtectSaved = (log, part) => setProtectSealed((current) => (current?.log === log ? { ...current, saved: { ...current.saved, [part]: true } } : current)); // only this exact result
   const downloadUnsaved = async () => {
     const listed = listUnsaved(unsavedRef.current());
     if (!listed.length) return;
@@ -1124,8 +1127,9 @@ function App() {
   };
 
   const copyHandover = async () => {
-    try { await navigator.clipboard.writeText(protectSealed.handover); markProtectSaved('receipt'); setCopyStatus('Copied. Paste it into an email or message to the person who will keep it.'); }
-    catch { setCopyStatus('This browser blocked copying. Select the text in the box and copy it, or download the receipt.'); }
+    const { log, handover } = protectSealed; // the copy can finish after this result was discarded and another sealed
+    try { await navigator.clipboard.writeText(handover); markProtectSaved(log, 'receipt'); if (protectLogRef.current === log) setCopyStatus('Copied. Paste it into an email or message to the person who will keep it.'); }
+    catch { if (protectLogRef.current === log) setCopyStatus('This browser blocked copying. Select the text in the box and copy it, or download the receipt.'); }
   };
 
   // SHA-256 of a copy the recipient already has, against the digest inside the verified sealed file.
@@ -1191,7 +1195,7 @@ function App() {
     setUnsavedAsk(null); setUnsavedError(''); setDiscardAsk(false);
     setSealOutput(null); setSealOutputAcknowledged(false); setCurrentSample(null); setDemoLabel(''); setError(''); setOperationStatus('');
     setVideoOffset('0'); clearVideo();
-    setManifestUnsaved(null); setProtectFile(null); setCarryToLarge(null); setProtectSealed(null); setProtectResult(null); setRestored(null); setProtectLanding(''); setProtectTimes(null); setCopyCompare(null); setCopyStatus(''); setCheckFile(null); setCheckText(''); setJobRef(''); setProtectStep(0); setProtectError(''); setManifestSealed(false); protectRunRef.current++;
+    setManifestUnsaved(null); setManifestOutput(null); setProtectFile(null); setCarryToLarge(null); setProtectSealed(null); setProtectResult(null); setRestored(null); setProtectLanding(''); setProtectTimes(null); setCopyCompare(null); setCopyStatus(''); setCheckFile(null); setCheckText(''); setJobRef(''); setProtectStep(0); setProtectError(''); setManifestSealed(false); protectRunRef.current++;
     receiptInvalidRef.current = false; receiptInvalidMessageRef.current = ''; sealPickerRef.current = false;
     if (receiptInputRef.current) receiptInputRef.current.value = '';
     if (workbenchFileRef.current) workbenchFileRef.current.value = '';
@@ -1657,13 +1661,13 @@ function App() {
           {protectMode === 'embedded' && protectSealed && <Handoff headingRef={handoffRef} headingId="handoff-title"
             summary={`Sealed · 1 file${protectSealed.jobRef ? ` · ${protectSealed.jobRef}` : ''}`}
             kind="file" fileName={protectSealed.log.name} unsaved={protectUnsaved} downloaded={!!protectSealed.saved?.file} receiptSaved={!!protectSealed.saved?.receipt}
-            onDownload={() => download(protectSealed.log.name, protectSealed.log, 'application/octet-stream')} onSaved={() => markProtectSaved('file')} onDownloadReceipt={() => download(`${protectSealed.name}.receipt.txt`, protectSealed.handover)} onReceiptSaved={() => markProtectSaved('receipt')}
+            onDownload={() => download(protectSealed.log.name, protectSealed.log, 'application/octet-stream')} onSaved={() => markProtectSaved(protectSealed.log, 'file')} onDownloadReceipt={() => download(`${protectSealed.name}.receipt.txt`, protectSealed.handover)} onReceiptSaved={() => markProtectSaved(protectSealed.log, 'receipt')}
             handoverId="handover-text" handover={protectSealed.handover} onCopy={copyHandover} copyStatus={copyStatus}
             actions={<><a className="button secondary" href={`mailto:?subject=${encodeURIComponent(`HashWing receipt for ${protectSealed.name}`)}&body=${encodeURIComponent(protectSealed.handover)}`}><Mail aria-hidden="true" size={16} />Email it</a></>}
-            details={<><SenderFingerprint fingerprint={protectSealed.fingerprint} /><details className="report-details handoff-about"><summary>What is this? <ChevronDown size={17} aria-hidden="true" /></summary><div className="manifest-options-body prose"><p>{protectSealed.savedKey ? 'Signed with the key loaded under Trust. Anyone holding that private key can sign other files, so keep its backup private.' : 'The signing key was made for this file only and was discarded, never stored or exported, so no further receipt can be made with it.'} Anyone can seal a different file with another key; that is why the receipt you send now is what counts later. Sealing shows the file has not changed since now; it cannot show what happened before you sealed it.</p></div></details></>}
+            details={<>{protectSealed.savedKey && <SenderFingerprint fingerprint={protectSealed.fingerprint} />}<details className="report-details handoff-about"><summary>What is this? <ChevronDown size={17} aria-hidden="true" /></summary><div className="manifest-options-body prose"><p>{protectSealed.savedKey ? 'Signed with the key loaded under Trust. Anyone holding that private key can sign other files, so keep its backup private.' : 'The signing key was made for this file only and was discarded, never stored or exported, so no further receipt can be made with it.'} Anyone can seal a different file with another key; that is why the receipt you send now is what counts later. Sealing shows the file has not changed since now; it cannot show what happened before you sealed it.</p></div></details></>}
             shareNote={__REGISTRY_URL__ ? <RegistryShareNote /> : null}
             onSealMore={sealMoreProtect} />}
-          <ManifestSeal hidden={protectMode !== 'manifest'} carry={carryToLarge} common={sealCommon} jobRef={jobRef} signingKey={signingKey} onActiveChange={setManifestSealActive} onUnsaved={setManifestUnsaved} onSealed={__REGISTRY_URL__ ? registrySealed : undefined} onDone={setManifestSealed} onSealMore={() => { setJobRef(''); sealStartFocusRef.current = true; }} shareNote={__REGISTRY_URL__ ? <RegistryShareNote /> : null} />
+          <ManifestSeal hidden={protectMode !== 'manifest'} output={manifestOutput} setOutput={setManifestOutput} carry={carryToLarge} common={sealCommon} jobRef={jobRef} signingKey={signingKey} onActiveChange={setManifestSealActive} onUnsaved={setManifestUnsaved} onSealed={__REGISTRY_URL__ ? registrySealed : undefined} onDone={setManifestSealed} onSealMore={() => { setJobRef(''); sealStartFocusRef.current = true; }} shareNote={__REGISTRY_URL__ ? <RegistryShareNote /> : null} />
           {!protectDone && <p className="seal-verify-link"><a href={workspaceHref('verify')} onClick={(e) => { if (e.button !== 0 || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return; e.preventDefault(); navigate('verify'); }}>Checking files someone sent you? Go to Verify</a></p>}
         </div></section>
       </section>
@@ -2167,7 +2171,7 @@ const friendlyLimit = (cause) => cause instanceof RangeError && /exceeds 65536 b
   : / name /.test(cause.message) ? `${cause.message} Rename the file or turn off Include file names under More options, then press Seal again.`
   : `${cause.message} Shorten it under More options, then press Seal again.`;
 
-function ManifestSeal({ hidden, carry, common, jobRef, signingKey, onActiveChange, onUnsaved, onSealed, onDone, onSealMore, shareNote }) {
+function ManifestSeal({ hidden, output, setOutput, carry, common, jobRef, signingKey, onActiveChange, onUnsaved, onSealed, onDone, onSealMore, shareNote }) {
   const [files, setFiles] = useState([]);
   const [includeNames, setIncludeNames] = useState(false);
   const [notes, setNotes] = useState({});
@@ -2176,7 +2180,6 @@ function ManifestSeal({ hidden, carry, common, jobRef, signingKey, onActiveChang
   const [derived, setDerived] = useState({});
   const [progress, setProgress] = useState(null);
   const [phase, setPhase] = useState('');
-  const [output, setOutput] = useState(null);
   const [message, setMessage] = useState('');
   const [copyStatus, setCopyStatus] = useState('');
   const [error, setError] = useState('');
@@ -2237,7 +2240,7 @@ function ManifestSeal({ hidden, carry, common, jobRef, signingKey, onActiveChang
       const base = `hashwing-${stamp()}`;
       const fingerprint = await fingerprintHex(sealed.publicKey);
       setOutput({
-        base, publicKey: sealed.publicKey, fingerprint, items: items.length, total: hashed.reduce((sum, item) => sum + item.bytes, 0), saved: { file: false, receipt: false }, names: files.map((file) => file.name), jobRef: jobRef.trim(),
+        base, publicKey: sealed.publicKey, fingerprint, items: items.length, total: hashed.reduce((sum, item) => sum + item.bytes, 0), savedKey: !!signingKey?.privateKeyPem, saved: { file: false, receipt: false }, names: files.map((file) => file.name), jobRef: jobRef.trim(),
         log: new File([sealed.log], `${base}.manifest.fseal`, { type: 'application/octet-stream' }),
         handover: manifestHandoverText({ items: items.length, receipts: sealed.receipts, publicKey: sealed.publicKey, sealedAt: new Date().toISOString() }),
       });
@@ -2275,7 +2278,7 @@ function ManifestSeal({ hidden, carry, common, jobRef, signingKey, onActiveChang
     onDownload={() => download(output.log.name, output.log, 'application/octet-stream')} onSaved={() => markList(output.log, 'file')} onDownloadReceipt={() => download(`${output.base}.receipt.txt`, output.handover)} onReceiptSaved={() => markList(output.log, 'receipt')}
     handoverId="manifest-handover-text" handover={output.handover} onCopy={copy} copyStatus={copyStatus}
     actions={<><button className="button secondary" type="button" onClick={() => download(`${output.base}.public-key.txt`, `${output.publicKey}\n`)}><Download aria-hidden="true" size={16} />Download public key</button></>}
-    details={<><SenderFingerprint fingerprint={output.fingerprint} /><dl className="detail-grid"><dt>Public key</dt><dd><code className="wrap">{output.publicKey}</code></dd></dl></>}
+    details={<>{output.savedKey && <SenderFingerprint fingerprint={output.fingerprint} />}<dl className="detail-grid"><dt>Public key</dt><dd><code className="wrap">{output.publicKey}</code></dd></dl></>}
     shareNote={shareNote} onSealMore={sealMore} />
     </>;
   return <>{live}<div className="manifest-body">
