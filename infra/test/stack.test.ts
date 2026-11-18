@@ -2,8 +2,10 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { App } from 'aws-cdk-lib';
 import { Match, Template } from 'aws-cdk-lib/assertions';
-import { RegistryStack } from '../lib/stack';
-import { existsSync, readdirSync, statSync } from 'node:fs';
+import { RegistryStack, restoreSettings, stackId } from '../lib/stack';
+import { existsSync, mkdtempSync, readdirSync, readFileSync, statSync, writeFileSync } from 'node:fs';
+import { execFileSync } from 'node:child_process';
+import { tmpdir } from 'node:os';
 import { join, sep } from 'node:path';
 
 // Synth with no credentials: an environment-agnostic stack performs no lookups.
@@ -33,8 +35,21 @@ test('Lambda: python3.12, arm64, 128 MB, 5 s, cognito adapter, no DEV_ variables
     Environment: { Variables: { IDENTITY_ADAPTER: 'cognito', TABLE_NAME: Match.anyValue() } },
   });
   const [[, fn]] = resources('AWS::Lambda::Function');
-  assert.deepEqual(Object.keys(fn.Properties.Environment.Variables).sort(), ['IDENTITY_ADAPTER', 'TABLE_NAME']);
+  assert.deepEqual(Object.keys(fn.Properties.Environment.Variables).sort(),
+    ['COGNITO_CLIENT_ID', 'COGNITO_ISSUER', 'IDENTITY_ADAPTER', 'TABLE_NAME']);
   assert.ok(!JSON.stringify(json).includes('DEV_'), 'no DEV_ setting anywhere in the template');
+});
+
+test('Lambda gets COGNITO_ISSUER and COGNITO_CLIENT_ID from the stack\'s own user pool and client, in both stages', () => {
+  const [[poolId]] = resources('AWS::Cognito::UserPool');
+  const [[clientId]] = resources('AWS::Cognito::UserPoolClient');
+  const expected = {
+    COGNITO_ISSUER: { 'Fn::Join': ['', ['https://cognito-idp.', { Ref: 'AWS::Region' }, '.amazonaws.com/', { Ref: poolId }]] },
+    COGNITO_CLIENT_ID: { Ref: clientId },
+  };
+  t.hasResourceProperties('AWS::Lambda::Function', { Environment: { Variables: expected } });
+  Template.fromStack(new RegistryStack(new App(), 'ProdEnv', { stage: 'prod' }))
+    .hasResourceProperties('AWS::Lambda::Function', { Environment: { Variables: expected } });
 });
 
 test('explicit log group with 7-day retention, no LogRetention custom resource', () => {
@@ -57,6 +72,38 @@ test('DynamoDB: on demand, ttl, PITR off by default and on by context, destroyed
   });
 });
 
+test('prod keeps the data: PITR 35 days, deletion protection, Retain on table, user pool and log group', () => {
+  // pitr: false is what cdk.json passes; prod must override it.
+  const p = Template.fromStack(new RegistryStack(new App(), 'Prod', { stage: 'prod', pitr: false }));
+  const keep = { DeletionPolicy: 'Retain', UpdateReplacePolicy: 'Retain' };
+  p.hasResource('AWS::DynamoDB::Table', {
+    ...keep,
+    Properties: {
+      PointInTimeRecoverySpecification: { PointInTimeRecoveryEnabled: true, RecoveryPeriodInDays: 35 },
+      DeletionProtectionEnabled: true,
+      TimeToLiveSpecification: { AttributeName: 'ttl', Enabled: true },
+    },
+  });
+  p.hasResource('AWS::Cognito::UserPool', { ...keep, Properties: { DeletionProtection: 'ACTIVE' } });
+  p.hasResource('AWS::Logs::LogGroup', { ...keep, Properties: { RetentionInDays: 7 } });
+});
+
+test('dev (the default) stays disposable: no PITR window, no deletion protection, Delete policies', () => {
+  const dev = Template.fromStack(new RegistryStack(new App(), 'Test', { stage: 'dev' }));
+  assert.deepEqual(dev.toJSON(), json, 'stage dev synthesizes the same template as no stage');
+  const gone = { DeletionPolicy: 'Delete', UpdateReplacePolicy: 'Delete' };
+  dev.hasResource('AWS::DynamoDB::Table', {
+    ...gone,
+    Properties: {
+      PointInTimeRecoverySpecification: { PointInTimeRecoveryEnabled: false, RecoveryPeriodInDays: Match.absent() },
+      DeletionProtectionEnabled: Match.absent(),
+    },
+  });
+  dev.hasResource('AWS::Cognito::UserPool', { ...gone, Properties: { DeletionProtection: Match.absent() } });
+  dev.hasResource('AWS::Logs::LogGroup', gone);
+  assert.throws(() => new RegistryStack(new App(), 'Bad', { stage: 'production' as any }), /not 'dev' or 'prod'/);
+});
+
 test('IAM: only item actions, only on the table ARN, never Resource "*"', () => {
   const policies = resources('AWS::IAM::Policy');
   assert.equal(policies.length, 1);
@@ -75,10 +122,15 @@ test('IAM: only item actions, only on the table ARN, never Resource "*"', () => 
   }
 });
 
-test('Cognito: Lite plan, no self sign-up, org_id and role not writable by the app client', () => {
+test('Cognito: Lite plan, no self sign-up, case-insensitive sign-in, invitations expire in 3 days, org_id and role not writable by the app client', () => {
   t.hasResourceProperties('AWS::Cognito::UserPool', {
     UserPoolTier: 'LITE',
     AdminCreateUserConfig: { AllowAdminCreateUserOnly: true },
+  });
+  t.hasResourceProperties('AWS::Cognito::UserPool', {
+    UsernameConfiguration: { CaseSensitive: false },
+    Policies: { PasswordPolicy: { TemporaryPasswordValidityDays: 3, MinimumLength: 8, RequireLowercase: true,
+      RequireUppercase: true, RequireNumbers: true, RequireSymbols: true } },
   });
   const [[, client]] = resources('AWS::Cognito::UserPoolClient');
   const writable: string[] = client.Properties.WriteAttributes;
@@ -187,4 +239,61 @@ test('Lambda asset holds only the runtime: handler.py and registry/*.py', () => 
     .filter((f) => statSync(join(root, f)).isFile()).map((f) => f.split(sep).join('/')).sort();
   assert.ok(files.includes('handler.py') && files.includes('registry/app.py'));
   for (const f of files) assert.match(f, /^(handler\.py|registry\/[a-z0-9_]+\.py)$/, `unexpected file in asset: ${f}`);
+});
+
+test('prod reads restore settings only from a committed infra/restore.json, so a plain deploy keeps the restore', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'restore-'));
+  const file = join(dir, 'restore.json');
+  const put = (v: string) => writeFileSync(file, v);
+  const ctx = (m: Record<string, string>) => (k: string) => m[k];
+  const saved = { restoredTableName: 'registry-restored', restoredFrom: 'registry-live', restoreId: 'r-1' };
+  const prod = () => restoreSettings('prod', ctx({}), file);
+  assert.throws(prod, /stage=prod needs infra\/restore\.json: commit \{\}/, 'missing file in prod');
+  put('{}');
+  assert.deepEqual(prod(), {}, '{} means never restored');
+  assert.throws(() => restoreSettings('prod', ctx({ restoredTableName: 'x' }), file), /restore\.json, not with -c/);
+  put(JSON.stringify(saved));
+  Template.fromStack(new RegistryStack(new App(), 'ProdRestored', { stage: 'prod', ...prod() }))
+    .hasResourceProperties('AWS::Lambda::Function', {
+      Environment: { Variables: { TABLE_NAME: 'registry-restored', RESTORED_FROM: 'registry-live', RESTORE_ID: 'r-1' } },
+    });
+  assert.throws(() => restoreSettings(undefined, ctx({}), file), /records a production restore: synth it with -c stage=prod/,
+    'no stage with a recorded restore');
+  assert.throws(() => restoreSettings('dev', ctx({}), file), /records a production restore/);
+  put(JSON.stringify({ restoredTablename: 'x', restoredFrom: 'y', restoreId: 'z' }));
+  assert.throws(prod, /unknown keys restoredTablename/, 'misspelled key');
+  put(JSON.stringify({ ...saved, restoreId: '' }));
+  assert.throws(prod, /restoreId must be non-empty strings/, 'empty string');
+  put(JSON.stringify({ restoredTableName: 'x' }));
+  assert.throws(prod, /restoredFrom, restoreId must be non-empty strings/, 'partial');
+  put('[]');
+  assert.throws(prod, /must be a JSON object/, 'array');
+  put('null');
+  assert.throws(prod, /must be a JSON object/, 'null');
+  put('{"restoredTableName": ');
+  assert.throws(prod, /cannot read it as JSON/, 'broken JSON');
+  put('{}');
+  assert.deepEqual(restoreSettings('dev', ctx(saved), file), saved, 'dev still takes -c context');
+  assert.throws(() => new RegistryStack(new App(), 'Same', { stage: 'prod', restoredTableName: 't', restoredFrom: 't',
+    restoreId: 'r' }), /restoredFrom must name the table served before the restore/);
+});
+
+test('prod is its own stack (HashWingRegistry-prod): a deploy without -c stage=prod cannot reach it', () => {
+  assert.equal(stackId('prod'), 'HashWingRegistry-prod');
+  assert.equal(stackId(undefined), 'HashWingRegistry');
+  assert.equal(stackId('dev'), 'HashWingRegistry');
+  // The real app, with the committed infra/restore.json ({}).
+  const run = (context: Record<string, string>) => {
+    const out = mkdtempSync(join(tmpdir(), 'synth-'));
+    execFileSync(process.execPath, [join(__dirname, '..', 'bin', 'app.js')], {
+      cwd: join(__dirname, '..', '..'),
+      env: { ...process.env, CDK_OUTDIR: out, CDK_CONTEXT_JSON: JSON.stringify(context) },
+    });
+    const artifacts: Record<string, { type: string }> = JSON.parse(readFileSync(join(out, 'manifest.json'), 'utf8')).artifacts;
+    return Object.keys(artifacts).filter((a) => artifacts[a].type === 'aws:cloudformation:stack');
+  };
+  assert.deepEqual(run({ stage: 'prod' }), ['HashWingRegistry-prod']);
+  for (const context of [{}, { Stage: 'prod' }, { stgae: 'prod' }] as Array<Record<string, string>>) {
+    assert.deepEqual(run(context), ['HashWingRegistry'], `misspelt or missing stage ${JSON.stringify(context)}`);
+  }
 });

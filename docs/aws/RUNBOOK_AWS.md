@@ -15,6 +15,28 @@ npx cdk deploy HashWingRegistry \
   # add -c pitr=true to turn on point-in-time recovery (billed per GB-month)
 ```
 
+That deploys the disposable `dev` stage: PITR off unless `-c pitr=true`, and the table, user pool and log group are
+deleted with the stack.
+
+**A production deploy is not authorized yet.** The production switch exists so its settings are reviewed and
+tested, not as permission to deploy. When it is authorized, production is a separate stack, `HashWingRegistry-prod`:
+
+```sh
+npx cdk deploy HashWingRegistry-prod -c stage=prod \
+  --parameters BudgetEmail=<you@example.com>
+```
+
+`stage=prod` turns on PITR with a 35-day recovery window, deletion protection on the table and the user pool, and
+RETAIN on the table, user pool and log group. Production reads its restore settings only from the committed
+`infra/restore.json` (`{}` = never restored); synth fails if that file is missing or malformed.
+
+The app only defines `HashWingRegistry-prod` when `-c stage=prod` is given. A deploy without it, or with a
+misspelt key such as `-c Stage=prod`, builds the dev stack `HashWingRegistry` and cannot update the production
+stack; naming `HashWingRegistry-prod` without the flag fails with "no stacks match". If production were ever
+deployed with dev settings, it would turn PITR off (losing the 35-day recovery history), drop deletion protection,
+set the resources to Delete and point the function back at the original table, undoing a restore. Every command
+below that touches production must therefore use `HashWingRegistry-prod -c stage=prod`.
+
 The outputs are `ApiUrl`, `TableName`, `UserPoolId` and `UserPoolClientId`.
 
 Demoting an admin: `custom:role` is read from the ID token as issued, so a demoted admin keeps admin rights until
@@ -90,7 +112,7 @@ The budget email only warns. Nothing stops requests or spend until you act. Pick
    This has not been tested. The one way back known to work is to destroy and deploy again, which also deletes the
    table.
 2. **Remove everything:** follow "Destroy" below with `npx cdk destroy HashWingRegistry`. The table and the user
-   pool are deleted with the stack.
+   pool are deleted with the stack (dev stage only; a `stage=prod` stack keeps them, see "Destroy").
 
 Then check Cost Explorer for which line grew: API Gateway requests, Lambda, DynamoDB or logs (see the abuse
 scenario in [COST.md](COST.md)). Do not add a WAF: it has a fixed monthly fee.
@@ -101,7 +123,9 @@ scenario in [COST.md](COST.md)). Do not add a WAF: it has a fixed monthly fee.
 cd infra && npx cdk destroy HashWingRegistry
 ```
 
-The table, log group and user pool use `RemovalPolicy.DESTROY`, so they go with the stack. Then check, in us-east-1:
+In the dev stage the table, log group and user pool use `RemovalPolicy.DESTROY`, so they go with the stack. A
+production stack (`HashWingRegistry-prod`) uses `RemovalPolicy.RETAIN`: they stay after `cdk destroy` and keep billing (storage and PITR)
+until deleted by hand, and the table and user pool need deletion protection turned off first. Then check, in us-east-1:
 
 ```sh
 aws cloudformation describe-stacks --stack-name HashWingRegistry          # expect: does not exist
@@ -138,6 +162,9 @@ After a first restore that is the restored table, not the stack's own table: tom
 only there. A source that is not the served table is refused, because its tombstones may be stale.
 
 1. Restore (PITR or an on-demand backup) to a new table, for example `HashWingRegistry-restored-2`.
+   After a restore, set PITR (35 days), deletion protection and TTL on the restored table before opening the gate;
+   the stack does not manage it. For the same reason the restored table outlives `cdk destroy` and keeps billing
+   (storage, and PITR once on) until deleted by hand, with deletion protection turned off first.
 2. Pick a new random restore ID (for example `uuidgen`). Point the function at the new table and close every route
    until tombstones are applied:
 
@@ -145,6 +172,13 @@ only there. A source that is not the served table is refused, because its tombst
    cd infra && npx cdk deploy HashWingRegistry -c restoredTableName=<new table> -c restoredFrom=<served table> \
      -c restoreId=<restore id>
    ```
+
+   That is the dev form. For production (**not authorized yet**) the `-c` restore flags are refused: replace the
+   `{}` in `infra/restore.json` with all three values (`{"restoredTableName": "<new table>", "restoredFrom":
+   "<served table>", "restoreId": "<restore id>"}`, non-empty, and `restoredFrom` must differ from the new table),
+   commit it, and run `npx cdk deploy HashWingRegistry-prod -c stage=prod`. Keep the file committed: every later
+   production deploy reads it, so a routine deploy cannot point the function back at the old table. A dev synth
+   refuses a file that records a restore.
 
    This sets `TABLE_NAME`, `RESTORED_FROM` and `RESTORE_ID`, and moves the function's IAM grant to the new table's
    ARN. The function now answers 503 `restore_pending` everywhere. A marker copied in from the backup does not open
