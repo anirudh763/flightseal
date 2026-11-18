@@ -90,7 +90,7 @@ Every stated need has a surface that serves it, and every surface is reached by 
 ## Feature flag: registry
 
 - **Rule (built; the variable name and the empty Pages value are builder defaults awaiting owner confirmation).** All registry UI appears only when the build-time setting `VITE_REGISTRY_URL` is a non-empty URL. It is a public origin, not a secret. It is empty on the public GitHub Pages build, so the feature is off there. "Registry UI" means:
-  - the registry chip and the "Sealed on this device" list
+  - the registry chip and the "Sealed on this device" list (Change 2026-11-17: the list itself, without registry chips, ships in every build; see "Release layout, locked" and AC-60)
   - the "Company registry" sign-in panel
   - share links, withdraw and delete
   - "Your company's keys"
@@ -111,7 +111,7 @@ Chip text comes from the outbox's own labels (`stateLabel()`, `registrationLabel
 | `sealed_local` | Sealed locally | "Sealed on this device. Not sent to the registry yet." | none (sending starts automatically when signed in) |
 | `waiting_for_connection` | Waiting for connection | "Saved on this device. It will register when you're back online. You can close this tab." | "Try now" (secondary) |
 | `registering` | Registering | "Sending the receipt to the registry…" | none |
-| `registered`, disposition `active` | Registered | "Registered at {received_at}. This is the registry's statement, not proof of the files." | "Make a share link" |
+| `registered`, disposition `active` | Registered | "Registered at {received_at}. This is the registry's statement, not proof of the files." (Change 2026-11-17, AC-63: "Last confirmed by this device {time}" with Refresh until a lookup in this session succeeds) | "Make a share link" |
 | `registered`, disposition `deleted` | Registered, later deleted | "The registry's record of this receipt was deleted. Links to it no longer open." | none |
 | `needs_attention` | Needs attention | The message for the row's `reason`, from "Registry errors" | The action from the same table |
 
@@ -286,7 +286,7 @@ Priya is a pilot for a three-person roof-inspection company. She has just landed
 4. The step collapses to "Sealed · 14 files". The next step, "Send this receipt to someone else now", has one primary button, **Copy message**. Email and Download are secondary.
 5. Below, the new row in "Sealed on this device" shows **Waiting for connection**, with "Saved on this device. It will register when you're back online. You can close this tab."
 6. She closes the laptop. Back in the van, with signal, she reopens HashWing. The chip moves to **Registering**, then **Registered**, announced once.
-7. **Climax:** she opens the row and sees "Registered at 15:41 UTC. This is the registry's statement, not proof of the files." She presses **Make a share link**, copies it and pastes it into her email to the client next to the receipt message.
+7. **Climax:** she opens the row and sees (after AC-63, "Last confirmed by this device 15:42" with Refresh, then) "Registered at 15:41 UTC. This is the registry's statement, not proof of the files." She presses **Make a share link**, copies it and pastes it into her email to the client next to the receipt message.
 
 Failure paths:
 
@@ -323,7 +323,7 @@ Marcus is the ops lead and owns the company's signing key. `[ASSUMPTION]`: "adds
 
 ## Release layout, locked (2026-11-17)
 
-Locked before any code, from the owner's release brief (Phase A) and the owner decisions of 2026-11-17. Ledger IDs (R12 to R68) are in `../initiative-hashwing-aws.md`. Task packets are in `../plan-ui-backend-release.md`. Tokens are the ones in `DESIGN.md` beside this file, unchanged. Every item here is **Change** or **New** unless it says Existing. Nothing below is built yet.
+Locked before any code, from the owner's release brief (Phase A) and the owner decisions of 2026-11-17. Ledger IDs (R12 to R73) are in `../initiative-hashwing-aws.md`. Task packets are in `../plan-ui-backend-release.md`. Tokens are the ones in `DESIGN.md` beside this file, unchanged. Every item here is **Change** or **New** unless it says Existing. Nothing below is built yet.
 
 ### Frame
 
@@ -344,7 +344,7 @@ Seal flight files on this device and let your client check them.      <- one fac
 Files stay on this device. ‹How checking works›                          <- one privacy line; detail in Help
 ```
 
-No rotating preview, no numbered steps, no metrics, logos or testimonials, no login wall. The Mavframe link moves to More tools → System (or Help). The sample result reuses the existing live result panel.
+No rotating preview, no numbered steps, no metrics, logos or testimonials, no login wall. The Mavframe link moves to More tools → System. The sample result reuses the existing live result panel.
 
 **Seal & send (`protect`)**
 
@@ -427,14 +427,15 @@ Resume reopens the package. Originals may need to be chosen again, and the row s
 
 ```
 Trust
-  1 Trusted companies       list, Add company (fingerprint + where you confirmed it + "I confirmed this fingerprint
-                            through a channel I already knew" checkbox)
-  2 Your signing key        fingerprint, load or generate, copy
-  3 Company sign-in         flag on: who is signed in, which company; flag off: "Company sign-in isn't in this build"
-  4 Company keys            flag on, admins: Enroll this key, list (Active / Replaced on / Compromised), Mark compromised
+  Trusted companies       list, Add company (fingerprint + where you confirmed it + "I confirmed this fingerprint
+                          through a channel I already knew" checkbox)
+  Your signing key        fingerprint, load or generate, copy
+  Company registry        flag on only: who is signed in, for which company; Sign in / Sign out
+  Your company's keys     flag on, admins: Enroll this key, list (Active / Replaced on / Compromised), Mark compromised
+  Trust and limits        existing text
 ```
 
-The numbers above are for this wireframe only; the page shows plain section headings. No Verify workbench strip, no "Source and report actions" on Trust.
+Section names are the existing ones, so `FORBIDDEN` and AC-38 to AC-40 and AC-50 keep their strings. With the flag off, Company registry and Your company's keys are absent (AC-50). No Verify workbench strip, no "Source and report actions" on Trust.
 
 **More tools**
 
@@ -499,7 +500,7 @@ Build status, checked against the code and tests on `main` at e279032 (2026-11-1
 
 ### With the registry flag off
 
-- **AC-01** `built` No registry URL is configured. No registry chip, "Sealed on this device" list, share link, "Your company's keys" section or registry sign-in appears on any page.
+- **AC-01** `built` (Change 2026-11-17: once AC-60 is built, the "Sealed on this device" list ships in every build and leaves this item) No registry URL is configured. No registry chip, "Sealed on this device" list, share link, "Your company's keys" section or registry sign-in appears on any page.
 - **AC-02** `built, partly tested` No registry URL is configured. Sealing and checking a small file and a large-file set make no network request to a registry origin, and no outbox IndexedDB database is created.
 - **AC-03** `built` No registry URL is configured. The Verify time fields show "Registry acceptance", "Not registered", "no registry was used".
 - **AC-04** `open` (changed 2026-11-17; the old five-link version was `built, partly tested`) The primary nav shows exactly Seal & send, Verify, Jobs and Trust, in that order. "More tools" contains Records, Receipts, Samples, Video, Benchmarks and System, and is closed unless one of them is the current page. `#/records` and `#/receipts` still load and focus their heading.
@@ -526,7 +527,7 @@ Build status, checked against the code and tests on `main` at e279032 (2026-11-1
 - **AC-22** `built, partly tested` The chip moves Registering, then Registered. Each change is announced once through `role="status"`.
 - **AC-23** `built` The summary reads "Not yet registered" until `commitAck` has written the acknowledgement to `acks`. If a response arrived but was not saved (for example, the tab was killed mid-write), it still reads "Not yet registered" after reopening, and the next send returns the original acknowledgement.
 - **AC-24** `built` A lost acknowledgement followed by a retry yields exactly one row, showing the original `received_at`.
-- **AC-25** `built` After the acknowledgement is saved, the Verify time row reads "Registered at {received_at}" with basis "the registry's clock; the registry's statement, not proof of the files".
+- **AC-25** `built` (Change 2026-11-17: AC-63 replaces this wording once built) After the acknowledgement is saved, the Verify time row reads "Registered at {received_at}" with basis "the registry's clock; the registry's statement, not proof of the files".
 - **AC-26** `built` "Not registered" and "Not yet registered" never appear for the same item.
 - **AC-27** `built` Counts show registered and not-yet-registered items separately. Queued items are never counted as registered.
 - **AC-28** `built` Signing out or switching account stops dispatch. Rows owned by the other account are not shown and are not sent.
@@ -565,7 +566,7 @@ These cover "Release layout, locked" above. Ledger IDs are in brackets.
 - **AC-56** `open` [R22] Jobs lists this device's packages 25 per page with search by job reference or file name, status, sealed time, Resume and Export. Its heading area says the list is on this device only.
 - **AC-57** `open` [R23] After logout or a profile or company switch, Jobs shows none of the previous owner's rows, and signing back in as that owner shows them again. No copy calls this server-enforced isolation.
 - **AC-58** `open` [R22] Resuming a large-file job whose originals are not available asks for them again, by count, and never claims the bytes were saved.
-- **AC-59** `open` [R24] Trust shows exactly four sections in this order: Trusted companies, Your signing key, Company sign-in, Company keys (the last two only with the flag on). It shows no Verify workbench strip and no "Source and report actions".
+- **AC-59** `open` [R24] Trust shows these sections in this order: Trusted companies, Your signing key, Company registry and Your company's keys (both only with the flag on), then Trust and limits. It shows no Verify workbench strip and no "Source and report actions".
 - **AC-60** `open` [R26] On the Pages build, "Sealed on this device" appears below the sealing result and Jobs works, and neither makes a request to any registry origin.
 - **AC-61** `open` [R32] The browser profile screens say they create a profile on this device, not a company account.
 - **AC-62** `open` [R36] With the flag on, an admin sees the shares of a registration (active, expired, withdrawn, with expiry) after a reload and in another admin's session, and can withdraw one without the original link. No raw token is shown or stored.

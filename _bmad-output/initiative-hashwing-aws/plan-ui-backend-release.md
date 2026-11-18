@@ -8,7 +8,7 @@ updated: 2026-11-17
 
 # UI and backend release: task packets
 
-Requirement IDs (R12 to R68) and their baseline status are in the [initiative ledger](initiative-hashwing-aws.md#release-requirement-ledger-baseline-2026-11-17-main-b2cec46). The design these packets build is locked in [ux-hashwing/EXPERIENCE.md](ux-hashwing/EXPERIENCE.md) ("Release layout, locked") and [ux-hashwing/DESIGN.md](ux-hashwing/DESIGN.md). Binding decisions are AD-2, AD-9, AD-12, AD-15, AD-16, AD-18 and AD-19 in the [architecture spine](architecture-hashwing-aws/architecture-hashwing-aws.md).
+Requirement IDs (R12 to R73) and their baseline status are in the [initiative ledger](initiative-hashwing-aws.md#release-requirement-ledger-baseline-2026-11-17-main-b2cec46). The design these packets build is locked in [ux-hashwing/EXPERIENCE.md](ux-hashwing/EXPERIENCE.md) ("Release layout, locked") and [ux-hashwing/DESIGN.md](ux-hashwing/DESIGN.md). Binding decisions are AD-2, AD-9, AD-12, AD-15, AD-16, AD-18 and AD-19 in the [architecture spine](architecture-hashwing-aws/architecture-hashwing-aws.md).
 
 ## Writer rules
 
