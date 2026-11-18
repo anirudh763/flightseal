@@ -408,6 +408,36 @@ try {
     await page.waitForFunction(() => ![...document.querySelectorAll('.registry-row .status-label')].some((c) => c.textContent === 'Waiting for connection'), null, { timeout: 30000 });
   });
 
+  await check('throttled registry (gateway 429s, no quota code, 2 requests/s, burst 5): 30 queued proofs all end Registered', async () => {
+    // The devserver has no throttle, so a token bucket in front of it answers like API Gateway's stage throttle.
+    let tokens = 5, last = Date.now(), throttled = 0;
+    const take = () => { const t = Date.now(); tokens = Math.min(5, tokens + (t - last) / 500); last = t; if (tokens >= 1) { tokens -= 1; return true; } return false; };
+    const gate = (route) => {
+      if (route.request().method() === 'OPTIONS' || take()) return route.fallback();
+      throttled += 1;
+      return route.fulfill({ status: 429, contentType: 'application/json', headers: { 'access-control-allow-origin': new URL(flagOn.url).origin, vary: 'Origin' }, body: JSON.stringify({ message: 'Too Many Requests' }) });
+    };
+    const isRegistry = (u) => u.href.startsWith(`${base}/v1/`);
+    const registeredNow = () => page.evaluate(() => [...document.querySelectorAll('.registry-row .status-label')].filter((c) => c.textContent === 'Registered').length);
+    const before = await registeredNow();
+    const attention = () => page.locator('.registry-row .status-label', { hasText: 'Needs attention' }).count();
+    const attentionBefore = await attention();
+    const receipts = [];
+    for (let n = 101; n <= 130; n++) receipts.push((await dev(`receipt?count=${n}&seed=A`)).receipt);
+    await page.route(isRegistry, gate);
+    try {
+      await page.locator('.registry-more > summary').click();
+      await page.locator('#registry-import').setInputFiles({ name: 'thirty.json', mimeType: 'application/json', buffer: Buffer.from(JSON.stringify({ format: 'hashwing-outbox-export', version: 1, receipts })) });
+      await page.getByText('Added 30 proofs to send.').waitFor();
+      await page.locator('.registry-more > summary').click();
+      await page.waitForFunction((n) => [...document.querySelectorAll('.registry-row .status-label')].filter((c) => c.textContent === 'Registered').length >= n, before + 30, { timeout: 180000 });
+      assert.equal(await attention(), attentionBefore, 'no throttled proof ended in Needs attention');
+      assert.ok(throttled > 0, 'the gateway throttle actually refused some requests');
+      const regs = (await dev('registrations?org=orgA')).registrations.length;
+      assert.ok(regs >= 30, `registry holds ${regs} registrations`);
+    } finally { await page.unroute(isRegistry, gate); }
+  });
+
   await check('sign out, then sign in as an admin: the pilot\'s rows are hidden and never sent; delete uses a dialog with "Keep it" focused', async () => {
     const pilotSends = (await registerLog('pilot-1')).length;
     await go(page, 'help');

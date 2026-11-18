@@ -34,7 +34,7 @@ The user's request and the owner's RULES.md take precedence over anything here.
 - Registry outbox (browser client): `node --test newweb/tests/outbox.test.mjs newweb/tests/registry-client.test.mjs` (49 tests)
   and `node --test newweb/tests/outbox-browser.mjs` (8 checks in Playwright Chromium against the DEV ONLY
   `registry/devserver/server.py`: it starts one on a loopback port itself, or uses `REGISTRY_DEV_URL` as CI does).
-- Registry wiring (console, `VITE_REGISTRY_URL`): after the console build, `node newweb/tests/registry-wiring.mjs` (17 checks:
+- Registry wiring (console, `VITE_REGISTRY_URL`): after the console build, `node newweb/tests/registry-wiring.mjs` (19 checks:
   it scans the flag-off `docs/console` for registry strings, builds a flag-on console into
   `newweb/.test-artifacts/registry-wiring/build`, never into `docs/console`, and drives it in Chromium against the DEV ONLY
   server, starting one itself or using `REGISTRY_DEV_URL`; axe at 320/768/1440 and screenshots in the same folder).
