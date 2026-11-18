@@ -68,7 +68,7 @@ export async function openJobsStore(scope, { indexedDB = globalThis.indexedDB } 
           const n = s.count();
           n.onsuccess = () => {
             const has = s.getKey(clean.id);
-            has.onsuccess = () => { if (has.result === undefined && n.result >= MAX_JOBS) { full = true; s.transaction.abort(); } else s.put(clean); };
+            has.onsuccess = () => { if (has.result === undefined && n.result >= MAX_JOBS) { full = true; s.transaction.abort(); } else { try { s.put(clean); } catch { s.transaction.abort(); } } }; // a refused put aborts, so the caller hears about it
           };
         }).catch((err) => { throw full ? new RangeError('jobs-store: full') : err; });
       },
