@@ -177,8 +177,8 @@ try {
     await waitResult(page, 'Tampered');
   });
 
-  await check('verify demo mutates a sample copy and restores the original', async () => {
-    await page.goto(`${url}#/verify`);
+  await check('the sample demo (moved from Verify to Samples) mutates a sample copy and restores the original', async () => {
+    await page.goto(`${url}#/sandbox`);
     await waitResult(page, 'Intact');
     await page.getByRole('button', { name: 'Simulate Tampering' }).click();
     await waitResult(page, 'Tampered');
@@ -984,7 +984,7 @@ try {
     assert.deepEqual(await page.locator('.seal-panel .button.primary').allInnerTexts(), ['Download']);
     assert.equal(await page.locator('#seal-what-title').count(), 0, 'the step panel gives way to the handoff');
     assert.equal(await page.locator('.result-panel').count(), 0, 'no checker result on Seal & send (R15)');
-    assert.equal(await page.locator('#check-file').count(), 0, 'the checker lives on Verify');
+    assert.equal(await page.locator('#check-file').isVisible(), false, 'the checker lives on Verify (kept mounted there, hidden here)');
     const handover = await page.locator('#handover-text').inputValue();
     assert.ok(!handover.includes('JOB-REF-7Q2X'), 'the job reference is not in the receipt message');
     assert.match(handover, /open \S+#\/app\/verify and paste/, 'the message sends the recipient to Verify');
@@ -1007,13 +1007,26 @@ try {
     await auditAxe(page, '1440px seal handover');
     await page.screenshot({ path: join(evidence, 'sealed-1440.png'), fullPage: true });
 
-    // The witness, in a fresh page load on Verify, with the message quoted and wrapped as an email reply would.
-    await page.reload();
-    await route(page, 'verify');
+    // Backward compatibility: the witness opens the address the already-sent message names (#/app/verify), in a fresh
+    // page load, and pastes the whole message quoted and wrapped as an email reply would.
+    const checkUrl = /To check the file, open (\S+) and paste this whole message\./.exec(handover)[1];
+    assert.match(checkUrl, /#\/app\/verify$/);
+    await page.goto(checkUrl); await page.reload();
+    await page.waitForFunction(() => document.querySelector('.commandbar h1')?.textContent === 'Verify');
+    assert.equal(await page.locator('.verify-chooser').count(), 0, 'flag off: Verify opens straight on the files form (AC-65)');
     await page.locator('#check-file').setInputFiles(sealedPath);
     await page.locator('#check-text').fill(handover.split('\n').flatMap((line) => line.match(/.{1,72}/g) || ['']).map((line) => `> ${line}`).join('\n'));
-    await page.getByRole('button', { name: 'Check this file' }).click();
+    assert.equal(await page.locator('#check-originals').count(), 0, 'a sealed file holds its own bytes: no Originals field');
+    await page.getByRole('button', { name: 'Check files' }).click();
     await waitResult(page, 'Intact');
+    // The guest's one-time key: the file matches, but who sealed it is not confirmed, so the headline is not green.
+    await page.waitForFunction(() => document.querySelector('#verdict-heading')?.textContent === 'Files match · signer not confirmed', null, { timeout: 30000 })
+      .catch(async () => assert.fail(`verdict: ${await page.locator('.verify-check').innerText()}`));
+    assert.equal(await page.evaluate(() => document.activeElement?.id), 'verdict-heading', 'focus moves to the verdict headline');
+    assert.equal(await page.locator('.verdict.warn').count(), 1);
+    assert.match(await page.locator('.verdict-lines').innerText(), /Signature\s+Valid[\s\S]*Files\s+1 match · 0 differ · 0 missing · 0 not in the list[\s\S]*Receipt coverage\s+All items covered/);
+    assert.equal(await page.locator('.verdict-next a').innerText(), "Confirm the company's fingerprint on Trust");
+    assert.equal(await page.locator('#result-heading [role=status]').count(), 0, 'the verdict is read once, from its focused headline');
     await page.waitForSelector('.restored', { timeout: 30000 });
     assert.match(await page.locator('.restored h3').textContent(), /Original file recovered/);
     const [originalDownload] = await Promise.all([page.waitForEvent('download'), page.getByRole('button', { name: 'Download original file' }).click()]);
@@ -1049,12 +1062,15 @@ try {
     await pinPage.getByRole('button', { name: 'Add company' }).click();
     await pinPage.waitForFunction(() => document.querySelector('.company-list')?.textContent.includes('Pilot Co'));
     await pinPage.close();
-    await page.getByRole('button', { name: 'Check this file' }).click();
+    await page.getByRole('button', { name: 'Check files' }).click();
     await waitResult(page, 'Intact');
     await page.waitForSelector('.restored', { timeout: 30000 });
+    await page.waitForFunction(() => document.querySelector('#verdict-heading')?.textContent === 'Verified', null, { timeout: 30000 });
+    assert.match(await page.locator('.verdict.ok').innerText(), /Every file matches what was sealed, signed by a company you trust\./);
     const trusted = 'Signed by a key you trust: Pilot Co (added from phone call with a known contact)';
     await page.waitForFunction((text) => document.querySelector('.result-panel .trust-line')?.textContent === text, trusted);
     await compare(copyPath, 'Bytes differ');
+    await page.waitForFunction(() => document.querySelector('#verdict-heading')?.textContent === 'Files differ'); // your copy differs
     const [textReport] = await Promise.all([page.waitForEvent('download'), page.getByRole('button', { name: 'Download text report' }).click()]);
     const report = readFileSync(await textReport.path(), 'utf8');
     for (const line of [`Key trust: ${trusted}`, 'Key source: phone call with a known contact', `Reported landing time: ${landed.toISOString()} (operator-entered, not signed, not verified)`, 'Sealed on this computer at:', 'Registry acceptance: Not registered', 'Trusted timestamp: None', 'Reported landing-to-seal interval: 1 h ', 'Your copy my-copy.ulg: Bytes differ.', 'not proof of tampering', 'Native chain result:']) assert.ok(report.includes(line), `report: ${line}`);
@@ -1080,8 +1096,10 @@ try {
     const editedPath = join(evidence, 'edited.fseal'); writeFileSync(editedPath, edited);
     await page.locator('#check-file').setInputFiles(editedPath);
     await page.locator('#check-text').fill(handover);
-    await page.getByRole('button', { name: 'Check this file' }).click();
+    await page.getByRole('button', { name: 'Check files' }).click();
     await waitResult(page, 'Tampered');
+    await page.waitForFunction(() => document.querySelector('#verdict-heading')?.textContent === 'Not verified');
+    assert.match(await page.locator('.verdict.bad').innerText(), /Next step: Check that you chose the right sealed file, pasted the whole receipt message, and entered the key the sender gave you separately\./);
     assert.equal(await page.locator('.restored').count(), 0);
 
     // The real attack: the holder changes the log and seals it again with a fresh key.
@@ -1096,14 +1114,17 @@ try {
     await route(page, 'verify');
     await page.locator('#check-file').setInputFiles(forgedPath);
     await page.locator('#check-text').fill(handover);
-    await page.getByRole('button', { name: 'Check this file' }).click();
+    await page.getByRole('button', { name: 'Check files' }).click();
     await waitResult(page, 'Tampered');
     assert.equal(await page.locator('.restored').count(), 0);
 
-    // No receipt pasted: refused with a reason rather than a weaker check.
+    // No receipt pasted: refused with a reason rather than a weaker check, read with its field (focus table).
     await page.locator('#check-text').fill('no receipt here');
-    await page.getByRole('button', { name: 'Check this file' }).click();
-    assert.match(await page.getByRole('alert').first().textContent(), /Paste the receipt message/);
+    await page.getByRole('button', { name: 'Check files' }).click();
+    await page.waitForFunction(() => document.activeElement?.id === 'check-text');
+    assert.equal(await page.locator('#check-text').getAttribute('aria-describedby'), 'check-text-hint check-text-error');
+    assert.match(await page.locator('#check-text-error').innerText(), /Paste the receipt message/);
+    assert.equal(await page.locator('.verify-check [role=alert]').count(), 0);
   });
 
   await check('Seal & send: one task at a time — signing line, the files survive Trust, Cancel keeps them, errors sit on the field, the handoff and its N3 confirm', async () => {
@@ -1114,7 +1135,7 @@ try {
     assert.equal((await panel.locator('.signing-line').innerText()).replace(/\n+/g, '\n'), "Signing\nOne-time key for this file. Your client can't check who sealed it. Set up a company key on Trust.");
     assert.deepEqual(await panel.locator('.button.primary').allInnerTexts(), ['Seal this file']);
     assert.equal(await page.getByRole('link', { name: 'Checking files someone sent you? Go to Verify' }).count(), 1);
-    assert.equal(await page.locator('#check-file').count(), 0);
+    assert.equal(await page.locator('#check-file').isVisible(), false);
     // An error is read with its field: focus moves there, and no alert is raised on top.
     await page.locator('#protect-file').setInputFiles({ name: 'empty.bin', mimeType: 'application/octet-stream', buffer: Buffer.alloc(0) });
     await page.getByRole('button', { name: 'Seal this file' }).click();

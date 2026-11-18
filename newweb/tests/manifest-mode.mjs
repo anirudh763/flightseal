@@ -78,6 +78,12 @@ try {
     await page.waitForFunction(() => document.activeElement?.id === 'seal-what-title');
   };
   const sealMore = async () => { await goTo('protect'); await confirmedMore(); };
+  // Verify's files form: the key someone gave separately sits under More options; Originals appear for a list.
+  const fillKey = async (target, key) => {
+    const options = target.locator('[aria-labelledby="check-title"] .check-options');
+    if (!(await options.evaluate((d) => d.open))) await options.locator('summary').click();
+    await target.locator('#check-key').fill(key);
+  };
 
 
   await check('Small file (embedded) is the default and keeps its controls', async () => {
@@ -151,39 +157,45 @@ try {
     await page.waitForFunction(() => document.querySelector('.commandbar h1')?.textContent === 'Verify');
   });
 
-  await check('Check: modified, missing and extra files get Bytes differ / Missing / Not in manifest', async () => {
+  await check('Check: modified, missing and extra files get Bytes differ / Missing / Not in the list, and the headline "Files differ"', async () => {
     const changed = Buffer.from(a); changed[10] ^= 1;
     const localPaths = [join(dir, 'local'), join(dir, 'local', 'a.bin'), join(dir, 'local', 'b.bin'), join(dir, 'local', 'extra.bin')];
     mkdirSync(localPaths[0], { recursive: true });
     writeFileSync(localPaths[1], changed); writeFileSync(localPaths[2], b); writeFileSync(localPaths[3], randomBytes(77));
-    await page.locator('#manifest-check-file').setInputFiles(sealedPath);
-    await page.locator('#manifest-check-text').fill(handover);
-    await page.locator('#manifest-trusted-key').fill(publicKey);
-    await page.locator('#manifest-local-files').setInputFiles(localPaths.slice(1));
+    await page.locator('#check-file').setInputFiles(sealedPath);
+    await page.locator('#check-text').fill(handover);
+    await page.locator('#check-originals').setInputFiles(localPaths.slice(1));
+    await fillKey(page, publicKey);
     await page.getByRole('button', { name: 'Check files' }).click();
     await page.waitForSelector('.manifest-table', { timeout: 60000 });
     const rows = await page.locator('.manifest-table tbody tr').evaluateAll((trs) => trs.map((tr) => [...tr.cells].map((td) => td.innerText.trim())));
-    assert.deepEqual(rows.map((r) => [r[0], r[3].split('\n')[0], r[4]]), [['1', 'Bytes differ', 'a.bin'], ['2', 'Matches', 'b.bin'], ['3', 'Missing', '—'], ['—', 'Not in manifest', 'extra.bin']]);
-    assert.match(rows[0][1], /a\.bin/);
-    assert.match(rows[1][1], /Operator note: Camera B, landed 14:02/);
-    assert.ok(rows[0][3].includes(BYTES_DIFFER.text), rows[0][3]);
+    assert.deepEqual(rows.map((r) => [r[0].split('\n')[0], r[1], r[2].split('\n')[0]]), [['a.bin', '200,064', 'Bytes differ'], ['b.bin', '300,000', 'Matches'], ['c.bin', '—', 'Missing'], ['extra.bin', '77', 'Not in the list']]);
+    assert.match(rows[1][0], /Operator note: Camera B, landed 14:02/);
+    assert.ok(rows[0][2].includes(BYTES_DIFFER.text), rows[0][2]);
+    // EXPERIENCE.md "Verify verdicts": Files differ wins over Incomplete and Not in the list; focus is on the headline.
+    assert.equal(await page.locator('#verdict-heading').innerText(), 'Files differ');
+    assert.equal(await page.evaluate(() => document.activeElement?.id), 'verdict-heading');
+    assert.match(await page.locator('.verdict-lines').innerText(), /Signature\s+Valid[\s\S]*Files\s+1 match · 1 differs · 1 missing · 1 not in the list[\s\S]*Receipt coverage\s+All items covered/);
+    assert.match(await page.locator('.verdict-next').innerText(), /Next step: Ask for the original files/);
     assert.equal(await page.locator('.manifest-outcome .trust-line').innerText(), "Valid signature, but this key isn't in your trusted list — confirm its fingerprint through a channel you already know.");
     const chips = await page.locator('.manifest-table .status-label').evaluateAll((els) => els.map((el) => [el.textContent, el.className]));
-    assert.deepEqual(chips, [['Bytes differ', 'status-label warn'], ['Matches', 'status-label ok'], ['Missing', 'status-label grey'], ['Not in manifest', 'status-label neutral']]);
+    assert.deepEqual(chips, [['Bytes differ', 'status-label warn'], ['Matches', 'status-label ok'], ['Missing', 'status-label warn'], ['Not in the list', 'status-label warn']]);
     const text = await page.locator('.manifest-outcome').innerText();
-    assert.match(text, /Manifest verified/);
     assert.doesNotMatch(text, /tampered(?! )/i);
     await layout(page, 'manifest checked');
   });
 
-  await check('No or wrong trusted key: not verified and no item statuses', async () => {
-    for (const key of ['', 'ab'.repeat(32)]) {
-      await page.locator('#manifest-trusted-key').fill(key);
-      await page.getByRole('button', { name: 'Check files' }).click();
-      await page.waitForSelector('.manifest-outcome [role=alert], .manifest-outcome[role=alert]', { timeout: 30000 });
-      assert.match(await page.locator('.manifest-outcome').innerText(), /Manifest not verified[\s\S]*trusted public key[\s\S]*entered the key the sender gave you separately/);
-      assert.equal(await page.locator('.manifest-table').count(), 0);
-    }
+  await check('Wrong key: Not verified and no item statuses; no key: the message\'s key checks it, signer not confirmed', async () => {
+    await fillKey(page, 'ab'.repeat(32));
+    await page.getByRole('button', { name: 'Check files' }).click();
+    await page.waitForFunction(() => document.querySelector('#verdict-heading')?.textContent === 'Not verified', null, { timeout: 30000 });
+    assert.match(await page.locator('.manifest-outcome').innerText(), /Not verified[\s\S]*trusted public key[\s\S]*entered the key the sender gave you separately/);
+    assert.equal(await page.locator('.manifest-table').count(), 0);
+    await fillKey(page, '');
+    await page.getByRole('button', { name: 'Check files' }).click();
+    await page.waitForSelector('.manifest-table', { timeout: 60000 });
+    assert.equal(await page.locator('#verdict-heading').innerText(), 'Files differ');
+    assert.equal(await page.locator('.manifest-outcome .trust-line').innerText(), "Valid signature, but this key isn't in your trusted list — confirm its fingerprint through a channel you already know.");
   });
 
   await check('Cancel stops hashing and the UI is usable again', async () => {
@@ -221,7 +233,7 @@ try {
   const trustText = () => page.locator('.manifest-outcome .trust-line').innerText();
   const runCheck = async (key) => {
     await goTo('verify');
-    await page.locator('#manifest-trusted-key').fill(key);
+    await fillKey(page, key);
     await page.getByRole('button', { name: 'Check files' }).click();
     await page.waitForSelector('.manifest-outcome', { timeout: 60000 });
   };
@@ -278,7 +290,6 @@ try {
   await check('Check: a fingerprint pin with an empty key field is trusted; every export carries trust, source and times', async () => {
     await runCheck('');
     assert.equal(await trustText(), 'Signed by a key you trust: Acme Survey (added from contract or invoice)');
-    assert.match(await page.locator('.manifest-outcome').innerText(), /Used the key you saved for Acme Survey/);
     assert.equal(await page.locator('.manifest-table').count(), 1);
     const save = async (name) => { const [d] = await Promise.all([page.waitForEvent('download'), page.getByRole('button', { name, exact: true }).click()]); return readFileSync(await d.path()); };
     for (const name of ['Download text report', 'Download Markdown report']) {
@@ -304,42 +315,44 @@ try {
     await page.waitForFunction(() => /marked as compromised: Acme Survey/.test(document.querySelector('.manifest-outcome .trust-line')?.textContent || ''));
     const [stale] = await Promise.all([page.waitForEvent('download'), page.getByRole('button', { name: 'Download text report', exact: true }).click()]);
     assert.match(readFileSync(await stale.path(), 'utf8'), /Key trust: Signed by a key you marked as compromised: Acme Survey/);
+    // The headline row "Signed by a key marked compromised" wins whatever the files show.
     await runCheck('');
-    assert.match(await page.locator('.manifest-outcome').innerText(), /Manifest not verified/);
+    assert.equal(await page.locator('#verdict-heading').innerText(), 'Signed by a key marked compromised');
+    assert.match(await page.locator('.manifest-outcome').innerText(), /This key was reported as compromised\. Don't rely on these files until the company confirms them\.[\s\S]*Next step: Ask the company for a new seal/);
     await runCheck(publicKey);
     assert.equal(await trustText(), "Signed by a key you marked as compromised: Acme Survey. Don't rely on this proof without checking with the company.");
     await runCheck('ab'.repeat(32));
-    assert.match(await page.locator('.manifest-outcome').innerText(), /Manifest not verified[\s\S]*trusted public key/);
+    assert.match(await page.locator('.manifest-outcome').innerText(), /Not verified[\s\S]*trusted public key/);
     assert.equal(await page.locator('.manifest-table').count(), 0);
   });
 
   await check('Pin controls on the check form: source required, in-page rotation confirm, history kept', async () => {
-    const pin = (id) => page.locator(`#manifest-trusted-key-pin-${id}`);
-    const pinButton = page.locator('[aria-labelledby="manifest-check-title"]').getByRole('button', { name: 'Pin public key on this device' }); // Verify also has its own pin controls now
-    await page.locator('#manifest-trusted-key').fill(publicKey);
+    const pin = (id) => page.locator(`#check-key-pin-${id}`);
+    const pinButton = page.locator('[aria-labelledby="check-title"]').getByRole('button', { name: 'Pin public key on this device' }); // Verify also has its own pin controls now
+    await fillKey(page, publicKey);
     await pin('name').fill('Unit A');
     assert.equal(await pinButton.isEnabled(), false, 'a source is required');
     await pin('source').selectOption('phone');
     await pinButton.click();
     // The previous check marked this key compromised, so it cannot be pinned again under another name.
-    assert.match(await page.locator('[aria-labelledby="manifest-check-title"] .trusted-key-controls [role=status]').innerText(), /marked as compromised, so it can’t be added again/);
+    assert.match(await page.locator('[aria-labelledby="check-title"] .trusted-key-controls [role=status]').innerText(), /marked as compromised, so it can’t be added again/);
     const firstKey = 'cd'.repeat(32);
-    await page.locator('#manifest-trusted-key').fill(firstKey);
+    await page.locator('#check-key').fill(firstKey);
     await pin('name').fill('Unit A');
     await pin('source').selectOption('phone');
     await pinButton.click();
-    assert.match(await page.locator('[aria-labelledby="manifest-check-title"] .trusted-key-controls [role=status]').innerText(), /Saved local pin Unit A/);
-    await page.locator('#manifest-trusted-key').fill('ab'.repeat(32));
+    assert.match(await page.locator('[aria-labelledby="check-title"] .trusted-key-controls [role=status]').innerText(), /Saved local pin Unit A/);
+    await page.locator('#check-key').fill('ab'.repeat(32));
     await pin('name').fill('Unit A');
     await pin('source').selectOption('phone');
     await pinButton.click();
-    const box = page.locator('[aria-labelledby="manifest-check-title"] .trusted-key-controls .confirm-box');
+    const box = page.locator('[aria-labelledby="check-title"] .trusted-key-controls .confirm-box');
     assert.match(await box.innerText(), new RegExp(`Key changed for “Unit A” \\(old fingerprint ${grouped(fingerprintOf(firstKey))}\\)`));
     await box.getByRole('button', { name: 'Keep current key' }).click();
     assert.equal(await box.count(), 0);
     await pinButton.click();
-    await page.locator('[aria-labelledby="manifest-check-title"] .trusted-key-controls .confirm-box').getByRole('button', { name: 'Replace key' }).click();
-    assert.match(await page.locator('[aria-labelledby="manifest-check-title"] .trusted-key-controls [role=status]').innerText(), /Saved local pin Unit A/);
+    await page.locator('[aria-labelledby="check-title"] .trusted-key-controls .confirm-box').getByRole('button', { name: 'Replace key' }).click();
+    assert.match(await page.locator('[aria-labelledby="check-title"] .trusted-key-controls [role=status]').innerText(), /Saved local pin Unit A/);
     await settings.waitForFunction(() => /Unit A[\s\S]*Replaced on \d{4}-\d{2}-\d{2}/.test(document.querySelector('.company-history')?.textContent || ''));
     assert.match(await settings.locator('.company-list').innerText(), new RegExp(`Unit A[\\s\\S]*${grouped(fingerprintOf('ab'.repeat(32))).slice(0, 14)}`));
   });
@@ -363,12 +376,12 @@ try {
 
     // Large files, key field empty.
     await goTo('verify');
-    await page.locator('#manifest-check-file').setInputFiles(sealedPath);
-    await page.locator('#manifest-check-text').fill(forged);
-    await page.locator('#manifest-local-files').setInputFiles([]);
+    await page.locator('#check-file').setInputFiles(sealedPath);
+    await page.locator('#check-text').fill(forged);
+    await page.locator('#check-originals').setInputFiles([]);
     await runCheck('');
     const outcome = await page.locator('.manifest-outcome').innerText();
-    assert.match(outcome, /Manifest not verified/);
+    assert.match(outcome, /Not verified/);
     assert.ok(outcome.includes(WEAK.error), outcome);
     assert.doesNotMatch(outcome, trusted);
     assert.equal(await page.locator('.manifest-table').count(), 0);
@@ -399,8 +412,10 @@ try {
     await goTo('verify');
     await page.locator('#check-file').setInputFiles(smallSealed);
     await page.locator('#check-text').fill(forge(smallHandover));
-    await page.getByRole('button', { name: 'Check this file' }).click();
-    await page.locator('.error-alert').filter({ hasText: WEAK.error }).waitFor({ timeout: 30000 });
+    await page.locator('#check-originals').waitFor({ state: 'detached' }); // a small file holds its own bytes
+    await page.getByRole('button', { name: 'Check files' }).click();
+    await page.locator('#check-file-error').filter({ hasText: WEAK.error }).waitFor({ timeout: 30000 }); // read with its field
+    assert.equal(await page.locator('#check-file').getAttribute('aria-describedby'), 'check-file-error');
     assert.doesNotMatch(await page.locator('main').innerText(), trusted);
     await sealMore(); // the sealed file was downloaded
     await page.getByLabel('Large files: fingerprint only, files stay where they are').check();
@@ -438,16 +453,16 @@ try {
     writeFileSync(reencoded, Buffer.concat([Buffer.from([0xef, 0xbb, 0xbf]), Buffer.from(text.replace(/\n/g, '\r\n'))]));
     const copy = join(localDir, 'flight-notes-cropped.txt'); writeFileSync(copy, readFileSync(edited));
     await goTo('verify');
-    await page.locator('#manifest-check-file').setInputFiles(sealed2);
-    await page.locator('#manifest-check-text').fill(message);
-    await page.locator('#manifest-local-files').setInputFiles([reencoded, copy]);
+    await page.locator('#check-file').setInputFiles(sealed2);
+    await page.locator('#check-text').fill(message);
+    await page.locator('#check-originals').setInputFiles([reencoded, copy]);
     await runCheck(key);
     await page.waitForSelector('.manifest-table');
     const rows = await page.locator('.manifest-table tbody tr').evaluateAll((trs) => trs.map((tr) => [...tr.cells].map((td) => td.innerText.trim())));
-    assert.deepEqual(rows.map((r) => [r[0], r[3].split('\n')[0], r[4]]), [['1', 'Bytes differ', 'flight-notes.txt'], ['2', 'Matches', 'flight-notes-cropped.txt']]);
-    assert.ok(rows[0][3].includes(BYTES_DIFFER.text));
-    assert.match(rows[1][1], /Edited copy of: item 1 \(operator-entered, signed\)/);
-    assert.doesNotMatch(rows[1][1], /reported-landing|derived-from/);
+    assert.deepEqual(rows.map((r) => [r[0].split('\n')[0], r[2].split('\n')[0]]), [['flight-notes.txt', 'Bytes differ'], ['flight-notes-cropped.txt', 'Matches']]);
+    assert.ok(rows[0][2].includes(BYTES_DIFFER.text));
+    assert.match(rows[1][0], /Edited copy of: item 1 \(operator-entered, signed\)/);
+    assert.doesNotMatch(rows[1][0], /reported-landing|derived-from/);
     assert.equal(await trustText(), "Valid signature, but this key isn't in your trusted list — confirm its fingerprint through a channel you already know.");
     const fields = await page.locator('.manifest-outcome .time-fields > div').evaluateAll((divs) => divs.map((d) => [d.querySelector('dt').innerText, d.querySelector('dd span').innerText, d.querySelector('dd small').innerText]));
     assert.deepEqual(fields.map((f) => f[0]), ['Reported landing time', 'Sealed on this computer at', 'Registry acceptance', 'Trusted timestamp', 'Reported landing-to-seal interval']);
@@ -477,10 +492,10 @@ try {
       await admin.getByRole('button', { name: 'Mark as compromised: Late Co' }).waitFor();
       await checker.goto(`${url}#/app/verify`);
       const big = join(dir, 'slow.bin'); const fd = openSync(big, 'w'); ftruncateSync(fd, 1536 * 1024 * 1024); closeSync(fd);
-      await checker.locator('#manifest-check-file').setInputFiles(sealedPath);
-      await checker.locator('#manifest-check-text').fill(handover);
-      await checker.locator('#manifest-trusted-key').fill(publicKey);
-      await checker.locator('#manifest-local-files').setInputFiles(big);
+      await checker.locator('#check-file').setInputFiles(sealedPath);
+      await checker.locator('#check-text').fill(handover);
+      await checker.locator('#check-originals').setInputFiles(big);
+      await fillKey(checker, publicKey);
       await checker.getByRole('button', { name: 'Check files' }).click();
       await checker.locator('#manifest-check-progress-0').waitFor({ timeout: 30000 });
       await admin.getByRole('button', { name: 'Mark as compromised: Late Co' }).click();
