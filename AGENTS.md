@@ -37,7 +37,8 @@ The user's request and the owner's RULES.md take precedence over anything here.
 - Registry wiring (console, `VITE_REGISTRY_URL`): after the console build, `node newweb/tests/registry-wiring.mjs` (19 checks:
   it scans the flag-off `docs/console` for registry strings, builds a flag-on console into
   `newweb/.test-artifacts/registry-wiring/build`, never into `docs/console`, and drives it in Chromium against the DEV ONLY
-  server, starting one itself or using `REGISTRY_DEV_URL`; axe at 320/768/1440 and screenshots in the same folder).
+  server, starting one itself or using `REGISTRY_DEV_URL`; axe at 320/768/1440 and screenshots in the same folder). The 30-proof throttle run is manual and local only, not a CI gate:
+  `REGISTRY_THROTTLE=1 node newweb/tests/registry-wiring.mjs` (20 checks); record the numbers in `docs/aws/COVERAGE.md`.
 - Wasm: `node --test tests/wasm/bridge.test.mjs tests/wasm/enterprise-edge.test.mjs tests/wasm/hash.test.mjs` and `node --test tests/wasm/browser.test.mjs tests/wasm/hash-browser.test.mjs`.
 - Manifest large-file run (manual, local only; record the numbers in `docs/MANIFEST_MODE.md`): `FSEAL_LARGE_HASH=1 node --test tests/wasm/hash-browser.test.mjs` and `FSEAL_LARGE_HASH=1 python3 -m pytest -q -s tests/test_manifest.py`.
 - Console: `python3 tools/fetch_sample.py tests/.data && npm --prefix newweb run build && npm --prefix newweb run test:browser` (runs `console.mjs` then `manifest-mode.mjs`), then `node newweb/tests/edge-matrix.mjs` (the latter owns its browser lock).
