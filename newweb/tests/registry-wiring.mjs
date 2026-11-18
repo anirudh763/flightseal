@@ -73,12 +73,22 @@ async function openRow(page, name) {
   if (!(await row.evaluate((d) => d.open))) await row.locator(':scope > summary').click();
   return row;
 }
-async function sealSmall(page, name, body = `${name} ${Date.now()} ${Math.random()}`) {
+// One task at a time (R15): a result on screen gives way through "Seal more files" (and "Discard it" if not downloaded).
+async function sealMore(page) {
   await go(page, 'protect');
-  const small = page.getByLabel('Small file (seal the whole file, up to 45 MiB)');
+  const more = page.getByRole('button', { name: 'Seal more files' });
+  if (!(await more.count())) return;
+  await more.click();
+  if (await page.locator('#seal-more-ask').count()) await page.getByRole('button', { name: 'Discard it' }).click();
+  await page.locator('#seal-what-title').waitFor();
+}
+async function sealSmall(page, name, body = `${name} ${Date.now()} ${Math.random()}`, { jobRef = '' } = {}) {
+  await sealMore(page);
+  const small = page.getByLabel('Small file: seal the whole file, up to 45 MiB');
   if (!(await small.isChecked())) await small.check();
   await page.locator('#protect-file').setInputFiles({ name, mimeType: 'application/octet-stream', buffer: Buffer.from(body) });
-  await page.getByRole('button', { name: 'Seal this log' }).click();
+  if (jobRef) await page.locator('#job-ref').fill(jobRef);
+  await page.getByRole('button', { name: 'Seal this file' }).click();
   await page.waitForSelector('#handover-text', { timeout: 60000 });
 }
 // An unassigned proof (sealed while signed out) is sent only after an explicit "Assign to <org>".
@@ -119,9 +129,10 @@ async function registryLineOfLastSeal(page, file, want) {
   const handover = await page.locator('#handover-text').inputValue();
   const [download] = await Promise.all([page.waitForEvent('download'), page.getByRole('button', { name: 'Download sealed file' }).click()]);
   const sealedPath = join(OUT, file); await download.saveAs(sealedPath);
+  await go(page, 'verify'); // the checker lives on Verify (R15)
   await page.locator('#check-file').setInputFiles(sealedPath);
   await page.locator('#check-text').fill(handover);
-  await page.getByRole('button', { name: 'Check this log' }).click();
+  await page.getByRole('button', { name: 'Check this file' }).click();
   const timeRow = page.locator('[aria-labelledby="check-title"] .time-fields > div', { has: page.locator('dt', { hasText: 'Registry acceptance' }) });
   // Query afresh each poll: a new result re-renders the time fields, so a handle taken earlier can go stale.
   await page.waitForFunction(([src, flags]) => [...document.querySelectorAll('[aria-labelledby="check-title"] .time-fields > div')].some((d) => d.querySelector('dt')?.textContent === 'Registry acceptance' && new RegExp(src, flags).test(d.querySelector('dd span')?.textContent || '')), [want.source, want.flags], { timeout: 30000 })
@@ -190,14 +201,17 @@ try {
     page.on('request', (r) => { const u = r.url(); if (/^https?:/.test(u) && !u.startsWith(origin)) foreign.push(u); });
     await page.goto(`${flagOff.url}console/#/app/protect`);
     await page.locator('#page-protect').waitFor();
-    assert.match(await page.locator('main').innerText(), /under Trust/);
+    assert.match(await page.locator('.signing-line').innerText(), /One-time key for this file\. Your client can't check who sealed it\. Set up a company key on Trust\./);
+    assert.ok(!(await page.locator('.signing-line').innerText()).includes('Registering for'));
     await sealSmall(page, 'off-flight.ulg');
     const handover = await page.locator('#handover-text').inputValue();
     const [download] = await Promise.all([page.waitForEvent('download'), page.getByRole('button', { name: 'Download sealed file' }).click()]);
     const sealedPath = join(OUT, 'off-flight.fseal'); await download.saveAs(sealedPath);
+    assert.equal(await page.locator('.handoff details').count(), 1, 'flag off: no share-link disclosure, only "What is this?"');
+    await go(page, 'verify');
     await page.locator('#check-file').setInputFiles(sealedPath);
     await page.locator('#check-text').fill(handover);
-    await page.getByRole('button', { name: 'Check this log' }).click();
+    await page.getByRole('button', { name: 'Check this file' }).click();
     await page.getByText('no registry was used').first().waitFor({ timeout: 30000 });
     const body = await page.locator('body').innerText();
     assert.match(body, /Registry acceptance/);
@@ -294,8 +308,21 @@ try {
 
   await check('enrolled key (SEED_A): a small-file seal registers; the change is announced once; counts stay separate', async () => {
     await importSeedA(page);
-    await sealSmall(page, 'flight-a.ulg');
+    await sealMore(page);
+    const line = page.locator('.signing-line');
+    await line.locator('.fingerprint').waitFor();
+    assert.match(await line.innerText(), /Signing as the key from seed-a\.pem/);
+    assert.match(await line.innerText(), /Registering for orgA as pilot-1/);
+    const signingFingerprint = await line.locator('.fingerprint').innerText();
+    assert.match(signingFingerprint, /^([0-9a-f]{4} ){15}[0-9a-f]{4}$/);
+    const bodies = []; const onRequest = (r) => { const b = r.postData(); if (b) bodies.push(b); };
+    page.on('request', onRequest);
+    await sealSmall(page, 'flight-a.ulg', undefined, { jobRef: 'JOBREF-MARKER-91' });
+    assert.equal(await page.locator('.handover .fingerprint').first().innerText(), signingFingerprint, 'the signing line named the key that signed');
+    assert.match(await page.locator('.handoff details summary', { hasText: 'Share link' }).innerText(), /Share link/);
     await chipIs(page, 'flight-a.ulg', 'Registered');
+    page.off('request', onRequest);
+    assert.ok(bodies.length > 0 && bodies.every((b) => !b.includes('JOBREF-MARKER-91')), 'the job reference is never sent');
     await page.waitForFunction(() => document.querySelector('.registry-announce')?.textContent.includes('flight-a.ulg: Registered'));
     const row = await openRow(page, 'flight-a.ulg');
     assert.match(await row.locator('.registry-detail').innerText(), /^Registered at \d{4}-\d\d-\d\d \d\d:\d\d:\d\d UTC\. This is the registry's statement, not proof of the files\./);
@@ -325,16 +352,17 @@ try {
   });
 
   await check('large files: a two-file manifest seal registers as "2 files"; checking it reads Registered on screen and in its text, Markdown, JSON and PDF reports', async () => {
-    await go(page, 'protect');
-    await page.getByLabel('Large files (fingerprint only)').check();
+    await sealMore(page);
+    await page.getByLabel('Large files: fingerprint only, files stay where they are').check();
     await page.locator('#manifest-files').setInputFiles([{ name: 'v1.mp4', mimeType: 'video/mp4', buffer: Buffer.from(`one ${Date.now()}`) }, { name: 'v2.mp4', mimeType: 'video/mp4', buffer: Buffer.from(`two ${Date.now()}`) }]);
-    await page.getByRole('button', { name: 'Seal', exact: true }).click();
+    await page.getByRole('button', { name: 'Seal the list', exact: true }).click();
     await chipIs(page, '2 files', 'Registered', 60000);
     // AC-25/AC-26 on the manifest check: the same receipt reads Registered on screen and in its text report.
     const handover = await page.locator('#manifest-handover-text').inputValue();
     const publicKey = /Public key: ([0-9a-f]{64})/.exec(handover)[1];
     const [download] = await Promise.all([page.waitForEvent('download'), page.getByRole('button', { name: 'Download sealed list' }).click()]);
     const sealedPath = join(OUT, 'two-files.manifest.fseal'); await download.saveAs(sealedPath);
+    await go(page, 'verify');
     await page.locator('#manifest-check-file').setInputFiles(sealedPath);
     await page.locator('#manifest-check-text').fill(handover);
     await page.locator('#manifest-trusted-key').fill(publicKey);
@@ -353,7 +381,8 @@ try {
     }
     const json = JSON.parse(await exportOf(page, 'Download JSON', token, outcome));
     assert.deepEqual(json.timeProvenance.fields[2], { label: 'Registry acceptance', value, basis: REGISTERED_BASIS });
-    await page.getByLabel('Small file (seal the whole file, up to 45 MiB)').check();
+    await sealMore(page); // the list was downloaded, so no question
+    await page.getByLabel('Small file: seal the whole file, up to 45 MiB').check();
   });
 
   await check('share link: made in the fragment only; a fresh context opens the record without sign-in', async () => {
@@ -641,6 +670,7 @@ try {
     await chipIs(page, 'flight-after.ulg', 'Sealed locally');
     assert.equal(await page.locator('.registry-row').count(), 1, 'the signed-out list shows only this tab\'s unsent seal');
     assert.deepEqual(await registryLineOfLastSeal(page, 'flight-after.fseal', /^Not yet registered$/), ['Not yet registered', "this device's list: Sealed locally"]);
+    await go(page, 'protect'); // the list stays on Seal & send; the check ran on Verify
     await page.locator('.registry-more > summary').click();
     const [download] = await Promise.all([page.waitForEvent('download'), page.getByRole('button', { name: 'Export pending proofs' }).click()]);
     const doc = JSON.parse(readFileSync(await download.path(), 'utf8'));
@@ -805,27 +835,28 @@ try {
       });
       await profileIn(a, 'per-file@example.test');
       await sealSmall(a, 'part-a.ulg'); // part 1: Seal & send (sealed file + receipt message)
-      await a.getByLabel('Large files (fingerprint only)').check();
-      await a.locator('#manifest-files').setInputFiles([{ name: 'p1.mp4', mimeType: 'video/mp4', buffer: Buffer.from(`p1 ${Date.now()}`) }]);
-      await a.getByRole('button', { name: 'Seal', exact: true }).click();
-      await a.locator('#manifest-handover-text').waitFor({ timeout: 60000 }); // part 2: the sealed list + its receipt
+      // Part 2: Seal & send holds one result at a time (R15), so the second unsaved result comes from the Samples sealer.
+      await go(a, 'sandbox');
+      await a.locator('#workbench-file').setInputFiles({ name: 'part-b.tsv', mimeType: 'text/plain', buffer: Buffer.from(`600\tp ${Date.now()}\n700\tq\n`) });
+      await a.waitForFunction(() => !Array.from(document.querySelectorAll('button')).find((b) => b.textContent.includes('Seal and verify'))?.disabled);
+      await a.getByRole('button', { name: 'Seal and verify' }).click();
+      await a.waitForFunction(() => document.querySelector('.seal-outputs')?.textContent.includes('Generated from part-b.tsv'), null, { timeout: 30000 });
       const menu = a.locator('.profile-menu');
       await menu.locator('summary').click();
       await menu.getByRole('button', { name: 'Download unsaved work' }).click();
       await menu.getByText(/Couldn't make one download \(blocked in this test\)/).waitFor();
       await Promise.all([a.waitForEvent('download'), menu.getByRole('button', { name: 'part-a.ulg.fseal', exact: true }).click()]);
-      await menu.getByText('1 of 4 files downloaded. Download the rest, then confirm.').waitFor();
+      await menu.getByText('1 of 5 files downloaded. Download the rest, then confirm.').waitFor();
       assert.equal(await menu.getByRole('button', { name: 'These finished' }).count(), 0, 'no part is complete yet');
       await Promise.all([a.waitForEvent('download'), menu.getByRole('button', { name: 'part-a.ulg.receipt.txt', exact: true }).click()]);
-      await menu.getByText('2 of 4 files downloaded. Download the rest, then confirm.').waitFor();
+      await menu.getByText('2 of 5 files downloaded. Download the rest, then confirm.').waitFor();
       await menu.getByRole('button', { name: 'These finished' }).click();
-      assert.equal(await menu.getByRole('button', { name: 'Log out', exact: true }).isDisabled(), true, 'the large-file result was never downloaded');
+      assert.equal(await menu.getByRole('button', { name: 'Log out', exact: true }).isDisabled(), true, 'the Samples result was never downloaded');
       assert.equal(await reloadWarns(a), true);
       await menu.getByRole('button', { name: 'Download unsaved work' }).click();
-      await menu.getByRole('button', { name: /\.manifest\.fseal$/ }).waitFor();
+      await menu.getByRole('button', { name: 'sealed.fseal', exact: true }).waitFor();
       const names = await menu.locator('.unsaved-download .actions-row button').allTextContents();
-      assert.equal(names.length, 2, 'only the large-file result is left: ' + names.join(', '));
-      assert.ok(names.every((n) => /^hashwing-\d{8}-\d{6}\.(manifest\.fseal|receipt\.txt)$/.test(n)), names.join(', '));
+      assert.deepEqual(names, ['sealed.fseal', 'sealed.receipts', 'sealed-public-key.txt'], 'only the Samples result is left');
     } finally { await c.close(); }
   });
 
@@ -835,9 +866,9 @@ try {
       const a = watch(await c.newPage(), 'manifest-kept');
       await a.goto(`${flagOn.url}#/app/protect`);
       await a.locator('#page-protect').waitFor();
-      await a.getByLabel('Large files (fingerprint only)').check();
+      await a.getByLabel('Large files: fingerprint only, files stay where they are').check();
       await a.locator('#manifest-files').setInputFiles([{ name: 'k1.mp4', mimeType: 'video/mp4', buffer: Buffer.from(`k1 ${Date.now()}`) }]);
-      await a.getByRole('button', { name: 'Seal', exact: true }).click();
+      await a.getByRole('button', { name: 'Seal the list', exact: true }).click();
       await a.locator('#manifest-handover-text').waitFor({ timeout: 60000 });
       assert.equal(await reloadWarns(a), true, 'an unsaved sealed list warns before reload');
       await a.evaluate(() => { location.hash = '/login'; }); // the panel unmounts; the result must not be dropped with it

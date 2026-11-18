@@ -962,9 +962,21 @@ try {
     const landed = new Date(Math.floor((Date.now() - 3600e3) / 1000) * 1000);
     await page.locator('.protect-options summary').first().click();
     await page.locator('#protect-landing').fill(`${landed.getFullYear()}-${pad(landed.getMonth() + 1)}-${pad(landed.getDate())}T${pad(landed.getHours())}:${pad(landed.getMinutes())}:${pad(landed.getSeconds())}`.replace(/:00$/, '')); // Chrome normalises zero seconds away, and fill() rejects a value that changes
-    await page.getByRole('button', { name: 'Seal this log' }).click();
+    await page.locator('#job-ref').fill('JOB-REF-7Q2X');
+    await page.getByRole('button', { name: 'Seal this file' }).click();
     await page.waitForSelector('#handover-text', { timeout: 60000 });
+    // R18 / AC-53: the handoff leads, its heading has focus, and Download is the one primary action until it is used.
+    await page.waitForFunction(() => document.activeElement?.id === 'handoff-title');
+    assert.equal(await page.locator('#handoff-title').innerText(), 'Send these to your client');
+    assert.equal(await page.locator('.seal-summary').innerText(), 'Sealed · 1 file · JOB-REF-7Q2X');
+    assert.deepEqual(await page.locator('.handoff-step-title').allInnerTexts(), ['Download the sealed file', 'Send the receipt message']);
+    assert.deepEqual(await page.locator('.seal-panel .button.primary').allInnerTexts(), ['Download']);
+    assert.equal(await page.locator('#seal-what-title').count(), 0, 'the step panel gives way to the handoff');
+    assert.equal(await page.locator('.result-panel').count(), 0, 'no checker result on Seal & send (R15)');
+    assert.equal(await page.locator('#check-file').count(), 0, 'the checker lives on Verify');
     const handover = await page.locator('#handover-text').inputValue();
+    assert.ok(!handover.includes('JOB-REF-7Q2X'), 'the job reference is not in the receipt message');
+    assert.match(handover, /open \S+#\/app\/verify and paste/, 'the message sends the recipient to Verify');
     assert.match(handover, new RegExp(`Original file: ${original.length} bytes, SHA-256 ${sha(original)}`));
     assert.equal(handover.split('\n')[2], `Reported landing time: ${landed.toISOString()} (operator-entered, not signed, not verified)`);
     const senderFingerprint = await page.locator('.handover .fingerprint').innerText();
@@ -972,19 +984,21 @@ try {
     assert.equal(await page.locator('.trust-line').count(), 0, "the sender's own seal shows no recipient trust line");
     assert.equal(handover.split('\n').filter((line) => line.startsWith('fseal-receipt v1 ')).length, 1);
     assert.match(await page.getByRole('link', { name: 'Email it' }).getAttribute('href'), /^mailto:\?subject=HashWing%20receipt/);
-    await waitResult(page, 'Intact');
     const [sealedDownload] = await Promise.all([page.waitForEvent('download'), page.getByRole('button', { name: 'Download sealed file' }).click()]);
     assert.equal(sealedDownload.suggestedFilename(), 'px4-sample.ulg.fseal');
     const sealedPath = join(evidence, 'sealed.fseal');
     await sealedDownload.saveAs(sealedPath);
+    assert.ok(!readFileSync(sealedPath).includes(Buffer.from('JOB-REF-7Q2X')), 'the job reference is not in the sealed file');
+    assert.deepEqual(await page.locator('.seal-panel .button.primary').allInnerTexts(), ['Copy message'], 'after the download, Copy message is the one primary action');
     await auditAxe(page, '1440px seal handover');
     await page.screenshot({ path: join(evidence, 'sealed-1440.png'), fullPage: true });
 
-    // The witness, in a fresh page load, with the message quoted and wrapped as an email reply would.
+    // The witness, in a fresh page load on Verify, with the message quoted and wrapped as an email reply would.
     await page.reload();
+    await route(page, 'verify');
     await page.locator('#check-file').setInputFiles(sealedPath);
     await page.locator('#check-text').fill(handover.split('\n').flatMap((line) => line.match(/.{1,72}/g) || ['']).map((line) => `> ${line}`).join('\n'));
-    await page.getByRole('button', { name: 'Check this log' }).click();
+    await page.getByRole('button', { name: 'Check this file' }).click();
     await waitResult(page, 'Intact');
     await page.waitForSelector('.restored', { timeout: 30000 });
     assert.match(await page.locator('.restored h3').textContent(), /Original file recovered/);
@@ -1021,7 +1035,7 @@ try {
     await pinPage.getByRole('button', { name: 'Add company' }).click();
     await pinPage.waitForFunction(() => document.querySelector('.company-list')?.textContent.includes('Pilot Co'));
     await pinPage.close();
-    await page.getByRole('button', { name: 'Check this log' }).click();
+    await page.getByRole('button', { name: 'Check this file' }).click();
     await waitResult(page, 'Intact');
     await page.waitForSelector('.restored', { timeout: 30000 });
     const trusted = 'Signed by a key you trust: Pilot Co (added from phone call with a known contact)';
@@ -1052,28 +1066,145 @@ try {
     const editedPath = join(evidence, 'edited.fseal'); writeFileSync(editedPath, edited);
     await page.locator('#check-file').setInputFiles(editedPath);
     await page.locator('#check-text').fill(handover);
-    await page.getByRole('button', { name: 'Check this log' }).click();
+    await page.getByRole('button', { name: 'Check this file' }).click();
     await waitResult(page, 'Tampered');
     assert.equal(await page.locator('.restored').count(), 0);
 
     // The real attack: the holder changes the log and seals it again with a fresh key.
     const changed = Buffer.from(original); changed[original.length >> 1] ^= 1;
     const changedPath = join(evidence, 'px4-sample.ulg'); writeFileSync(changedPath, changed);
+    await page.getByRole('navigation', { name: 'Primary navigation' }).getByRole('link', { name: 'Seal & send' }).click();
     await page.locator('#protect-file').setInputFiles(changedPath);
-    await page.getByRole('button', { name: 'Seal this log' }).click();
+    await page.getByRole('button', { name: 'Seal this file' }).click();
     await page.waitForSelector('#handover-text', { timeout: 60000 });
     const [forgedDownload] = await Promise.all([page.waitForEvent('download'), page.getByRole('button', { name: 'Download sealed file' }).click()]);
     const forgedPath = join(evidence, 'forged.fseal'); await forgedDownload.saveAs(forgedPath);
+    await route(page, 'verify');
     await page.locator('#check-file').setInputFiles(forgedPath);
     await page.locator('#check-text').fill(handover);
-    await page.getByRole('button', { name: 'Check this log' }).click();
+    await page.getByRole('button', { name: 'Check this file' }).click();
     await waitResult(page, 'Tampered');
     assert.equal(await page.locator('.restored').count(), 0);
 
     // No receipt pasted: refused with a reason rather than a weaker check.
     await page.locator('#check-text').fill('no receipt here');
-    await page.getByRole('button', { name: 'Check this log' }).click();
+    await page.getByRole('button', { name: 'Check this file' }).click();
     assert.match(await page.getByRole('alert').first().textContent(), /Paste the receipt message/);
+  });
+
+  await check('Seal & send: one task at a time — signing line, the files survive Trust, Cancel keeps them, errors sit on the field, the handoff and its N3 confirm', async () => {
+    await page.setViewportSize({ width: 1440, height: 900 });
+    await page.goto(`${url}#/app/protect`); await page.reload(); await page.waitForSelector('#seal-what-title');
+    const panel = page.locator('.seal-panel');
+    // R17 / AC-52: the one-time-key signing line, one primary action, and the checker moved to Verify.
+    assert.equal((await panel.locator('.signing-line').innerText()).replace(/\n+/g, '\n'), "Signing\nOne-time key for this file. Your client can't check who sealed it. Set up a company key on Trust.");
+    assert.deepEqual(await panel.locator('.button.primary').allInnerTexts(), ['Seal this file']);
+    assert.equal(await page.getByRole('link', { name: 'Checking files someone sent you? Go to Verify' }).count(), 1);
+    assert.equal(await page.locator('#check-file').count(), 0);
+    // An error is read with its field: focus moves there, and no alert is raised on top.
+    await page.locator('#protect-file').setInputFiles({ name: 'empty.bin', mimeType: 'application/octet-stream', buffer: Buffer.alloc(0) });
+    await page.getByRole('button', { name: 'Seal this file' }).click();
+    await page.waitForFunction(() => document.activeElement?.id === 'protect-file');
+    assert.equal(await page.locator('#protect-file').getAttribute('aria-describedby'), 'protect-file-error');
+    assert.equal(await page.locator('#protect-file-error').innerText(), 'This file is empty; there is nothing to seal.');
+    assert.equal(await page.locator('main [role=alert]').count(), 0);
+    // Files and job reference survive a visit to Trust, in both modes.
+    const big = Buffer.alloc(12 * 1024 * 1024, 7);
+    await page.locator('#protect-file').setInputFiles({ name: 'flight-12.ulg', mimeType: 'application/octet-stream', buffer: big });
+    assert.equal(await panel.locator('.seal-file-list').innerText(), 'flight-12.ulg\n12,582,912 bytes');
+    assert.equal(await panel.locator('.seal-total').innerText(), 'Total 1 file\n12,582,912 bytes');
+    await page.locator('#job-ref').fill('Roof survey 12');
+    await panel.getByRole('link', { name: 'Set up a company key on Trust' }).click();
+    await page.waitForSelector('#page-help');
+    await page.getByRole('navigation', { name: 'Primary navigation' }).getByRole('link', { name: 'Seal & send' }).click();
+    await page.waitForSelector('#page-protect');
+    assert.equal(await panel.locator('.seal-file-list').innerText(), 'flight-12.ulg\n12,582,912 bytes', 'the chosen file is still there');
+    assert.equal(await page.locator('#job-ref').inputValue(), 'Roof survey 12');
+    assert.equal(await page.getByRole('button', { name: 'Seal this file' }).isEnabled(), true);
+    await page.getByLabel('Large files: fingerprint only, files stay where they are').check();
+    await page.locator('#manifest-files').setInputFiles([1, 2].map((n) => ({ name: `clip-${n}.mp4`, mimeType: 'video/mp4', buffer: Buffer.alloc(1000 * n, n) })));
+    await route(page, 'help');
+    await page.getByRole('navigation', { name: 'Primary navigation' }).getByRole('link', { name: 'Seal & send' }).click();
+    assert.equal(await panel.locator('.seal-total').innerText(), 'Total 2 files\n3,000 bytes');
+    assert.deepEqual(await panel.locator('.button.primary').allInnerTexts(), ['Seal the list']);
+    await page.getByLabel('Small file: seal the whole file, up to 45 MiB').check();
+    // Progress is a <progress> with a text value; Cancel keeps the file and puts focus back on Seal.
+    const progress = await page.evaluate(async () => {
+      document.getElementById('protect-seal').click();
+      for (let i = 0; i < 50 && !document.getElementById('protect-progress'); i++) await new Promise((r) => setTimeout(r, 0));
+      const bar = document.getElementById('protect-progress');
+      const seen = bar && { text: bar.getAttribute('aria-valuetext'), max: bar.max };
+      document.querySelector('.seal-progress button')?.click();
+      return seen;
+    });
+    assert.deepEqual(progress, { text: 'Step 1 of 4: Reading the file', max: 4 });
+    await page.waitForFunction(() => document.activeElement?.id === 'protect-seal');
+    assert.match(await page.locator('main').innerText(), /Sealing cancelled\. Your files are still chosen\./);
+    assert.equal(await panel.locator('.seal-file-list').innerText(), 'flight-12.ulg\n12,582,912 bytes');
+    assert.equal(await page.locator('#handover-text').count(), 0);
+
+    // AC-53 N3: "Seal more files" before the download asks first, with Download focused.
+    await page.locator('#protect-file').setInputFiles({ name: 'n3.bin', mimeType: 'application/octet-stream', buffer: Buffer.from(`n3 ${Date.now()}`) });
+    await page.getByRole('button', { name: 'Seal this file' }).click();
+    await page.waitForSelector('#handover-text', { timeout: 60000 });
+    await page.getByRole('button', { name: 'Seal more files' }).click();
+    assert.equal(await page.locator('#seal-more-ask').innerText(), "You haven't downloaded n3.bin.fseal. Download it first?");
+    assert.equal(await page.evaluate(() => document.activeElement?.textContent), 'Download', 'Download has focus');
+    const [n3] = await Promise.all([page.waitForEvent('download'), page.keyboard.press('Enter')]);
+    assert.equal(n3.suggestedFilename(), 'n3.bin.fseal');
+    await page.waitForFunction(() => !document.getElementById('seal-more-ask') && document.activeElement?.textContent === 'Seal more files');
+    await page.getByRole('button', { name: 'Seal more files' }).click(); // downloaded now, so no question
+    await page.waitForFunction(() => document.activeElement?.id === 'seal-what-title');
+    assert.equal(await panel.locator('.seal-file-list').count(), 0, 'the selection is cleared');
+    assert.equal(await page.locator('#job-ref').inputValue(), '');
+
+    // R79: confirming an old download after sealing something new leaves the new result unsaved.
+    const sealOne = async (name) => {
+      await page.locator('#protect-file').setInputFiles({ name, mimeType: 'application/octet-stream', buffer: Buffer.from(`${name} ${Date.now()}`) });
+      await page.getByRole('button', { name: 'Seal this file' }).click();
+      await page.waitForSelector('#handover-text', { timeout: 60000 });
+    };
+    await sealOne('first.bin');
+    await page.goto(`${url}#/login`);
+    await page.getByText('This tab has work that is not saved yet. Download it before you sign in.').waitFor();
+    await Promise.all([page.waitForEvent('download'), page.getByRole('button', { name: 'Download unsaved work' }).click()]);
+    await page.getByText('Did the download finish?').waitFor();
+    await page.goto(`${url}#/app/protect`); await page.waitForSelector('#handover-text');
+    await page.getByRole('button', { name: 'Seal more files' }).click();
+    await page.getByRole('button', { name: 'Discard it' }).click();
+    await page.waitForFunction(() => document.activeElement?.id === 'seal-what-title');
+    await sealOne('second.bin');
+    await page.goto(`${url}#/login`);
+    await page.getByRole('button', { name: 'Yes, saved' }).click(); // confirms the first download only
+    await page.getByText('This tab has work that is not saved yet. Download it before you sign in.').waitFor({ timeout: 3000 })
+      .catch(() => assert.fail('the new result was marked saved by the old download'));
+    assert.equal(await page.getByRole('button', { name: 'Download unsaved work' }).count(), 1);
+    await page.goto(`${url}#/app/protect`); await page.waitForSelector('#handover-text');
+    assert.equal(await page.locator('.seal-summary').innerText(), 'Sealed · 1 file');
+    assert.deepEqual(await page.locator('.seal-panel .button.primary').allInnerTexts(), ['Download'], 'second.bin is still not downloaded');
+    await page.getByRole('button', { name: 'Seal more files' }).click();
+    await page.getByRole('button', { name: 'Discard it' }).click();
+
+    // Large-file mode: the list vs the originals that travel separately (first five, then Show all), and discarding
+    // an undownloaded list removes it from the unsaved work, so it no longer blocks signing in.
+    await page.getByLabel('Large files: fingerprint only, files stay where they are').check();
+    await page.locator('#manifest-files').setInputFiles(Array.from({ length: 7 }, (_, i) => ({ name: `roof-${i + 1}.mp4`, mimeType: 'video/mp4', buffer: Buffer.alloc(100 + i, i) })));
+    await page.getByRole('button', { name: 'Seal the list' }).click();
+    await page.waitForSelector('#manifest-handover-text', { timeout: 60000 });
+    await page.waitForFunction(() => document.activeElement?.id === 'manifest-handoff-title');
+    assert.deepEqual(await page.locator('.handoff-step-title').allInnerTexts(), ['Download the list', 'Send the receipt message']);
+    assert.deepEqual(await page.locator('.handoff-original-list li').allInnerTexts(), ['roof-1.mp4', 'roof-2.mp4', 'roof-3.mp4', 'roof-4.mp4', 'roof-5.mp4']);
+    await page.getByRole('button', { name: 'Show all 7' }).click();
+    assert.equal(await page.locator('.handoff-original-list li').count(), 7);
+    assert.deepEqual(await page.locator('.seal-panel .button.primary').allInnerTexts(), ['Download']);
+    await page.getByRole('button', { name: 'Seal more files' }).click();
+    assert.match(await page.locator('#seal-more-ask').innerText(), /^You haven't downloaded hashwing-\d{8}-\d{6}\.manifest\.fseal\. Download it first\?$/);
+    await page.getByRole('button', { name: 'Discard it' }).click();
+    await page.waitForFunction(() => document.activeElement?.id === 'seal-what-title');
+    assert.equal(await page.locator('.seal-total').count(), 0);
+    await page.goto(`${url}#/login`); await page.waitForSelector('#auth-email, form');
+    assert.equal(await page.getByText('This tab has work that is not saved yet.').count(), 0, 'a discarded list does not block sign-in');
+    await auditAxe(page, 'login after discard');
   });
 
   await context.close();
