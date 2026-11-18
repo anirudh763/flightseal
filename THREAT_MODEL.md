@@ -47,6 +47,13 @@ The records written after sealing starts: their contents, their order and their 
   Chromium 153 WebCrypto accepted all 14 forged fixture receipts; Node 24 (bundled OpenSSL 3.5.9) rejected them.
 - The verifier gets the sealer's public key out of band (for example, registered with the operator's company), not
   from the holder.
+- Trusted-company pins live in `localStorage` on the origin `anirudh763.github.io`. GitHub Pages serves the owner's
+  other project sites from that same origin, so a hostile or compromised sibling site could write, change or delete
+  pins. The console drops an entry whose fingerprint is not the SHA-256 of its stored key, and any malformed entry,
+  but that only catches a mismatched pair: a sibling site can still write a self-consistent pin for its own key, and
+  that key would then read as trusted. It can also delete a compromised mark, and a compromised entry that is
+  corrupted (for example, its date is missing) is dropped like any malformed entry. The mitigation is a dedicated
+  origin for the console (deferred).
 - Receipts reach the witness promptly. The gap between receipts is the window an attacker can rewrite, so a
   deployment chooses `--every N` to match how much of a flight it can afford to leave unprotected.
 

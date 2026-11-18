@@ -2,7 +2,7 @@
 // digests. Format (one ASCII line, see docs/MANIFEST_MODE.md; tools/manifest.py writes identical bytes):
 //   hashwing-manifest v1 salt=<64 hex> items=<n> item=<i>,<bytes>,<sha256>,<name>,<note> ...
 // name/note are encodeURIComponent of the exact UTF-8 text, empty when absent.
-import { blobSource, checkReceipts, hex, parseHex, parseReceipts, readRecord, scanLog } from './verifier.js';
+import { WEAK_KEY_MESSAGE, blobSource, checkReceipts, hex, parseHex, parseReceipts, readRecord, scanLog, weakPublicKey } from './verifier.js';
 import { parseHandover } from './rawfile.js';
 
 export const MANIFEST_LIMITS = Object.freeze({ maxItems: 100, maxPayloadBytes: 65536, maxNameBytes: 255, maxNoteBytes: 1000, maxSize: 999_999_999_999_999 });
@@ -82,7 +82,7 @@ const reject = (reason) => ({ verified: false, reason });
  * never the trust anchor. Returns { verified: true, manifest, head, publicKey } or { verified: false, reason }.
  */
 export async function verifySealedManifest(blob, receiptsText, trustedKeyHex) {
-  const trusted = parseHex(String(trustedKeyHex || '').trim(), 32);
+  const trusted = parseHex(String(trustedKeyHex || '').trim().toLowerCase(), 32);
   if (!trusted) return reject('Enter the trusted public key (64 hexadecimal digits) you received separately.');
   if (!(blob instanceof Blob) || blob.size === 0) return reject('Choose the sealed manifest file.');
   if (blob.size > MAX_SEALED_BYTES) return reject('This file is too large to be a sealed manifest.');
@@ -97,6 +97,7 @@ export async function verifySealedManifest(blob, receiptsText, trustedKeyHex) {
   if (scan.records !== 1) return reject('A sealed manifest must contain exactly one record.');
   if (scan.goodBytes !== blob.size) return reject('Unexpected bytes after the manifest record.');
   if (hex(receipts[0].head) !== hex(scan.head)) return reject('The receipt does not match this sealed manifest.');
+  if (weakPublicKey(trusted)) return reject(WEAK_KEY_MESSAGE);
   const check = await checkReceipts(receipts, trusted, scan);
   const result = check.results[0];
   if (result.result === 'wrong-key') return reject('The receipt was not signed by the trusted public key.');

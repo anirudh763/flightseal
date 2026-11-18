@@ -94,3 +94,28 @@ test('createShare refuses a malformed token and a context without Web Crypto, wi
     assert.equal(r.code, 'insecure_context');
   } finally { Object.defineProperty(globalThis, 'crypto', real); }
 });
+
+test('getShare is public: GET /v1/shares/<token> with no authorization header, even with a token available', async () => {
+  const calls = [];
+  const client = createRegistryClient({ baseUrl: 'http://x', getToken: async () => assert.fail('getShare must not read the token'), fetch: async (url, init) => { calls.push({ url, init }); return json(200, { head: 'h', count: 1, key_fingerprint: 'f', received_at: '2027-01-01T00:00:00Z' }); } });
+  const tok = 'A'.repeat(43);
+  const r = await client.getShare(tok);
+  assert.equal(r.ok, true);
+  assert.equal(calls[0].url, `http://x/v1/shares/${tok}`);
+  assert.equal(calls[0].init.method, 'GET');
+  assert.equal(calls[0].init.headers.authorization, undefined);
+  assert.equal(calls[0].init.body, undefined);
+  const missing = createRegistryClient({ fetch: async () => json(404, { error: 'not_found' }) });
+  assert.deepEqual(await missing.getShare(tok), { ok: false, kind: 'http', status: 404, code: 'not_found' });
+});
+
+test('deleteRegistration sends DELETE /v1/registrations/<id> with the bearer token', async () => {
+  const calls = [];
+  const client = createRegistryClient({ baseUrl: 'http://x/', getToken: async () => 'T', fetch: async (url, init) => { calls.push({ url, init }); return json(200, { registration_id: 'a'.repeat(32), disposition: 'deleted' }); } });
+  const r = await client.deleteRegistration('a'.repeat(32));
+  assert.equal(r.ok, true);
+  assert.equal(r.data.disposition, 'deleted');
+  assert.equal(calls[0].url, `http://x/v1/registrations/${'a'.repeat(32)}`);
+  assert.equal(calls[0].init.method, 'DELETE');
+  assert.equal(calls[0].init.headers.authorization, 'Bearer T');
+});

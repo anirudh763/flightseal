@@ -77,7 +77,13 @@ def test_strict_parse_and_limits():
 
 
 def test_base_name_matches_browser_file_name():
-    for path, name in [("a/b.mp4", "b.mp4"), ("a\\b.mp4", "b.mp4"), ("dir/x\\y.bin", "y.bin"), ("plain.ulg", "plain.ulg")]:
+    # The browser's File.name is the platform's file name: on macOS and Linux a backslash is an ordinary character.
+    cases = [("a/b.mp4", "b.mp4"), ("plain.ulg", "plain.ulg")]
+    if os.name == "nt":
+        cases += [("C:\\flights\\a.mp4", "a.mp4"), ("dir/x\\y.bin", "y.bin")]
+    else:
+        cases += [("x\\y.mp4", "x\\y.mp4"), ("dir/x\\y.bin", "x\\y.bin")]
+    for path, name in cases:
         assert manifest.base_name(path) == name
 
 

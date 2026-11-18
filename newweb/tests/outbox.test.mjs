@@ -583,3 +583,28 @@ test('a gateway throttle 429 (no registry error code) is retried later with the 
   assert.ok(r.next_attempt_at > h.t);
   ob.close();
 });
+
+test('markDeleted rewrites the saved ack as deleted ("Registered, later deleted"); false when there is no ack', async () => {
+  const h = harness();
+  const ob = await h.open();
+  const row = await ob.enqueue({ receipt: receipt(1) });
+  await ob.retryNow();
+  let [r] = await ob.list();
+  assert.equal(r.label, 'Registered');
+  let notified = 0;
+  ob.subscribe(() => { notified += 1; });
+  assert.equal(await ob.markDeleted(row.id), true);
+  [r] = await ob.list();
+  assert.equal(r.state, 'registered');
+  assert.equal(r.disposition, 'deleted');
+  assert.equal(r.label, 'Registered, later deleted');
+  assert.equal(r.received_at, '2027-01-15T08:00:00Z', 'the ack is rewritten, not dropped');
+  assert.ok(notified >= 1, 'subscribers hear about it');
+  assert.equal(await ob.markDeleted('f'.repeat(64)), false);
+  h.online.on = false;
+  const queued = await ob.enqueue({ receipt: receipt(2) });
+  assert.equal(await ob.markDeleted(queued.id), false, 'a queued row has no ack to rewrite');
+  assert.equal((await h.store.getRow(queued.id)).state, 'sealed_local');
+  ob.close();
+  assert.equal(await ob.markDeleted(row.id), false, 'closed');
+});

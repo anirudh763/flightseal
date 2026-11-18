@@ -226,6 +226,24 @@ try {
     const history = await settings.locator('.company-history').innerText();
     assert.match(history, /Acme Survey[\s\S]*Replaced on \d{4}-\d{2}-\d{2}/);
     assert.match(history, /Old Co[\s\S]*Marked compromised on \d{4}-\d{2}-\d{2}/);
+    // Removing a company keeps its compromised record, so that key can't come back and Remove is hidden for it.
+    assert.equal(await settings.getByRole('button', { name: 'Remove: Old Co' }).count(), 0, 'no Remove for a name with only compromised records');
+    await addCompany('Old Co', 'cd'.repeat(32), 'other');
+    assert.equal(await settings.getByRole('alert').innerText(), 'This key was marked as compromised, so it can’t be added again. Ask the company for a new key.');
+    await addCompany('Temp Co', 'ef'.repeat(32), 'other');
+    await settings.locator('.company-list').getByRole('button', { name: 'Remove: Temp Co' }).click();
+    assert.equal(await settings.locator('.confirm-box').innerText().then((t) => t.split('\n')[0]), 'Remove Temp Co from this browser? A key you marked as compromised stays recorded as compromised.');
+    await settings.locator('.confirm-box').getByRole('button', { name: 'Remove company' }).click();
+    assert.equal(await settings.locator('.trusted-companies [role=status]').innerText(), 'Removed Temp Co.');
+    // The same key pinned under two names: marking one compromised shows the other as compromised too.
+    await addCompany('Twin A', '12'.repeat(32), 'other');
+    await addCompany('Twin B', '12'.repeat(32), 'other');
+    await settings.getByRole('button', { name: 'Mark as compromised: Twin A' }).click();
+    await settings.locator('.confirm-box').getByRole('button', { name: 'Mark as compromised' }).click();
+    const twin = settings.locator('.company-list li', { hasText: 'Twin B' });
+    assert.match(await twin.innerText(), /This key was marked as compromised under another name/);
+    assert.equal(await twin.getByRole('button', { name: 'Mark as compromised: Twin B' }).count(), 0);
+    assert.match(await settings.locator('.company-history').innerText(), /Twin B[\s\S]*Marked compromised under another name/);
     await settings.locator('.trusted-companies details > summary', { hasText: 'What is this?' }).click();
     await layout(settings, 'trusted companies');
   });
@@ -276,13 +294,20 @@ try {
     assert.equal(await pinButton.isEnabled(), false, 'a source is required');
     await pin('source').selectOption('phone');
     await pinButton.click();
+    // The previous check marked this key compromised, so it cannot be pinned again under another name.
+    assert.match(await page.locator('.trusted-key-controls [role=status]').innerText(), /marked as compromised, so it can’t be added again/);
+    const firstKey = 'cd'.repeat(32);
+    await page.locator('#manifest-trusted-key').fill(firstKey);
+    await pin('name').fill('Unit A');
+    await pin('source').selectOption('phone');
+    await pinButton.click();
     assert.match(await page.locator('.trusted-key-controls [role=status]').innerText(), /Saved local pin Unit A/);
     await page.locator('#manifest-trusted-key').fill('ab'.repeat(32));
     await pin('name').fill('Unit A');
     await pin('source').selectOption('phone');
     await pinButton.click();
     const box = page.locator('.trusted-key-controls .confirm-box');
-    assert.match(await box.innerText(), new RegExp(`Key changed for “Unit A” \\(old fingerprint ${grouped(fingerprintOf(publicKey))}\\)`));
+    assert.match(await box.innerText(), new RegExp(`Key changed for “Unit A” \\(old fingerprint ${grouped(fingerprintOf(firstKey))}\\)`));
     await box.getByRole('button', { name: 'Keep current key' }).click();
     assert.equal(await box.count(), 0);
     await pinButton.click();
@@ -403,6 +428,43 @@ try {
     await layout(page, 'manifest derived');
     await page.locator('#manifest-files').setInputFiles([original]);
     assert.equal(await page.locator('#manifest-landing').inputValue(), '', 'a landing time is never carried into the next batch');
+  });
+
+  await check('A key marked compromised while files are hashing shows compromised on screen and in every export', async () => {
+    const ctx = await browser.newContext({ acceptDownloads: true, viewport: { width: 1440, height: 900 } });
+    try {
+      const checker = await ctx.newPage();
+      checker.on('pageerror', (error) => runtimeErrors.push(`stale-trust: ${error}`));
+      const admin = await ctx.newPage(); // "another tab" sharing this browser's trusted companies
+      await admin.goto(`${url}#/app/settings`);
+      await admin.locator('.trusted-companies-details > summary').click();
+      await admin.locator('#tc-name').fill('Late Co');
+      await admin.locator('#tc-fingerprint').fill(fingerprintOf(publicKey));
+      await admin.getByLabel('contract or invoice', { exact: true }).check();
+      await admin.getByRole('button', { name: 'Add company' }).click();
+      await admin.getByRole('button', { name: 'Mark as compromised: Late Co' }).waitFor();
+      await checker.goto(`${url}#/app/protect`);
+      await checker.getByLabel('Large files (fingerprint only)').check();
+      const big = join(dir, 'slow.bin'); const fd = openSync(big, 'w'); ftruncateSync(fd, 1536 * 1024 * 1024); closeSync(fd);
+      await checker.locator('#manifest-check-file').setInputFiles(sealedPath);
+      await checker.locator('#manifest-check-text').fill(handover);
+      await checker.locator('#manifest-trusted-key').fill(publicKey);
+      await checker.locator('#manifest-local-files').setInputFiles(big);
+      await checker.getByRole('button', { name: 'Check files' }).click();
+      await checker.locator('#manifest-check-progress-0').waitFor({ timeout: 30000 });
+      await admin.getByRole('button', { name: 'Mark as compromised: Late Co' }).click();
+      await admin.locator('.confirm-box').getByRole('button', { name: 'Mark as compromised' }).click();
+      assert.equal(await checker.locator('#manifest-check-progress-0').count(), 1, 'still hashing when the key was marked');
+      const line = checker.locator('.manifest-outcome .trust-line');
+      await line.waitFor({ timeout: 120000 });
+      await checker.waitForFunction(() => /marked as compromised: Late Co/.test(document.querySelector('.manifest-outcome .trust-line')?.textContent || ''), null, { timeout: 5000 });
+      const save = async (name) => { const [d] = await Promise.all([checker.waitForEvent('download'), checker.getByRole('button', { name, exact: true }).click()]); return readFileSync(await d.path()); };
+      for (const name of ['Download text report', 'Download Markdown report']) assert.match((await save(name)).toString('utf8'), /Key trust: Signed by a key you marked as compromised: Late Co/, name);
+      assert.equal(JSON.parse((await save('Download JSON')).toString('utf8')).keyTrust.status, 'compromised');
+      const pdf = (await save('Download PDF')).toString('latin1');
+      assert.ok(pdf.startsWith('%PDF-')); // its lines come from the same report object as the text export
+      rmSync(big);
+    } finally { await ctx.close(); }
   });
 
   await check('No request body contains the marker or source-file bytes', async () => {

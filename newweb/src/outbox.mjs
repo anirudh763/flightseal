@@ -512,6 +512,19 @@ export async function openOutbox({
     return { ok: true, added, existing, rejected };
   }
 
+  // After the registry confirmed a hosted record is deleted (DELETE 200, or 404): rewrite the saved ack. false: no ack.
+  async function markDeleted(id) {
+    if (closed) return false;
+    const g = gen;
+    const s = spill && (await spill.getAck(id)) ? spill : store;
+    const ack = await safe(s.getAck(id), undefined);
+    if (!ack || g !== gen) return false;
+    await s.commitAck({ ...ack, disposition: 'deleted', updated_at: now() });
+    if (g !== gen) return false;
+    emit();
+    return true;
+  }
+
   function close() {
     if (closed) return;
     closed = true;
@@ -528,7 +541,7 @@ export async function openOutbox({
   kick();
 
   return {
-    enqueue, list, retryNow, exportPending, importProofs, close,
+    enqueue, list, retryNow, exportPending, importProofs, markDeleted, close,
     subscribe(fn) { listeners.add(fn); return () => listeners.delete(fn); },
     status: () => ({ storage, exportOffered, needsSignIn }),
     busy: () => running !== null, // a dispatch pass is in progress

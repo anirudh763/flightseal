@@ -2,7 +2,24 @@
 
 `newweb/src/outbox.mjs` holds receipts that are waiting to be sent to the receipt registry
 ([ARCHITECTURE_AWS.md](aws/ARCHITECTURE_AWS.md)). `newweb/src/registry-client.mjs` is the only code that talks HTTP to
-the registry. Neither module is wired into the console yet: `main.jsx` does not import them.
+the registry. The console wires them through `newweb/src/registry-ui.jsx` only when it is built with
+`VITE_REGISTRY_URL` (a public https origin; http is allowed only for a loopback host). With it empty, the default and the
+GitHub Pages build, none of this code ships: `main.jsx` guards every registry render and call with `__REGISTRY_URL__`, and
+`newweb/tests/registry-wiring.mjs` scans `docs/console` to prove it.
+
+What the console does with the flag on:
+
+- **Trust → Company registry.** A loopback registry offers "Test sign-in (local only)": paste a dev token. The token
+  lives in tab memory and `sessionStorage` (`hashwing-registry-token`) only. Any other registry says sign-in isn't
+  available in this build yet.
+- **Seal & send → Sealed on this device.** Each successful seal (small file or large-file list) hands the last
+  receipt line to `enqueue`. The display name stays in memory only. Signed out, the receipt waits in an in-memory list
+  until sign-in. Each row is a `<details>` with the outbox label as its chip, one detail line and at most one action.
+- **Shares and delete.** Registered rows can make, copy and withdraw a share link
+  (`#/app/verify?share=<token>`, fragment only). Admins can delete the hosted record; the console then calls
+  `markDeleted(id)`, which rewrites the saved ack with `disposition: 'deleted'`.
+- **Verify.** A share link shows "The registry's record" from `GET /v1/shares/<token>` with no sign-in.
+- Sign-out, a token for another owner, and the app's logout paths close the outbox and forget the registry token.
 
 ## Owners and storage
 
@@ -86,8 +103,9 @@ idempotency window. A malformed `token`, or a page without Web Crypto (not a sec
 ## Commands
 
 ```sh
-node --test newweb/tests/outbox.test.mjs newweb/tests/registry-client.test.mjs   # 43 tests, stub fetch + memory store
+node --test newweb/tests/outbox.test.mjs newweb/tests/registry-client.test.mjs   # 49 tests, stub fetch + memory store
 node --test newweb/tests/outbox-browser.mjs                                      # 8 tests, Chromium + dev server
+node newweb/tests/registry-wiring.mjs                                            # 19 checks, flag-off scan + flag-on console
 ```
 
 The browser tests start `registry/devserver/server.py` (DEV ONLY; it refuses to bind to anything but loopback),
@@ -116,3 +134,8 @@ clock, held registrations, dropped registrations or shares, the CORS allowlist, 
    retry gets 200 and the original link works).
 8. **There was no way to read the current epoch, and one 422 covered three cases.** Fixed: `GET /v1/epoch`, and
    `envelope_expired` / `epoch_mismatch` / `sub_mismatch`.
+9. **Share tokens can only be withdrawn from the tab that made them.** There is no route that lists an org's shares, and
+   the console keeps a token in React state only, so a link can be withdrawn only while that row is still on screen in
+   the tab that made it. Anyone else must ask an admin to delete the hosted record, which stops every link.
+10. **The dev server has no quota control.** The browser test fakes the `429 quota_exceeded` answer with Playwright
+    request interception instead.
