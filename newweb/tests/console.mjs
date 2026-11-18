@@ -838,6 +838,16 @@ try {
       assert.deepEqual(small, [], `${width}px: undersized shell targets ${JSON.stringify(small)}`);
     }
     await page.setViewportSize({ width: 1440, height: 900 });
+    // At 768px and below "Other apps" is part of the Menu panel, after More tools, not a row of its own under the brand.
+    for (const width of [375, 768]) {
+      await page.setViewportSize({ width, height: 900 });
+      await page.goto(`${url}#/app/help`); await page.waitForSelector('#page-help');
+      assert.equal(await page.locator('.workbench-rail .workspace-tools-menu:visible').count(), 0, `${width}px: Other apps is hidden while the menu is closed`);
+      await page.locator('.rail-menu').click();
+      assert.equal(await page.locator('#primary-nav > :last-child').evaluate((el) => el.matches('.workspace-tools-menu') && !!el.getClientRects().length && el.previousElementSibling.matches('.nav-more')), true, `${width}px: Other apps is inside the open menu, after More tools`);
+      assert.equal(await page.locator('.workbench-rail .workspace-tools-menu:visible').count(), 1);
+      await page.locator('.rail-menu').click();
+    }
     await page.setViewportSize({ width: 1440, height: 900 });
   });
 

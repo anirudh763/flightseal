@@ -1567,6 +1567,8 @@ function App() {
   // AC-66: the session strip and source actions belong to Verify and the More tools pages only.
   const hideWorkbenchStrip = canonicalPage ? canonicalPage !== 'workbench' || screen === 'protect' : !WORKBENCH_SCREENS.has(screen);
   const navLink = ([key, label, Icon]) => <a key={key} href={workspaceHref(key, { sample: currentSample, record: selectedRecord })} aria-current={(productMode ? canonicalPage : screen) === key ? 'page' : undefined} onClick={(e) => { if (e.button !== 0 || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return; e.preventDefault(); navigate(key); }}><Icon size={16} strokeWidth={1.8} aria-hidden="true" />{productMode && key === 'sandbox' ? 'Upload and seal' : label}</a>;
+  // "Other apps": at the foot of the rail on wide screens, inside the Menu panel after More tools at 768px and below (CSS shows one).
+  const otherApps = (className) => <details className={className} onKeyDown={closeDisclosure}><summary>Other apps</summary><div>{SUITE_LINKS.map((tool) => tool.state === 'unavailable' ? <span key={tool.name} aria-disabled="true">{tool.name} · unavailable (HTTP 404)</span> : <a key={tool.name} href={tool.href} target="_blank" rel="noreferrer">{tool.name}</a>)}</div></details>;
   return <div className={`app-shell${canonicalPage ? ` canonical-page canonical-${canonicalPage}` : ''}`}>
     <a className="skip-link" href="#main" onClick={(event) => { event.preventDefault(); document.getElementById('main')?.focus(); }}>Skip to content</a>
     <aside className="workbench-rail" aria-label="HashWing">
@@ -1575,9 +1577,10 @@ function App() {
       <nav id="primary-nav" className={`nav${menuOpen ? ' open' : ''}`} aria-label="Primary navigation">
         {(productMode ? CANONICAL_NAV : PRIMARY_NAV).map(navLink)}
         {!productMode && <details ref={moreRef} className="nav-more" onKeyDown={closeDisclosure}><summary>More tools</summary>{MORE_NAV.map(navLink)}</details>}
+        {otherApps('workspace-tools-menu nav-apps')}
       </nav>
       <div className="rail-foot"><span className="local-dot" aria-hidden="true" />Local files</div>
-        <details className="workspace-tools-menu" onKeyDown={closeDisclosure}><summary>Other apps</summary><div>{SUITE_LINKS.map((tool) => tool.state === 'unavailable' ? <span key={tool.name} aria-disabled="true">{tool.name} · unavailable (HTTP 404)</span> : <a key={tool.name} href={tool.href} target="_blank" rel="noreferrer">{tool.name}</a>)}</div></details>
+        {otherApps('workspace-tools-menu rail-apps')}
     </aside>
     <div className="workspace">
     <header className="topbar commandbar">

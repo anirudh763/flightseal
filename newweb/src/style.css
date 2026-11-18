@@ -1144,3 +1144,16 @@ input[type=datetime-local] { width: 100%; max-width: 320px; min-width: 0; min-he
 .handoff-step-head { display: flex; flex-wrap: wrap; gap: 4px 12px; align-items: baseline; }
 .handoff-step-title { font-weight: 700; }
 .handoff-original-list { margin: 4px 0; padding-left: 1.2em; }
+
+/* At phone and tablet width "Other apps" belongs in the Menu panel, after More tools, not on a row of its own. */
+.workbench-rail .nav-apps { display: none; }
+@media (max-width: 768px) {
+  .workbench-rail .rail-apps { display: none; }
+  .workbench-rail .nav .nav-apps { display: block; grid-column: 1 / -1; justify-self: stretch; flex-basis: 100%; margin: 0; padding-top: 6px; border-top: 1px solid var(--line); }
+  .workbench-rail .nav .nav-apps summary { min-height: 44px; padding: 8px 10px; border: 0; color: #25364b; font-size: 13px; }
+  .workbench-rail .nav .nav-apps summary { list-style: none; }
+  .workbench-rail .nav .nav-apps summary::-webkit-details-marker { display: none; }
+  .workbench-rail .nav .nav-apps summary::after { content: "▸"; margin-left: auto; color: #2355ba; }
+  .workbench-rail .nav .nav-apps[open] summary::after { content: "▾"; }
+  .workbench-rail .nav .nav-apps > div { position: static; min-width: 0; box-shadow: none; border: 0; }
+}
