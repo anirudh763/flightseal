@@ -74,3 +74,36 @@ def test_restore_reapplies_compromised_keys_and_the_epoch():
     assert (s, out["error"]) == (422, "epoch_mismatch")
     s, out, _ = register(restored, pilot, line(SEED_A, 7), idem="idem-key-0000000009")
     assert (s, out["error"]) == (403, "key_not_active")
+
+
+def test_restore_never_reopens_a_registration_made_and_deleted_after_the_backup():
+    """Registered and deleted after the backup: the restored table has no REG, so a fresh retry must still get 410."""
+    app, live, clock = make_app()
+    enroll(app, clock)
+    pilot, admin = token(clock), token(clock, role="admin")
+    backup = MemoryTable()
+    backup.items = {k: dict(v) for k, v in live.items.items()}  # taken before the registration exists
+    _, reg, _ = register(app, pilot, line(SEED_A, 4), idem="idem-key-0000000011")
+    rid = reg["registration_id"]
+    assert call(app, "DELETE", f"/v1/registrations/{rid}", admin)[0] == 200
+
+    restored, _, _ = make_app(table=backup, RESTORED_FROM="live", RESTORE_ID="r1", TABLE_NAME="restored")
+    restored.clock = clock
+    apply_tombstones(live, backup, source_name="live", target_name="restored", restore_id="r1", served="live")
+    s, out, _ = register(restored, pilot, line(SEED_A, 4), idem="idem-key-0000000012")  # new key: no replay record
+    assert (s, out["error"]) == (410, "registration_deleted")
+    rows = call(restored, "GET", "/v1/registrations", pilot)[1]["registrations"]
+    assert [(r["registration_id"], r["disposition"]) for r in rows] == [(rid, "deleted")]
+
+
+def test_replay_against_a_restored_deleted_stub_answers_410():
+    app, live, clock = make_app()
+    enroll(app, clock)
+    pilot = token(clock)
+    from registry_helpers import envelope
+    env_id = envelope(app, pilot)
+    _, reg, _ = register(app, pilot, line(SEED_A, 5), idem="idem-key-0000000013", env_id=env_id)
+    pk, sk = "ORG#orgA", "REG#" + reg["registration_id"]
+    live.items[(pk, sk)] = {"PK": pk, "SK": sk, "state": "deleted", "deleted_at": 1}  # as a restore writes it
+    s, out, _ = register(app, pilot, line(SEED_A, 5), idem="idem-key-0000000013", env_id=env_id)  # same key: the replay path
+    assert (s, out["error"]) == (410, "registration_deleted")
