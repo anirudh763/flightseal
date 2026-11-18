@@ -94,3 +94,16 @@ def test_restore_never_reopens_a_registration_made_and_deleted_after_the_backup(
     assert (s, out["error"]) == (410, "registration_deleted")
     rows = call(restored, "GET", "/v1/registrations", pilot)[1]["registrations"]
     assert [(r["registration_id"], r["disposition"]) for r in rows] == [(rid, "deleted")]
+
+
+def test_replay_against_a_restored_deleted_stub_answers_410():
+    app, live, clock = make_app()
+    enroll(app, clock)
+    pilot = token(clock)
+    from registry_helpers import envelope
+    env_id = envelope(app, pilot)
+    _, reg, _ = register(app, pilot, line(SEED_A, 5), idem="idem-key-0000000013", env_id=env_id)
+    pk, sk = "ORG#orgA", "REG#" + reg["registration_id"]
+    live.items[(pk, sk)] = {"PK": pk, "SK": sk, "state": "deleted", "deleted_at": 1}  # as a restore writes it
+    s, out, _ = register(app, pilot, line(SEED_A, 5), idem="idem-key-0000000013", env_id=env_id)  # same key: the replay path
+    assert (s, out["error"]) == (410, "registration_deleted")

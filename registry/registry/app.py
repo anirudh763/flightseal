@@ -245,7 +245,7 @@ class App:
 
     def _replay(self, pk, idem):
         reg = self.t.get(pk, "REG#" + idem["rid"])
-        if reg is None:
+        if reg is None or "count" not in reg:  # gone, or a restored deleted stub with nothing to acknowledge
             raise HttpError(410, "registration_deleted")
         return 200, self._ack(reg, idem["received_at"])  # the original ack, with the current disposition
 
