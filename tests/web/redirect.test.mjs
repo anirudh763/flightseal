@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { canonicalConsoleURL } from '../../docs/redirect.mjs';
 
 for (const [suffix, hash] of [
-  ['', '#/sandbox'], ['#/findings?sample=tampered', '#/sandbox?sample=tampered'],
+  ['', ''], ['#/', ''], ['?utm_source=x', ''], ['#/unknown-route', ''], ['#/findings?sample=tampered', '#/sandbox?sample=tampered'],
   ['?sample=truncated&record=12', '#/records?sample=truncated&record=12'],
   ['#/records/742?sample=intact', '#/records?sample=intact&record=742'],
   ['#/receipts/2?sample=rewritten', '#/receipts?sample=rewritten&receipt=2'],

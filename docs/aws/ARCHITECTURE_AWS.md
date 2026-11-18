@@ -117,6 +117,9 @@ different payload), an existing REG returns the original ack (or 410 if deleted)
   current epoch with `GET /v1/epoch`, so a client can drop a cached envelope before it is refused.
 - After a deletion, an identical retry with the original idempotency key still returns the original ack with
   `disposition: "deleted"` until the idempotency record expires (at most `DEDUPE_SECONDS`).
+- A restore keeps deletions made after the backup: a registration the backup never had comes back as a deleted stub
+  holding only its id and state. `GET /v1/registrations` lists it with just `registration_id` and
+  `disposition: "deleted"`, and any retry, with a new or the original idempotency key, gets 410 `registration_deleted`.
 
 ### Shares
 

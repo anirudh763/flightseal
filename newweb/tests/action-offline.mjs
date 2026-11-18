@@ -130,6 +130,6 @@ test('root-hosted waiting update respects unacknowledged native output before ac
     await page.waitForFunction(() => navigator.serviceWorker.controller?.scriptURL.endsWith('waiting-regression=1'), null, { timeout: 10000 });
     await page.getByRole('button', { name: 'Apply safe update', exact: true }).waitFor({ state: 'hidden' });
     await page.getByRole('navigation',{name:'Primary navigation'}).getByRole('link',{name:'Workbench',exact:true}).click();
-    await page.getByRole('button', { name: 'Download sealed log', exact: true }).waitFor();
+    await page.getByRole('button', { name: 'Download sealed file', exact: true }).waitFor();
   } finally { await context.close(); }
 });

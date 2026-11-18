@@ -13,8 +13,8 @@ What the console does with the flag on:
   lives in tab memory and `sessionStorage` (`hashwing-registry-token`) only. Any other registry says sign-in isn't
   available in this build yet.
 - **Seal & send → Sealed on this device.** Each successful seal (small file or large-file list) hands the last
-  receipt line to `enqueue`. The display name stays in memory only. Signed out, the receipt waits in an in-memory list
-  until sign-in. Each row is a `<details>` with the outbox label as its chip, one detail line and at most one action.
+  receipt line to `enqueue`. The display name stays in memory only. Signed out, the receipt is saved on this device as
+  unassigned local work (see "Pending proofs" below) and is never sent by itself. Each row is a `<details>` with the outbox label as its chip, one detail line and at most one action.
 - **Shares and delete.** Registered rows can make, copy and withdraw a share link
   (`#/app/verify?share=<token>`, fragment only). Admins can delete the hosted record; the console then calls
   `markDeleted(id)`, which rewrites the saved ack with `disposition: 'deleted'`.
@@ -30,14 +30,38 @@ What the console does with the flag on:
   device's list has been read). With the flag off it stays
   "Not registered" / "no registry was used".
 - Sign-out, a token for another owner, and the app's logout paths close the outbox and forget the registry token.
-  Registry sign-out and app logout are also broadcast (`BroadcastChannel('hashwing-registry')`, never carrying a
-  token) to the other open tabs. A sign-out names the owner `<org>/<sub>`, and only that owner's tabs drop their copy of
-  the token (a duplicated tab copies `sessionStorage`) and stop sending; an app logout signs every tab out of the
-  registry. Logging out of the app (and the other paths that send the same message: signing in to the app or switching
-  account, and starting the demo while a session is open) also throws away, in every open tab, the unsent proofs held in memory (those sealed
-  while signed out of the registry, or kept in memory because saving to the outbox failed, for example when it is full) and their file names: they belong to the user who left and are never kept for the
-  next one. Rows already saved in the outbox database stay there, closed, for that user's next sign-in. A new owner
-  neither sees the previous owner's file names nor hears them announced.
+  A registry sign-out is broadcast (`BroadcastChannel('hashwing-registry')`, `{type: 'signout', owner, at}`, never a token)
+  to the other open tabs; only tabs of that owner `<org>/<sub>` drop their copy of the token (a duplicated tab copies
+  `sessionStorage`) and stop sending. An app logout is not sent on that channel: the app's own logout message names the
+  local profile, so only that profile's other tabs sign out of the registry. Signing in to the app, switching account or
+  starting the demo signs out of the registry in that tab only, and never touches other tabs.
+- **Pending proofs** (`newweb/src/pending-store.mjs`) are unsent proofs not yet in an owner's outbox: sealed while
+  signed out of the registry (no owner: "unassigned"), or kept because the owner's outbox could not take them (for
+  example when it is full; tagged with that owner). They are saved in IndexedDB, one database per local scope
+  (`hashwing-pending-v1-<sha256(scope) hex>`, scope `profile:<local profile id>` or the shared `guest`), at most 200 rows
+  of `receipt`, `owner` and `at` only: never a file name, media, key or token. Sign-out and logout never delete them, and
+  another local profile never sees them. A row leaves the store only once the owner's outbox holds it.
+- A proof's owner is the registry sign-in when its seal began, so a sign-in during a long seal never adopts it.
+  "Assign" binds the proof to the current owner before it is queued, and a pending proof the owner's outbox already
+  holds is dropped from the pending list; one kept because the owner's queue was full is retried on every queue change.
+- An unassigned proof is never sent by itself, whoever signs in. Its row says it was sealed while signed out and offers
+  "Assign to <org>" while signed in; the registry still checks that its key is enrolled for that company and that the
+  user is a member (a refusal shows as Needs attention, for example `key_not_enrolled`). A proof tagged with an owner is
+  sent only under that owner; under any other sign-in its row says so and offers "Export pending proofs", and its file
+  name is hidden.
+- Without IndexedDB (or when one save fails) a pending proof lives in tab memory only; the list then offers
+  "Export pending proofs" at once.
+- Before anything unsaved is lost, the app asks first. Reloading or closing the tab warns while a Seal & send result,
+  a large-file result, a workbench output or a memory-only pending proof is not saved yet. Logging out, switching
+  account, signing in or starting the demo waits until "Download unsaved work" (one zip) has saved them and the user
+  answers "Yes, saved" to "Did the download finish?" (a cancelled or blocked download changes nothing). If the zip cannot be made, each file gets its own button,
+  and a result counts as saved only once every one of its files was downloaded; the page says "N of M files
+  downloaded" until then. Confirming only ever saves the exact results that were downloaded, never a newer one. A logout this
+  tab did not choose (the same profile logged out in another tab, or the workspace server signed out) keeps that work
+  in tab memory and offers it as one download; "Discard" first says it deletes the only copy; this tab is signed out of the registry at once. After a
+  reload, a file that was chosen but not sealed is no longer selected, and the page says to choose it again. Rows in
+  the outbox database stay there, closed, for that owner's next sign-in. A new owner neither sees the previous owner's
+  file names nor hears them announced.
 
 ## Owners and storage
 
@@ -117,21 +141,22 @@ idempotency window. A malformed `token`, or a page without Web Crypto (not a sec
 - `importProofs(text)` queues the receipt lines from an export file again (anything else is `{ok: false, reason: 'not_an_export'}`). A receipt that was already registered
   gets its original ack back, because the server dedupes by registration id across idempotency keys.
 - After `close()`, timers and listeners stop, the in-flight request is aborted, and any late result is dropped.
-- Cross-tab sign-out reaches only tabs that are running. A tab the browser froze or discarded, or one closed and
-  restored with its `sessionStorage`, misses the message and signs back in with its saved token when it wakes; sign out
-  there too. Browsers without `BroadcastChannel` sign out only the current tab.
-- **Possible lost work: app logout drops unsent in-memory proofs in every tab.** A proof sealed while signed out of the
-  registry, or one the outbox could not save, waits only in that tab's memory. If anyone logs out of the app in any open tab (or signs in, switches
-  account or starts the demo while a session is open), every tab discards those proofs, and nothing asks first. The sealed files and receipt messages are not affected, but those proofs will not
-  register unless they are sealed again or were exported first ("Export pending proofs").
+- A tab ignores a sign-out message older than its own current sign-in (a delayed message). Each sign-out also records
+  when that owner signed out in `localStorage` `hashwing-registry-signouts` (a 32-hex hash of the owner and a time, at
+  most 50 entries; never a token). A tab that was frozen, discarded, restored with its `sessionStorage`, or has no
+  `BroadcastChannel` checks it when it opens or wakes (`pageshow`, `focus`, `visibilitychange`, `resume`) and does not
+  use a saved token from before that sign-out.
+- **Memory only.** The unsaved work kept after a forced logout, and memory-only pending proofs, live in tab memory. A
+  tab that crashes, or a reload the user confirms past the browser's warning, loses them; only an export saved earlier
+  brings them back. A removed local profile's pending database is not deleted with it.
 
 ## Commands
 
 ```sh
 node --test newweb/tests/outbox.test.mjs newweb/tests/registry-client.test.mjs   # 49 tests, stub fetch + memory store
-node --test newweb/tests/registry-session.test.mjs                                # 7 tests, the console's session store in Node
+node --test newweb/tests/registry-session.test.mjs                                # 12 tests, the console's session store in Node
 node --test newweb/tests/outbox-browser.mjs                                      # 8 tests, Chromium + dev server
-node newweb/tests/registry-wiring.mjs                                            # 22 checks, flag-off scan + flag-on console
+node newweb/tests/registry-wiring.mjs                                            # 29 checks, flag-off scan + flag-on console
 ```
 
 The browser tests start `registry/devserver/server.py` (DEV ONLY; it refuses to bind to anything but loopback),
