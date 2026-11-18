@@ -1,10 +1,12 @@
 #!/usr/bin/env python3
 """Operator script: add a person to a company in the registry's Cognito user pool (R28, R71, AD-4).
 
-  python3 tools/registry_onboard.py invite --pool-id <UserPoolId> --org <org> --email <email> [--role admin] [--dry-run]
+  python3 tools/registry_onboard.py invite --pool-id <UserPoolId> --org <org> --email <email>
+      [--role admin --first-admin | --role admin --confirm-additional-admin] [--dry-run]
 
 The first admin of a company and every later pilot are both created here. The role is `pilot` unless the operator
-types `--role admin`. The org must be listed in tools/registry_orgs.json (absent or empty: everything is refused), so a
+types `--role admin` plus one acknowledgement: --first-admin, or --confirm-additional-admin (the script cannot see
+whether the company already has an admin). The email is lowercased, so case variants are one user. The org must be listed in tools/registry_orgs.json (absent or empty: everything is refused), so a
 typo cannot create a new company. The invitee chooses nothing: org and role are admin-only attributes the app client
 cannot write. Cognito makes the temporary password and emails it; this script never sees or prints one, and an
 invitation never carries a company private key. An existing user is refused and left unchanged.
@@ -25,7 +27,7 @@ from registry.identity import ORG_ID, ROLES  # noqa: E402
 ORGS = Path(__file__).resolve().with_name("registry_orgs.json")
 POOL_ID = re.compile(r"([a-z]{2}(?:-[a-z]+)+-\d)_[0-9A-Za-z]{1,32}")
 EMAIL = re.compile(r"[^@\s]+@[^@\s]+\.[^@\s]+")
-DEFAULT_MAX_TEMP_DAYS = 7  # Cognito's own default; the pool setting is in infra/lib/stack.ts
+DEFAULT_MAX_TEMP_DAYS = 7  # upper bound only; the pool's own setting is set by the infra stack (PR #39)
 
 
 class Refused(Exception):
@@ -74,6 +76,12 @@ def invite(args, client, orgs_path):
         raise Refused("--pool-id does not look like a Cognito user pool id (e.g. us-east-1_AbC123)")
     if len(args.email) > 254 or not EMAIL.fullmatch(args.email):
         raise Refused("--email is not an email address")
+    args.email = args.email.lower()  # one person, one user: case variants must not become two users with two roles
+    if args.role == "admin" and not (args.first_admin or args.confirm_additional_admin):
+        raise Refused("an admin needs --first-admin (the company's first) or --confirm-additional-admin "
+                      "(this script cannot check whether the company already has one)")
+    if args.role != "admin" and (args.first_admin or args.confirm_additional_admin):
+        raise Refused("--first-admin and --confirm-additional-admin are only for --role admin")
     orgs = load_orgs(orgs_path)
     if args.org not in orgs:
         near = difflib.get_close_matches(args.org, sorted(orgs), n=1)
@@ -107,6 +115,10 @@ def main(argv=None, client=None, orgs_path=ORGS):
     inv.add_argument("--org", required=True, help="an org id listed in tools/registry_orgs.json")
     inv.add_argument("--email", required=True)
     inv.add_argument("--role", choices=ROLES, default="pilot", help="default pilot; type admin explicitly")
+    ack = inv.add_mutually_exclusive_group()
+    ack.add_argument("--first-admin", action="store_true", help="with --role admin: the company's first admin")
+    ack.add_argument("--confirm-additional-admin", action="store_true",
+                     help="with --role admin: you know the company may already have an admin")
     inv.add_argument("--max-temp-days", type=int, default=DEFAULT_MAX_TEMP_DAYS,
                      help="refuse if the pool's TemporaryPasswordValidityDays is above this")
     inv.add_argument("--dry-run", action="store_true", help="print the AdminCreateUser request; call nothing")

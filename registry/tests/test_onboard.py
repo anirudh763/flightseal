@@ -66,11 +66,38 @@ def test_default_role_is_pilot(orgs, capsys):
 
 def test_admin_needs_explicit_role_flag(orgs):
     fake = FakeCognito()
-    assert run(orgs, "--org", "acme-air", "--email", "a@acme.example", "--role", "admin", client=fake) == 0
+    assert run(orgs, "--org", "acme-air", "--email", "a@acme.example", "--role", "admin", "--first-admin",
+               client=fake) == 0
     assert attrs(created(fake)[0])["custom:role"] == "admin"
     for bad in ("Admin", "owner", "superadmin", ""):
         with pytest.raises(SystemExit):
             run(orgs, "--org", "acme-air", "--email", "x@acme.example", "--role", bad, client=FakeCognito())
+
+
+def test_admin_needs_first_or_additional_acknowledgement(orgs, capsys):
+    fake = FakeCognito()
+    assert run(orgs, "--org", "acme-air", "--email", "a@acme.example", "--role", "admin", client=fake) == 2
+    assert fake.calls == [] and "--first-admin" in capsys.readouterr().err
+    assert run(orgs, "--org", "acme-air", "--email", "b@acme.example", "--role", "admin",
+               "--confirm-additional-admin", client=fake) == 0
+    assert attrs(created(fake)[0])["custom:role"] == "admin"
+    with pytest.raises(SystemExit):  # one acknowledgement, not both
+        run(orgs, "--org", "acme-air", "--email", "c@acme.example", "--role", "admin", "--first-admin",
+            "--confirm-additional-admin", client=FakeCognito())
+    for flag in ("--first-admin", "--confirm-additional-admin"):  # meaningless for a pilot: refused, not ignored
+        fake = FakeCognito()
+        assert run(orgs, "--org", "acme-air", "--email", "p@acme.example", flag, client=fake) == 2
+        assert fake.calls == []
+
+
+def test_email_is_lowercased_so_case_variants_are_one_user(orgs):
+    fake = FakeCognito()
+    assert run(orgs, "--org", "acme-air", "--email", "Pilot@Acme.Example", client=fake) == 0
+    kw = created(fake)[0]
+    assert kw["Username"] == "pilot@acme.example" and attrs(kw)["email"] == "pilot@acme.example"
+    assert run(orgs, "--org", "acme-air", "--email", "PILOT@acme.example", "--role", "admin",
+               "--confirm-additional-admin", client=fake) == 1  # same user: refused, still a pilot
+    assert attrs(fake.users["pilot@acme.example"])["custom:role"] == "pilot"
 
 
 def test_unknown_or_typod_org_is_refused(orgs, capsys):

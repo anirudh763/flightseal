@@ -59,7 +59,7 @@ def test_expired_or_malformed_exp_is_rejected():
     assert ident(claims(exp="soon")) is None
     assert ident(claims(exp=True)) is None
     assert ident(claims(exp="\u00b2")) is None  # str.isdigit() is true for this; int() is not
-    assert ident(claims(exp=None)).role == "pilot"  # the authorizer already checked exp; absent is not a failure
+    assert ident(claims(exp=None)) is None  # the authorizer checks exp too; a token without one is refused anyway
 
 
 def test_manipulated_role_or_org_is_rejected():
@@ -70,13 +70,28 @@ def test_manipulated_role_or_org_is_rejected():
     assert ident(claims(**{"custom:role": None, "role": "admin"})) is None
 
 
-def test_missing_issuer_or_client_config_fails_closed(capsys):
+def test_missing_issuer_or_client_config_is_503_identity_unavailable(capsys):
+    # A misconfigured service is not the caller's fault: 503, so the console can say sign-in is unavailable.
     for drop in ("COGNITO_ISSUER", "COGNITO_CLIENT_ID"):
         env = {k: v for k, v in ENV.items() if k != drop}
-        assert ident(claims(), env=env) is None
+        app, table, _ = make_app(**env)
+        assert cognito_call(app, "GET", "/v1/registrations", claims()) == (503, {"error": "identity_unavailable"})
+        assert cognito_call(app, "POST", "/v1/envelopes", claims(), {}) == (503, {"error": "identity_unavailable"})
+        assert table.items == {}
         assert drop in capsys.readouterr().err
-    app, _, _ = make_app(IDENTITY_ADAPTER="cognito")
-    assert cognito_call(app, "GET", "/v1/registrations", claims()) == (401, {"error": "unauthorized"})
+    # A bad token with a correct configuration stays 401.
+    app, _, _ = make_app(**ENV)
+    assert cognito_call(app, "GET", "/v1/registrations", claims(aud="x")) == (401, {"error": "unauthorized"})
+
+
+def test_malformed_authorizer_context_is_401_not_an_error():
+    app, _, _ = make_app(**ENV)
+    for ctx in ("x", {"authorizer": []}, {"authorizer": {"jwt": "s"}}, {"authorizer": {"jwt": {"claims": ["a"]}}}):
+        assert identify({"requestContext": ctx}, {}, ENV, T0) is None
+        ev = {"version": "2.0", "rawPath": "/v1/registrations", "headers": {}, "body": "",
+              "requestContext": {**(ctx if isinstance(ctx, dict) else {}), "http": {"method": "GET"}}}
+        r = app.handle(ev)
+        assert (r["statusCode"], json.loads(r["body"])) == (401, {"error": "unauthorized"})
 
 
 def cognito_call(app, method, path, c, body=None):
