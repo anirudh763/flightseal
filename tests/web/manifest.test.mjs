@@ -114,6 +114,15 @@ test('verifySealedManifest accepts a CLI-sealed manifest only with the trusted k
     assert.equal(r.verified, false, `key ${key}`);
     assert.equal(r.manifest, undefined, 'no manifest data without verification');
   }
+  const upper = await verifySealedManifest(blob(log), handover, ` ${pub.toUpperCase()} `);
+  assert.equal(upper.verified, true, upper.reason);
+  assert.equal(upper.publicKey, pub, 'an uppercase key is normalised to lowercase');
+});
+
+test('verifySealedManifest returns a rejection, not an exception, for a weak trusted key', async () => {
+  const { weak, error } = JSON.parse(readFileSync(join(ROOT, 'tests', 'fixtures', 'ed25519-weak-keys.json'), 'utf8'));
+  const { log, receipts } = seal(await record(payload));
+  for (const { key } of weak) assert.deepEqual(await verifySealedManifest(blob(log), receipts, key), { verified: false, reason: error });
 });
 
 test('every rejection row', async () => {
@@ -190,6 +199,8 @@ test('compareFiles pairing rule', () => {
 
 test('JS bytes equal python3 tools/manifest.py create bytes', async () => {
   const files = [['empty.bin', Buffer.alloc(0)], ['vidéo 1 (cam B).mp4', Buffer.from('abc')], ['log.ulg', Buffer.from([0, 1, 2, 255])]];
+  // A browser File.name keeps a backslash on macOS and Linux, where it is an ordinary file-name character.
+  if (process.platform !== 'win32') files.push(['x\\y.mp4', Buffer.from('xy')]);
   const paths = files.map(([name, body]) => { const p = join(dir, name); writeFileSync(p, body); return p; });
   const note = 'Landed 14:02; ✓ "ok" & 100%';
   for (const names of [false, true]) {

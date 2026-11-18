@@ -31,8 +31,9 @@ STATUS = {"match": "Matches", "bytes-differ": "Bytes differ", "missing": "Missin
 
 
 def base_name(path):
-    """Last path part; either slash separates folders, as for a browser File.name."""
-    return re.split(r"[\\/]", path)[-1]
+    """The platform's file name, as a browser File.name gives it: on macOS and Linux only `/` separates folders and a
+    backslash is part of the name; on Windows either slash does."""
+    return os.path.basename(path)
 
 
 def digest(path):

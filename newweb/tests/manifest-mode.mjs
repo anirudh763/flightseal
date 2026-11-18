@@ -285,13 +285,20 @@ try {
     assert.equal(await pinButton.isEnabled(), false, 'a source is required');
     await pin('source').selectOption('phone');
     await pinButton.click();
+    // The previous check marked this key compromised, so it cannot be pinned again under another name.
+    assert.match(await page.locator('.trusted-key-controls [role=status]').innerText(), /marked as compromised, so it can’t be added again/);
+    const firstKey = 'cd'.repeat(32);
+    await page.locator('#manifest-trusted-key').fill(firstKey);
+    await pin('name').fill('Unit A');
+    await pin('source').selectOption('phone');
+    await pinButton.click();
     assert.match(await page.locator('.trusted-key-controls [role=status]').innerText(), /Saved local pin Unit A/);
     await page.locator('#manifest-trusted-key').fill('ab'.repeat(32));
     await pin('name').fill('Unit A');
     await pin('source').selectOption('phone');
     await pinButton.click();
     const box = page.locator('.trusted-key-controls .confirm-box');
-    assert.match(await box.innerText(), new RegExp(`Key changed for “Unit A” \\(old fingerprint ${grouped(fingerprintOf(publicKey))}\\)`));
+    assert.match(await box.innerText(), new RegExp(`Key changed for “Unit A” \\(old fingerprint ${grouped(fingerprintOf(firstKey))}\\)`));
     await box.getByRole('button', { name: 'Keep current key' }).click();
     assert.equal(await box.count(), 0);
     await pinButton.click();

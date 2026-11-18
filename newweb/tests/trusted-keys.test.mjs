@@ -125,7 +125,7 @@ test('remove ignores case, history entries need their dates, rotation message sh
   assert.equal(removeTrustedKey('ACME', { storage }), true);
   assert.deepEqual(listTrustedHistory({ storage }), []);
   storage.setItem(STORE, JSON.stringify([{ name: 'X', publicKey: '', fingerprint: 'ab'.repeat(32), source: 'other', addedAt: '', status: 'replaced' }]));
-  assert.throws(() => listTrustedHistory({ storage }), /unsupported format/);
+  assert.deepEqual(listTrustedHistory({ storage }), [], 'a history entry without its date is dropped');
   const pins = new MemoryStorage();
   await pinTrustedKey('Unit', keyA, { storage: pins, cryptoObject: webcrypto, source: 'other' });
   await assert.rejects(pinTrustedKey('Unit', keyB, { storage: pins, cryptoObject: webcrypto, source: 'other' }), (error) => /(?:[0-9a-f]{4} ){15}[0-9a-f]{4}/.test(error.message) && /Confirm rotation/.test(error.message));
@@ -164,4 +164,50 @@ test('the browser fingerprint equals the registry fingerprint (SHA-256 of the 32
     assert.equal(await fingerprintHex(key, webcrypto), expected[i]);
     assert.equal(normalizeFingerprint(formatFingerprint(expected[i])), expected[i]);
   }
+});
+
+const copyOf = (storage) => { const next = new MemoryStorage(); for (const [k, v] of storage.values) next.setItem(k, v); return next; };
+
+test('a compromised key stays compromised after its company is removed, and cannot be added again', async () => {
+  const storage = new MemoryStorage();
+  await pinTrustedKey('Acme', keyA, opts(storage, { source: 'website' }));
+  await addTrustedCompany('Other Co', fpA, { storage, source: 'phone' });
+  await addTrustedCompany('Fp Only', fpB, { storage, source: 'phone' });
+  markCompromised('ACME', fpA, { storage, now: '2026-11-01T00:00:00.000Z' });
+  markCompromised('fp only', fpB, { storage, now: '2026-11-02T00:00:00.000Z' });
+  assert.equal(removeTrustedKey('Acme', { storage }), false, 'only the compromised record was left, so nothing is removed');
+  removeTrustedKey('Other Co', { storage });
+  removeTrustedKey('Fp Only', { storage });
+  const reloaded = copyOf(storage); // a fresh read from storage, as after a page reload
+  const trust = await trustForKey(keyA, opts(reloaded));
+  assert.equal(trust.status, 'compromised');
+  assert.equal(trust.entry.name, 'Acme');
+  assert.equal((await trustForKey(keyB, opts(reloaded))).status, 'compromised', 'a fingerprint-only compromised record survives too');
+  assert.deepEqual(listTrustedKeys({ storage: reloaded }), []);
+  const before = reloaded.getItem(STORE);
+  const refused = /marked as compromised/;
+  await assert.rejects(addTrustedCompany('New Co', formatFingerprint(fpA), { storage: reloaded, source: 'website' }), refused);
+  await assert.rejects(addTrustedCompany('Acme', fpB, { storage: reloaded, source: 'website' }), refused);
+  await assert.rejects(pinTrustedKey('New Co', keyA, opts(reloaded, { source: 'website' })), refused);
+  assert.equal(reloaded.getItem(STORE), before, 'nothing was saved');
+});
+
+test('read drops malformed entries and entries whose fingerprint is not SHA-256 of their key', async () => {
+  const keys = ['00'.repeat(32), 'ff'.repeat(32), '80'.repeat(16) + '7f'.repeat(16), keyA, keyB];
+  const good = await Promise.all(keys.map(async (publicKey, i) => ({ name: `K${i}`, publicKey, fingerprint: await fingerprintHex(publicKey, webcrypto), source: 'other', addedAt: '', status: 'active' })));
+  const storage = new MemoryStorage();
+  storage.setItem(STORE, JSON.stringify([
+    { name: 'Forged', publicKey: keyA, fingerprint: fpB, source: 'website', addedAt: '', status: 'active' },
+    { name: 'Fingerprint only', publicKey: '', fingerprint: fpB, source: 'website', addedAt: '', status: 'active' },
+    { name: '', publicKey: '', fingerprint: fpA },
+    null, 7, 'text',
+    ...good,
+  ]));
+  assert.deepEqual(listTrustedHistory({ storage }).map((e) => e.name), ['Fingerprint only', ...keys.map((_, i) => `K${i}`)]);
+  const forged = await trustForKey(keyA, opts(storage));
+  assert.equal(forged.entry.name, 'K3', 'the forged entry is ignored');
+  storage.setItem(STORE, '{not json');
+  assert.throws(() => listTrustedHistory({ storage }), /unreadable/);
+  storage.setItem(STORE, '{}');
+  assert.throws(() => listTrustedHistory({ storage }), /unsupported format/);
 });

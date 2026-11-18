@@ -26,6 +26,11 @@ hashwing-manifest v1 salt=<64 lowercase hex> items=<n>[ item=<i>,<bytes>,<sha256
 - `name`, `note`: `encodeURIComponent` of the exact UTF-8 text (Python: `quote(s.encode(), safe="-_.!~*'()")`),
   empty when absent. Names are included only when the operator ticks "Include file names". `note` is
   operator-entered text, not something HashWing measured.
+- The name is the file's own name, as the browser's `File.name` gives it. `tools/manifest.py` uses
+  `os.path.basename`, which gives the same name on the same system: on macOS and Linux only `/` separates folders,
+  so a file named `x\y.mp4` keeps that name (`x%5Cy.mp4`); on Windows a backslash separates folders too, so
+  `C:\flights\a.mp4` gives `a.mp4`. Check a manifest on the same kind of system that created it if file names
+  contain a backslash.
 - The parsers (`parseManifest` in `docs/manifest.mjs`, `parse` in `tools/manifest.py`) decode each field, encode it
   again and require byte equality. Any other spelling of the same text is rejected.
 
@@ -91,6 +96,8 @@ landing-to-seal interval. A negative interval is shown as negative, never clampe
 Settings → Trusted companies keeps, in this browser only, a company name, the SHA-256 fingerprint of its public key
 and where the user got that fingerprint (company website, contract or invoice, phone call, other). Replacing a key
 needs an in-page confirmation and keeps the old one in the key history; a key can be marked as compromised.
+A compromised key stays recorded as compromised even after its company is removed, and it cannot be added again under
+any name.
 
 - If the "Trusted public key" field is empty, the check uses the key inside the receipt only when its SHA-256
   fingerprint equals an **active** pin. Otherwise the check refuses, as before. A replaced or compromised pin is
