@@ -87,11 +87,11 @@ test('Cognito: Lite plan, no self sign-up, org_id and role not writable by the a
   assert.equal(client.Properties.GenerateSecret, false);
 });
 
-test('HTTP API: default stage throttled at rate 10, burst 20', () => {
+test('HTTP API: default stage throttled at rate 2, burst 5 (sized for about 5 users)', () => {
   t.hasResourceProperties('AWS::ApiGatewayV2::Stage', {
     StageName: '$default',
     AutoDeploy: true,
-    DefaultRouteSettings: { ThrottlingRateLimit: 10, ThrottlingBurstLimit: 20 },
+    DefaultRouteSettings: { ThrottlingRateLimit: 2, ThrottlingBurstLimit: 5 },
   });
 });
 
@@ -134,12 +134,12 @@ test('restore mode serves the restored table, closed by RESTORED_FROM, with the 
   assert.throws(() => new RegistryStack(new App(), 'NoId', { restoredTableName: 'x', restoredFrom: 'y' }));
 });
 
-test('the public share check has its own tighter throttle (2 rps, burst 5); other routes keep the stage default', () => {
+test('the public share check has its own tighter throttle (2 rps, burst 5); other routes use the stage default', () => {
   const [[, stage]] = resources('AWS::ApiGatewayV2::Stage');
   assert.deepEqual(stage.Properties.RouteSettings, {
     'GET /v1/shares/{token}': { ThrottlingRateLimit: 2, ThrottlingBurstLimit: 5 },
   });
-  assert.deepEqual(stage.Properties.DefaultRouteSettings, { ThrottlingRateLimit: 10, ThrottlingBurstLimit: 20 });
+  assert.deepEqual(stage.Properties.DefaultRouteSettings, { ThrottlingRateLimit: 2, ThrottlingBurstLimit: 5 });
   // route settings name a route key, so the stage must be created after that route
   const [publicRouteId] = resources('AWS::ApiGatewayV2::Route')
     .find(([, r]) => r.Properties.RouteKey === 'GET /v1/shares/{token}')!;

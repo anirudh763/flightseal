@@ -20,7 +20,7 @@ flowchart LR
   end
   subgraph AWS["AWS account (us-east-1)"]
     C[Cognito user pool, Lite plan]
-    G["API Gateway HTTP API<br/>$default stage: rate 10, burst 20<br/>public share route: rate 2, burst 5<br/>JWT authorizer on every route but one"]
+    G["API Gateway HTTP API<br/>$default stage: rate 2, burst 5<br/>public share route: rate 2, burst 5<br/>JWT authorizer on every route but one"]
     L["Lambda python3.12 arm64<br/>128 MB, 5 s"]
     D[("DynamoDB, one table<br/>on demand, TTL attribute ttl")]
     W[CloudWatch Logs, 7 days]

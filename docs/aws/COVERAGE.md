@@ -48,7 +48,7 @@ Columns:
 | Lambda and REST API after `docker restart` | — | **did not survive** (function and API gone) | not verified | |
 | DynamoDB data after `docker rm` and re-create on the same volume | — | survived | not verified | |
 | Lambda and REST API after re-create | — | **did not survive** | not verified | |
-| HTTP API, JWT authorizer, `$default` stage throttling | — | blocked: not in the community plan | not verified | synthesised; asserted in `infra/test/stack.test.ts` |
+| HTTP API, JWT authorizer, `$default` stage throttling (2 rps, burst 5) | — | blocked: not in the community plan | not verified | synthesised; asserted in `infra/test/stack.test.ts` |
 | Public share route throttle (2 rps, burst 5) on top of the stage default | — | blocked: HTTP API not in the community plan | not verified | synthesised; asserted (`RouteSettings` and the stage's dependency on the route) |
 | CORS on the HTTP API: exact allowlisted origins, no `*`, no credentials, `authorization` / `content-type` / `idempotency-key` | — | blocked: HTTP API not in the community plan | not verified | synthesised; asserted (bad origins rejected at synth) |
 | CORS in the Lambda (`CORS_ORIGINS`): preflight 204/403, origin echoed only when allowlisted, public share view `*` without credentials | yes | not run (the REST v1 stand-in run sets no `CORS_ORIGINS`) | not verified | |

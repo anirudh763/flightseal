@@ -45,6 +45,9 @@ export const ROUTES: Array<[apigw.HttpMethod, string]> = [
 ];
 export const PUBLIC_ROUTE: [apigw.HttpMethod, string] = [apigw.HttpMethod.GET, '/v1/shares/{token}'];
 export const PUBLIC_THROTTLE = { rate: 2, burst: 5 };
+// Default for every signed-in route, sized for about 5 users (docs/aws/COST.md). AWS does not say whether HTTP API
+// default route settings apply per route or are shared, or whether rejected or throttled requests are billed.
+export const STAGE_THROTTLE = { rate: 2, burst: 5 };
 
 export class RegistryStack extends Stack {
   constructor(scope: Construct, id: string, props: RegistryStackProps = {}) {
@@ -132,7 +135,7 @@ export class RegistryStack extends Stack {
       httpApi: api,
       stageName: '$default',
       autoDeploy: true,
-      throttle: { rateLimit: 10, burstLimit: 20 },
+      throttle: { rateLimit: STAGE_THROTTLE.rate, burstLimit: STAGE_THROTTLE.burst },
     });
     const integration = new integrations.HttpLambdaIntegration('Lambda', fn);
     // The client sends the Cognito ID token: custom:org_id and custom:role are in the ID token on the Lite plan.
@@ -143,7 +146,7 @@ export class RegistryStack extends Stack {
     const [publicRoute] = api.addRoutes({ path: PUBLIC_ROUTE[1], methods: [PUBLIC_ROUTE[0]], integration });
     // The only unauthenticated route gets its own, tighter limit: a flood of random links costs at most
     // PUBLIC_THROTTLE.rate requests a second (see the abuse scenario in docs/aws/COST.md). A person checking links
-    // needs far less; the burst covers opening a handful at once. The signed-in routes keep the stage default.
+    // needs far less; the burst covers opening a handful at once. It stays pinned even if STAGE_THROTTLE changes.
     // RouteSettings is a free-form map in CloudFormation, so it is written with its CloudFormation key names.
     (stage.node.defaultChild as apigw.CfnStage).addPropertyOverride('RouteSettings', {
       [`${PUBLIC_ROUTE[0]} ${PUBLIC_ROUTE[1]}`]: {

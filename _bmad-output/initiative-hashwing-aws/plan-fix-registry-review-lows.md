@@ -67,6 +67,15 @@ check, and none changes the data model or the API contract.
 - The 409 disclosure is documented instead of fixed. Answering 201 for a reused hash would report a share that does
   not exist.
 
+- Follow-up from the coordinator: COST.md had to cite AWS's own text.
+  - AWS pages do not say whether HTTP API requests that fail the JWT authorizer, or that get a 429, are billed.
+  - AWS pages do not say whether `DefaultRouteSettings` applies per route or is shared.
+  - The pages read, and the sentences quoted, are listed in COST.md. Both questions stay open.
+  - The stage default was therefore lowered from 10 a second, burst 20 to 2 a second, burst 5.
+  - The synth assertions were changed first, and 2 of 14 failed. They pass after the change.
+  - The worst case was recomputed to about $70 a month, assuming throttled requests are free.
+  - RUNBOOK_AWS.md gained "When the budget alert fires": delete the `$default` stage, or run `cdk destroy`.
+
 ## Review Triage Log
 
 ### 2026-11-17 — Review pass

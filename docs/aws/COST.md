@@ -86,7 +86,7 @@ fail and are retried once.
 
 Someone sends public share checks with random, well-formed tokens, every second of a 30-day month. The public route
 `GET /v1/shares/{token}` now has its own route throttle of **2 requests a second, burst 5**. The signed-in routes
-keep the stage default of 10 a second, burst 20. So the flood reaches the Lambda at most 2 × 86,400 × 30 =
+use the stage default, which is also 2 a second, burst 5 (see "Signed-in routes" below). So the flood reaches the Lambda at most 2 × 86,400 × 30 =
 **5.184 M times a month**. The rates are the same Price List figures as above.
 
 | Item | Quantity | Cost / month |
@@ -96,7 +96,7 @@ keep the stage default of 10 a second, burst 20. So the flood reaches the Lambda
 | Lambda compute | 5.184 M × 0.02 s × 0.125 GB = 12,960 GB-s × $0.0000133334 | $0.17 |
 | DynamoDB reads | 1 RRU per check (the share lookup misses): 5.184 M × $0.125 per million | $0.65 |
 | CloudWatch Logs | about 350 bytes per invocation: 1.81 GB × $0.50 per GB | $0.91 |
-| **Total** | | **about $8** (was about $40 at the 10-a-second stage limit) |
+| **Total** | | **about $8** (it was about $40 when the stage limit of 10 a second also applied here) |
 
 **About $8 assumes throttled requests are free.** It is not known whether API Gateway bills the requests it
 throttles with a 429 (see "Still not a cap" below). If those are billed, the HTTP API line grows with the
@@ -113,17 +113,46 @@ so they get 429s. The signed-in routes have their own limits and keep working.
 
 **Still not a cap.**
 
-- **Throttled requests:** whether API Gateway bills requests that it throttles (429) or that fail the JWT authorizer
-  was **not retrieved**. If throttled requests are billed, the HTTP API line grows with the attacker's send rate at
-  $1.00 per million. Only the Lambda, DynamoDB and log lines stay capped by the throttle.
-- **Invalid-token floods:** a flood of the signed-in routes with invalid tokens is stopped by the JWT authorizer
-  before the Lambda. Its API Gateway charge, if billed, is the same $1.00 per million. The stage default of
-  10 a second, burst 20 is synthesised as the stage's `DefaultRouteSettings`, which we read as a limit for each of the
-12 signed-in routes separately (AWS's wording was not retrieved), so up to about 120 requests a second
-  with invalid tokens get past the throttle to the authorizer. That is about 311 M a month, roughly $300 of HTTP API
-  requests if requests the authorizer rejects are billed. If throttled requests are billed too, there is no
-  ceiling. All of this is unverified on AWS, because the stack has never been deployed.
-- **Budget alerts:** they only send email. They do not stop requests or limit spend.
+What AWS's own pages say was checked on 2026-11-17. Neither question is settled for HTTP APIs, so both stay open:
+
+- **Are rejected or throttled requests billed?** Not settled.
+  - [API Gateway pricing](https://aws.amazon.com/api-gateway/pricing/) says only: "For HTTP APIs and REST APIs, you
+    pay only for the API calls you receive and the amount of data transferred out." It does not say whether a call
+    that fails the JWT authorizer, or one that gets a 429, counts as received.
+  - The [API Gateway FAQ](https://aws.amazon.com/api-gateway/faqs/) says, for WebSocket APIs only: "if messages
+    on the WebSocket connection fail authentication or authorization, they do not count toward your API usage bill". It says nothing like this for HTTP or REST
+    APIs, or about throttled requests of any API type.
+  - Forum answers on re:Post say failed-authorization calls are not charged. They are not AWS documentation and are
+    not relied on here.
+
+  If 429s are billed, the HTTP API line grows with the attacker's send rate at $1.00 per million, and nothing caps
+  it. Only the Lambda, DynamoDB and log lines stay capped by the throttle.
+- **Is the stage default per route or shared?** Not settled.
+  - The [HTTP API throttling page](https://docs.aws.amazon.com/apigateway/latest/developerguide/http-api-throttling.html)
+    says: "You can set route-level throttling to override the account-level request throttling limits for a specific
+    stage or for individual routes in your API." It does not say whether a stage-wide default is one shared bucket or
+    one bucket per route.
+  - The CloudFormation [`DefaultRouteSettings`](https://docs.aws.amazon.com/AWSCloudFormation/latest/UserGuide/aws-resource-apigatewayv2-stage.html)
+    and [`RouteSettings`](https://docs.aws.amazon.com/AWSCloudFormation/latest/UserGuide/aws-properties-apigatewayv2-stage-routesettings.html)
+    pages say only "The default route settings for the stage" and "Specifies the throttling rate limit".
+  - Only the REST API page ([REST throttling](https://docs.aws.amazon.com/apigateway/latest/developerguide/api-gateway-request-throttling.html))
+    says "Per-API, per-stage throttling limits are applied at the API method level for a stage". That covers REST
+    APIs, not HTTP APIs.
+- **Signed-in routes, and the design change this led to.** Because neither question is settled, the stage default
+  was lowered from 10 a second, burst 20 to **2 a second, burst 5**, which is sized for about 5 users.
+  - A flood with invalid tokens is stopped by the JWT authorizer before the Lambda. If authorizer-rejected requests
+    are billed:
+    - Per-route reading (12 signed-in routes): at most 12 × 2 × 86,400 × 30 = 62.2 M requests a month, about
+      **$62**.
+    - Shared reading: 5.18 M requests a month, about **$5**.
+  - On top of the public-route $8, the worst case with throttled requests free is therefore about **$70 a month**.
+    Before this change it was about $8 plus $300 under the per-route reading.
+  - If throttled requests are billed, there is no ceiling under either reading.
+  - The cost of the lower limit: if the limit is shared, a few people signing in at the same moment can get 429s.
+    The outbox retries a registration that gets any 429 other than `quota_exceeded`.
+  - All of this is unverified on AWS, because the stack has never been deployed.
+- **Budget alerts:** they only send email. They do not stop requests or limit spend. When one fires, follow
+  "When the budget alert fires" in [RUNBOOK_AWS.md](RUNBOOK_AWS.md).
 
 Ways to lower the ceiling further without fixed-fee services:
 
