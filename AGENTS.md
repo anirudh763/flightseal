@@ -40,7 +40,7 @@ The user's request and the owner's RULES.md take precedence over anything here.
   server, starting one itself or using `REGISTRY_DEV_URL`; axe at 320/768/1440 and screenshots in the same folder). The 30-proof throttle run is manual and local only, not a CI gate:
   `REGISTRY_THROTTLE=1 node newweb/tests/registry-wiring.mjs` (the 29 checks plus the throttle check; not re-run since the lost-work checks were added); record the numbers in `docs/aws/COVERAGE.md`.
 - Wasm: `node --test tests/wasm/bridge.test.mjs tests/wasm/enterprise-edge.test.mjs tests/wasm/hash.test.mjs` and `node --test tests/wasm/browser.test.mjs tests/wasm/hash-browser.test.mjs`.
-- Manifest large-file run (manual, local only; record the numbers in `docs/MANIFEST_MODE.md`): `FSEAL_LARGE_HASH=1 node --test tests/wasm/hash-browser.test.mjs` and `FSEAL_LARGE_HASH=1 python3 -m pytest -q -s tests/test_manifest.py`.
+- Manifest large-file run (manual, local only; record the numbers in `docs/MANIFEST_MODE.md`): `node newweb/tests/large-hash-memory.mjs 3` (after the console build; the 128 MiB memory gate on the Seal and Check paths), `FSEAL_LARGE_HASH=1 node --test tests/wasm/hash-browser.test.mjs` and `FSEAL_LARGE_HASH=1 python3 -m pytest -q -s tests/test_manifest.py`.
 - Console: `python3 tools/fetch_sample.py tests/.data && npm --prefix newweb run build && npm --prefix newweb run test:browser` (runs `console.mjs` then `manifest-mode.mjs`), then `node newweb/tests/edge-matrix.mjs` (the latter owns its browser lock).
 - Browser: `node tests/web/e2e.mjs` (5 checks) and `node tests/web/routes.mjs` (6 checks). axe-core reports 0
   violations in light and dark, at 1280 and 320 px.
