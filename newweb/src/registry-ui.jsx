@@ -74,7 +74,7 @@ function createRegistry() {
   let gen = 0, seq = 0, unsubscribe = null;
   let user = 0; // bumped by logout(): proofs saved for the user who left are never put back for the next one
   let lastOwner = null; // the owner the display names belong to
-  let state = { token: '', claims: null, owner: null, outbox: null, rows: [], pending: [], needsSignIn: false,
+  let state = { token: '', claims: null, owner: null, outbox: null, rows: [], listed: false, pending: [], needsSignIn: false,
     online: navigator.onLine !== false, memory: false, listError: '', enqueueError: '' };
   const set = (patch) => { state = { ...state, ...patch }; for (const fn of listeners) fn(); };
   const client = createRegistryClient({ baseUrl: __REGISTRY_URL__, getToken: async () => token });
@@ -94,7 +94,7 @@ function createRegistry() {
       const rows = await ob.list();
       if (n !== seq || state.outbox !== ob) return; // a newer refresh, a close or an owner change won
       const st = ob.status();
-      set({ rows, needsSignIn: st.needsSignIn, memory: st.storage === 'memory' || st.exportOffered, listError: '' });
+      set({ rows, listed: true, needsSignIn: st.needsSignIn, memory: st.storage === 'memory' || st.exportOffered, listError: '' });
     } catch { if (state.outbox === ob) set({ listError: LIST_ERROR }); }
   }
   async function enqueueOn(ob, receipt) {
@@ -110,7 +110,7 @@ function createRegistry() {
     gen += 1; seq += 1;
     unsubscribe?.(); unsubscribe = null;
     state.outbox?.close();
-    set({ outbox: null, rows: [], needsSignIn: false, memory: false, listError: '', enqueueError: '' });
+    set({ outbox: null, rows: [], listed: false, needsSignIn: false, memory: false, listError: '', enqueueError: '' });
   }
   async function signIn(raw) {
     const tok = String(raw || '').trim();
@@ -200,7 +200,8 @@ export function useRegistryTimeField(receipts) {
   if (row?.state === 'needs_attention') return { value: 'Needs attention', basis: attentionMessage(row) ?? (REASONS[row.reason] ?? REFUSED)[0] };
   if (row) return { value: 'Not yet registered', basis: `this device's list: ${s.online || row.state !== 'sealed_local' ? row.label : stateLabel('waiting_for_connection')}` };
   if (s.pending.some((p) => lines.has(p.receipt))) return { value: 'Not yet registered', basis: "this device's list: Sealed locally" };
-  if (!s.outbox) return { value: 'Not signed in', basis: "sign in to the company registry to see this device's record" };
+  if (!s.owner) return { value: 'Not signed in', basis: "sign in to the company registry to see this device's record" };
+  if (!s.outbox || !s.listed) return { value: 'Not available yet', basis: "this device's registry list isn't open yet" };
   return { value: 'No registry record on this device', basis: 'this device has no registry record for this receipt' };
 }
 

@@ -26,12 +26,14 @@ What the console does with the flag on:
   JSON and PDF reports built from it, read this device's outbox row whose `receipt` equals one of the checked receipt
   lines: "Registered at `received_at`" (the registry's clock; the registry's statement, not proof of the files), "Not
   yet registered", "Registered, later deleted", or "Needs attention" with its message. With no matching row it says
-  this device has no registry record for the receipt ("Not signed in" while signed out). With the flag off it stays
+  this device has no registry record for the receipt ("Not signed in" while signed out, "Not available yet" until this
+  device's list has been read). With the flag off it stays
   "Not registered" / "no registry was used".
 - Sign-out, a token for another owner, and the app's logout paths close the outbox and forget the registry token.
-  Registry sign-out and app logout are also broadcast (`BroadcastChannel('hashwing-registry')`, carrying the owner
-  `<org>/<sub>` and never a token) to the other open tabs, which drop their copy of the token (a duplicated tab copies
-  `sessionStorage`) and stop sending. Proofs the logged-out user sealed in this tab are never kept for the next one, and
+  Registry sign-out and app logout are also broadcast (`BroadcastChannel('hashwing-registry')`, never carrying a
+  token) to the other open tabs. A sign-out names the owner `<org>/<sub>`, and only that owner's tabs drop their copy of
+  the token (a duplicated tab copies `sessionStorage`) and stop sending; an app logout signs every tab out of the
+  registry. Proofs the logged-out user sealed in this tab are never kept for the next one, and
   a new owner neither sees the previous owner's file names nor hears them announced.
 
 ## Owners and storage

@@ -307,7 +307,7 @@ try {
     await go(page, 'protect');
   });
 
-  await check('large files: a two-file manifest seal registers as "2 files"; checking it reads Registered on screen and in its text report', async () => {
+  await check('large files: a two-file manifest seal registers as "2 files"; checking it reads Registered on screen and in its text, Markdown, JSON and PDF reports', async () => {
     await go(page, 'protect');
     await page.getByLabel('Large files (fingerprint only)').check();
     await page.locator('#manifest-files').setInputFiles([{ name: 'v1.mp4', mimeType: 'video/mp4', buffer: Buffer.from(`one ${Date.now()}`) }, { name: 'v2.mp4', mimeType: 'video/mp4', buffer: Buffer.from(`two ${Date.now()}`) }]);
@@ -327,9 +327,15 @@ try {
       .catch(async () => assert.fail(`manifest time row: ${await timeRow.innerText().catch(() => '')}`));
     assert.equal(await timeRow.locator('dd small').innerText(), REGISTERED_BASIS);
     const token = await page.evaluate(() => sessionStorage.getItem('hashwing-registry-token'));
-    const text = await exportOf(page, 'Download text report', token, page.locator('.manifest-outcome'));
-    assert.match(text, /Registry acceptance: Registered at \S+ \(the registry's clock; the registry's statement, not proof of the files\)/);
-    assert.ok(!text.includes('Not registered'));
+    const value = await timeRow.locator('dd span').innerText();
+    const outcome = page.locator('.manifest-outcome');
+    for (const button of ['Download text report', 'Download Markdown report', 'Download PDF']) {
+      const out = (await exportOf(page, button, token, outcome)).replace(/\s+/g, ' ');
+      assert.ok(out.includes(`Registry acceptance: ${value} (${REGISTERED_BASIS})`), `${button}: ${out.slice(0, 1500)}`);
+      assert.ok(!out.includes('Not registered') && !out.includes('no registry was used'), button);
+    }
+    const json = JSON.parse(await exportOf(page, 'Download JSON', token, outcome));
+    assert.deepEqual(json.timeProvenance.fields[2], { label: 'Registry acceptance', value, basis: REGISTERED_BASIS });
     await page.getByLabel('Small file (seal the whole file, up to 45 MiB)').check();
   });
 
