@@ -112,7 +112,7 @@ Nothing here is deployed. No real-AWS check has run, no customer has used HashWi
 
 | ID | Requirement | Status | Evidence at baseline | Check that will prove it |
 |---|---|---|---|---|
-| R61 | Files over 2 GB on the sealing path add at most 128 MiB of memory | fixed on branch (#36, pending merge) | On main, `docs/MANIFEST_MODE.md:169-178` records +140.3 and +159.5 MiB. PR #36 frees each 4 MiB read at once and reports the gate passing on an M1 Pro with Chrome 158 | Merge #36; the numbers it records become the evidence |
+| R61 | Files over 2 GB on the sealing path add at most 128 MiB of memory | met on one machine (merged in #36, dcf98d0): worst +55.1 MiB fresh page, +94.0 MiB Check after Seal, on an M1 Pro with Chrome 158; manual script, not in CI | On main, `docs/MANIFEST_MODE.md:169-178` records +140.3 and +159.5 MiB. PR #36 frees each 4 MiB read at once and reports the gate passing on an M1 Pro with Chrome 158 | Merge #36; the numbers it records become the evidence |
 | R62 | Files over 2 GB on the recipient path: memory, responsiveness, cancellation and throughput on named hardware | proposed | Only the hashing path was measured | The same harness on the Verify path |
 | R63 | 800, 2,422 and 64,542-record fixtures with byte flip, deletion, truncation, timestamp reversal, and wrong, malformed and weak keys | implemented | `tests/web/make_cases.py`, `tests/web/verifier.test.mjs`, `tests/wasm/enterprise-edge.test.mjs` | Unchanged |
 | R64 | File edge cases: zero bytes, many files, duplicate names, Unicode, renamed, missing and extra, one-byte change, input changed during hashing, worker killed | proposed | Partly in `newweb/tests/manifest-mode.mjs`; no single matrix | One edge-matrix row per case |
@@ -142,3 +142,5 @@ Task packets, their order and the tests that change on purpose are in [plan-ui-b
 - When the browser refuses clipboard access, the receipt question offers only Copy message and Discard it; add a secondary "Download receipt".
 - The large-file handoff is lost after a trip to `#/login` without signing in (the list is still recoverable via "Download unsaved work"); pre-existing.
 - Owner to see: every download and receipt now asks "Did it finish?" before it counts as saved.
+
+**Merged to main (2026-11-18, advisor-approved heads):** #38 restore fix (f0aaeba), #36 hash-worker memory fix (dcf98d0), #37 lost-work fix (cf4d6d7, after merging main and rebuilding `docs/console`). The queue continues #41, #42, #39, #40, then this plan (#35).
