@@ -50,7 +50,8 @@ prints one. A user who already exists is refused and left unchanged. The script 
 credentials only for a real run; `--dry-run` calls nothing.
 
 Clients sign in with SRP and send the **ID token** as `Authorization: Bearer <id token>`. The registry accepts only
-an ID token (`token_use` `id`) issued by this pool for this app client; an access token is 401.
+an ID token (`token_use` `id`) issued by this pool for this app client; an access token is 401. After the first
+admin signs in, check both (never run yet): `GET /v1/keys` with their ID token is 200, with their access token 401.
 
 ### How pilots sign (provisional)
 

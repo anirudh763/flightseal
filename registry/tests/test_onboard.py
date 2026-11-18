@@ -145,5 +145,5 @@ def test_output_never_contains_a_password(orgs, capsys):
     assert "S3cret" not in out.out + out.err
 
 
-def test_committed_allow_list_is_valid_and_lists_no_invented_company():
-    assert onboard.load_orgs(onboard.ORGS) == set()
+def test_committed_allow_list_is_valid():
+    assert isinstance(onboard.load_orgs(onboard.ORGS), set)  # the owner adds real orgs; it must stay loadable
