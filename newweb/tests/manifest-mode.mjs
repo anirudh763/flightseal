@@ -10,6 +10,7 @@ import { fileURLToPath } from 'node:url';
 import assert from 'node:assert/strict';
 import { serve } from '../../tests/web/serve.mjs';
 import { BYTES_DIFFER } from '../src/recipient-trust.mjs';
+import { pdfText } from './pdf-text.mjs';
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const EVIDENCE = join(process.env.REACT_CONSOLE_EVIDENCE || join(ROOT, '.test-artifacts'), 'manifest-mode');
@@ -461,8 +462,9 @@ try {
       const save = async (name) => { const [d] = await Promise.all([checker.waitForEvent('download'), checker.getByRole('button', { name, exact: true }).click()]); return readFileSync(await d.path()); };
       for (const name of ['Download text report', 'Download Markdown report']) assert.match((await save(name)).toString('utf8'), /Key trust: Signed by a key you marked as compromised: Late Co/, name);
       assert.equal(JSON.parse((await save('Download JSON')).toString('utf8')).keyTrust.status, 'compromised');
-      const pdf = (await save('Download PDF')).toString('latin1');
-      assert.ok(pdf.startsWith('%PDF-')); // its lines come from the same report object as the text export
+      const pdf = await save('Download PDF');
+      assert.equal(pdf.subarray(0, 5).toString(), '%PDF-');
+      assert.match((await pdfText(pdf)).replace(/\s+/g, ' '), /Key trust: Signed by a key you marked as compromised: Late Co\./, 'PDF key trust line');
       rmSync(big);
     } finally { await ctx.close(); }
   });

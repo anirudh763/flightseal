@@ -12,6 +12,7 @@ import { fileURLToPath } from 'node:url';
 import assert from 'node:assert/strict';
 import { serve } from '../../tests/web/serve.mjs';
 import { acquireBrowserLock, releaseBrowserLock } from '../../tests/web/browser-lock.mjs';
+import { pdfText } from './pdf-text.mjs';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const ROOT = resolve(HERE, '..');
@@ -21,8 +22,6 @@ const BUILD = join(OUT, 'build');
 mkdirSync(OUT, { recursive: true });
 const require = createRequire(join(ROOT, 'package.json'));
 const { chromium } = require('playwright');
-const { PDFArray, PDFDocument, PDFName, PDFRawStream } = require('pdf-lib');
-const { decodePDFRawStream } = require('pdf-lib/cjs/core/index.js');
 const AXE = readFileSync(require.resolve('axe-core/axe.min.js'), 'utf8');
 const FORBIDDEN = ['Company registry', 'Test sign-in', 'Sealed on this device', 'hashwing-outbox', '/v1/envelopes', '/v1/shares', 'registry-test-secret', 'dev-hs256',
   'REGISTRY_URL', 'execute-api', 'amazonaws.com', '__dev/token'];
@@ -97,16 +96,6 @@ async function axe(page, label) {
   await page.evaluate(AXE);
   const results = await page.evaluate(() => window.axe.run(document, { runOnly: { type: 'tag', values: ['wcag2a', 'wcag2aa', 'wcag21a', 'wcag21aa', 'wcag22aa', 'best-practice'] } }));
   assert.equal(results.violations.length, 0, `${label}: ${results.violations.map((v) => `${v.id}: ${v.nodes.map((n) => n.target.join(' ')).join('; ')}`).join(' | ')}`);
-}
-// The text of a HashWing PDF: its Helvetica runs are hex strings of WinAnsi bytes, so decode them back to text.
-async function pdfText(path) {
-  const pdf = await PDFDocument.load(readFileSync(path), { updateMetadata: false });
-  return pdf.getPages().map((p) => {
-    const refs = p.node.get(PDFName.of('Contents'));
-    const list = p.node.context.lookup(refs);
-    const streams = list instanceof PDFArray ? Array.from({ length: list.size() }, (_, i) => list.get(i)) : [refs];
-    return streams.map((r) => Buffer.from(decodePDFRawStream(p.node.context.lookup(r, PDFRawStream)).decode()).toString('latin1')).join('\n');
-  }).join('\n').split('\n').map((line) => [...line.matchAll(/<([0-9A-Fa-f]+)>\s*Tj/g)].map((m) => Buffer.from(m[1], 'hex').toString('latin1')).join('')).filter(Boolean).join('\n');
 }
 const REGISTERED_BASIS = "the registry's clock; the registry's statement, not proof of the files";
 // A downloaded export, with no registry token, JWT or share token in it.
@@ -389,6 +378,31 @@ try {
     await fresh.close();
   });
 
+  await check('share view: a malformed record or a 429 shows the one "temporarily unavailable" message, and the app keeps rendering', async () => {
+    const UNAVAILABLE = 'The registry is temporarily unavailable. Try the link again in a few minutes.';
+    const good = { head: 'a'.repeat(64), count: 3, key_fingerprint: 'b'.repeat(64), received_at: '2026-11-17T10:00:00Z' };
+    const answers = [
+      [200, { ...good, count: { a: 1 } }], [200, { ...good, count: -1 }], [200, { ...good, count: '3' }], [200, { ...good, head: '<img src=x>' }],
+      [200, { ...good, head: 'A'.repeat(64) }], [200, { ...good, key_fingerprint: ['x'] }], [200, { ...good, received_at: { t: 1 } }], [200, { ...good, received_at: 'yesterday' }],
+      [429, { message: 'Too Many Requests' }],
+    ];
+    const fresh = await newContext();
+    const reviewer = watch(await fresh.newPage(), 'reviewer-malformed');
+    try {
+      for (const [status, body] of answers) {
+        const answer = (route) => route.fulfill({ status, contentType: 'application/json', headers: { 'access-control-allow-origin': '*' }, body: JSON.stringify(body) });
+        await reviewer.route(`${base}/v1/shares/**`, answer);
+        await reviewer.goto('about:blank');
+        await reviewer.goto(shareUrl);
+        await reviewer.locator('.registry-record').getByText(UNAVAILABLE).waitFor({ timeout: 15000 })
+          .catch(async () => assert.fail(`${status} ${JSON.stringify(body)}: ${await reviewer.locator('#root').innerText().catch(() => '(no root)')}`.slice(0, 600)));
+        await reviewer.locator('#log-input').waitFor(); // the rest of the app still renders
+        assert.equal(await reviewer.locator('.registry-record dl').count(), 0);
+        await reviewer.unroute(`${base}/v1/shares/**`, answer);
+      }
+    } finally { await fresh.close(); }
+  });
+
   await check('axe 0 violations and no horizontal scroll on protect (list) and help (registry panel) at 320/768/1440; screenshots', async () => {
     for (const width of [320, 768, 1440]) {
       await page.setViewportSize({ width, height: 900 });
@@ -568,6 +582,7 @@ try {
     await signIn(page, 'admin-1', 'admin');
     await go(page, 'protect');
     assert.equal(await page.locator('.registry-row').count(), 0, 'another owner\'s rows are not shown');
+    assert.equal(await page.locator('.registry-announce').textContent(), '', 'the previous owner\'s announcement is cleared');
     await importSeedA(page);
     await sealSmall(page, 'flight-admin.ulg');
     await chipIs(page, 'flight-admin.ulg', 'Registered');
@@ -612,6 +627,26 @@ try {
   });
 
   await ctx.close();
+  await check('registry sign-out in one tab signs out a duplicated tab of the same owner, which then sends nothing', async () => {
+    const c = await newContext();
+    try {
+      const a = watch(await c.newPage(), 'tab-a');
+      await a.goto(`${flagOn.url}#/app/help`);
+      await signIn(a, 'tab-pilot', 'pilot');
+      const [b] = await Promise.all([c.waitForEvent('page'), a.evaluate((u) => { window.open(u); }, `${flagOn.url}#/app/help`)]);
+      watch(b, 'tab-b');
+      await b.locator('#company-registry').getByText('Signed in to the company registry as tab-pilot').waitFor({ timeout: 30000 });
+      await a.locator('#company-registry').getByRole('button', { name: 'Sign out' }).click();
+      await b.locator('#registry-token').waitFor({ timeout: 10000 });
+      assert.equal(await b.evaluate(() => sessionStorage.getItem('hashwing-registry-token')), null, 'tab B dropped its token');
+      const sends = (await registerLog('tab-pilot')).length;
+      await sealSmall(b, 'tab-b.ulg');
+      await chipIs(b, 'tab-b.ulg', 'Sealed locally');
+      await sleep(3000);
+      assert.equal((await registerLog('tab-pilot')).length, sends, 'tab B sent nothing after the sign-out in tab A');
+    } finally { await c.close(); }
+  });
+
   await check('no console or page errors', async () => { assert.deepEqual(errors, []); });
 } finally {
   await browser?.close();

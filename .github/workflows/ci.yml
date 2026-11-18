@@ -136,7 +136,7 @@ jobs:
           node --test tests/trusted-keys.test.mjs tests/recipient-trust.test.mjs
           npm run build
       - name: Registry outbox and client unit tests (state machine, backoff, allowlist, owner isolation, stale results)
-        run: node --test newweb/tests/outbox.test.mjs newweb/tests/registry-client.test.mjs
+        run: node --test newweb/tests/outbox.test.mjs newweb/tests/registry-client.test.mjs newweb/tests/registry-session.test.mjs
       - name: Registry outbox in Chromium against the real registry App (DEV ONLY server over the in-memory table)
         run: |
           python3 registry/devserver/server.py --port 39102 > /tmp/registry-dev.log 2>&1 &
