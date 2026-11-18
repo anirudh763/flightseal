@@ -38,7 +38,7 @@ sealer's Ed25519 key, and posts `{public_key, nonce, signature}` to `POST /v1/ke
 
 ## When the budget alert fires
 
-Decided 2026-11-17, not built (spine AD-18): the budget response will be a reversible traffic pause that keeps the table and user pool. Until that switch exists, the options are:
+Decided 2026-11-17, not built (spine AD-18): the budget response will be a reversible traffic pause that keeps the table and user pool. Neither step below is that response: deleting the stage is untested and may not come back with `cdk deploy`, and destroying deletes the data. Until the pause exists, they are the only options, and the infra packet replaces them:
 
 The budget email only warns. Nothing stops requests or spend until you act. Pick one:
 
