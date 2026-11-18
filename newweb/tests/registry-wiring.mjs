@@ -118,6 +118,7 @@ async function axe(page, label) {
 const REGISTERED_BASIS = "the registry's clock; the registry's statement, not proof of the files";
 // A downloaded export, with no registry token, JWT or share token in it.
 async function exportOf(page, button, token, scope = page.locator('main')) {
+  await scope.locator('.verdict-downloads').evaluateAll((menus) => menus.forEach((menu) => { menu.open = true; })); // reports sit behind "Download report"
   const [download] = await Promise.all([page.waitForEvent('download'), scope.getByRole('button', { name: button, exact: true }).locator('visible=true').first().click()]);
   const path = await download.path();
   const text = button.includes('PDF') ? await pdfText(path) : readFileSync(path, 'utf8');
@@ -132,7 +133,7 @@ async function registryLineOfLastSeal(page, file, want) {
   await go(page, 'verify'); // the checker lives on Verify (R15)
   await page.locator('#check-file').setInputFiles(sealedPath);
   await page.locator('#check-text').fill(handover);
-  await page.getByRole('button', { name: 'Check this file' }).click();
+  await page.getByRole('button', { name: 'Check files' }).click();
   const timeRow = page.locator('[aria-labelledby="check-title"] .time-fields > div', { has: page.locator('dt', { hasText: 'Registry acceptance' }) });
   // Query afresh each poll: a new result re-renders the time fields, so a handle taken earlier can go stale.
   await page.waitForFunction(([src, flags]) => [...document.querySelectorAll('[aria-labelledby="check-title"] .time-fields > div')].some((d) => d.querySelector('dt')?.textContent === 'Registry acceptance' && new RegExp(src, flags).test(d.querySelector('dd span')?.textContent || '')), [want.source, want.flags], { timeout: 30000 })
@@ -211,7 +212,7 @@ try {
     await go(page, 'verify');
     await page.locator('#check-file').setInputFiles(sealedPath);
     await page.locator('#check-text').fill(handover);
-    await page.getByRole('button', { name: 'Check this file' }).click();
+    await page.getByRole('button', { name: 'Check files' }).click();
     await page.getByText('no registry was used').first().waitFor({ timeout: 30000 });
     const body = await page.locator('body').innerText();
     assert.match(body, /Registry acceptance/);
@@ -224,6 +225,10 @@ try {
     await page.goto(`${flagOff.url}console/#/app/verify?share=${'A'.repeat(43)}`);
     await page.locator('#page-verify').waitFor();
     assert.ok(!(await page.locator('body').innerText()).includes("The registry's record"));
+    // AC-65: no link choice on this build; the files form, with one notice for a share link it can't open.
+    assert.equal(await page.locator('.verify-chooser').count(), 0);
+    assert.equal(await page.locator('.inline-notice').innerText(), "This copy of HashWing can't open HashWing share links. Check the files instead.");
+    assert.equal(await page.locator('#check-file').isVisible(), true);
     await go(page, 'protect');
     await page.getByRole('navigation', { name: 'Primary navigation' }).getByRole('link', { name: 'Trust', exact: true }).click();
     await page.locator('#page-help').waitFor();
@@ -364,9 +369,11 @@ try {
     const [download] = await Promise.all([page.waitForEvent('download'), page.getByRole('button', { name: 'Download sealed list' }).click()]);
     const sealedPath = join(OUT, 'two-files.manifest.fseal'); await download.saveAs(sealedPath);
     await go(page, 'verify');
-    await page.locator('#manifest-check-file').setInputFiles(sealedPath);
-    await page.locator('#manifest-check-text').fill(handover);
-    await page.locator('#manifest-trusted-key').fill(publicKey);
+    await page.locator('#check-file').setInputFiles(sealedPath);
+    await page.locator('#check-text').fill(handover);
+    await page.locator('#check-originals').waitFor({ state: 'attached' });
+    await page.locator('.check-options summary').click();
+    await page.locator('#check-key').fill(publicKey);
     await page.getByRole('button', { name: 'Check files' }).click();
     const timeRow = page.locator('.manifest-outcome .time-fields > div', { has: page.locator('dt', { hasText: 'Registry acceptance' }) });
     await page.waitForFunction((el) => /^Registered at \d{4}-\d\d-\d\dT\d\d:\d\d:\d\dZ$/.test(el?.querySelector('dd span')?.textContent || ''), await timeRow.elementHandle({ timeout: 30000 }), { timeout: 30000 })
@@ -415,7 +422,39 @@ try {
     assert.ok(!/verified|matches/i.test(text), 'the record panel never says verified or matches');
     const body = await reviewer.locator('body').innerText();
     for (const s of ['Test sign-in', 'Company registry', 'Sealed on this device']) assert.ok(!body.includes(s), `reviewer sees ${s}`);
-    await reviewer.locator('#log-input').waitFor(); // file checking stays available below
+    // AC-54: a share link lands on "I have a HashWing link", opened, and no file is marked as matching.
+    assert.equal(await reviewer.getByLabel('I have a HashWing link').isChecked(), true);
+    assert.equal(await reviewer.locator('#verify-link').inputValue(), shareUrl);
+    assert.match(await reviewer.locator('.verify-link').innerText(), /Files not checked yet\./);
+    assert.equal(await reviewer.locator('.status-label.ok, #verdict-heading').count(), 0, 'a link never marks files verified');
+    assert.equal(new URL(reviewer.url()).hash.includes('mode=') ? 'x' : '', '', 'no mode written until the choice changes');
+    // AC-67: arrowing through the choice keeps focus on the radio and adds no history entry.
+    const historyLength = await reviewer.evaluate(() => history.length);
+    await reviewer.getByLabel('I have a HashWing link').focus();
+    await reviewer.keyboard.press('ArrowRight');
+    assert.equal(await reviewer.getByLabel('I have files').isChecked(), true);
+    assert.equal(await reviewer.evaluate(() => document.activeElement?.value), 'files');
+    assert.equal(await reviewer.evaluate(() => history.length), historyLength);
+    assert.match(reviewer.url(), /[?&]mode=files/);
+    // Forced colours: the chosen tab's words keep a visible system colour and its check mark shows (no Highlight fill
+    // under HighlightText that the browser repaints to Canvas).
+    await reviewer.emulateMedia({ forcedColors: 'active' });
+    const chosen = await reviewer.locator('.choice-button:has(input:checked)').evaluate((label) => {
+      const style = getComputedStyle(label); const mark = getComputedStyle(label.querySelector('.choice-mark'));
+      return { color: style.color, background: style.backgroundColor, mark: mark.color, markShown: mark.visibility, border: parseFloat(style.borderTopWidth) };
+    });
+    assert.notEqual(chosen.color, chosen.background, `forced colours: chosen label text is visible ${JSON.stringify(chosen)}`);
+    assert.notEqual(chosen.mark, chosen.background, `forced colours: check mark visible ${JSON.stringify(chosen)}`);
+    assert.equal(chosen.markShown, 'visible');
+    assert.ok(chosen.border >= 3, `forced colours: a thick border marks the choice ${JSON.stringify(chosen)}`);
+    await reviewer.screenshot({ path: join(OUT, 'chooser-forced-colors.png') });
+    await reviewer.emulateMedia({ forcedColors: 'none' });
+    await reviewer.getByLabel('I have a HashWing link').check();
+    await reviewer.getByRole('button', { name: 'Check the files' }).click(); // the link's record stays for comparison
+    await reviewer.waitForFunction(() => document.activeElement?.id === 'check-file');
+    await reviewer.getByText('Link record kept for comparison').waitFor();
+    assert.equal(await reviewer.locator('.registry-record').count(), 1);
+    await reviewer.locator('#check-file').waitFor(); // file checking stays available
     for (const width of [320, 768, 1440]) {
       await reviewer.setViewportSize({ width, height: 900 });
       const overflow = await reviewer.evaluate(() => document.documentElement.scrollWidth - innerWidth);
@@ -426,7 +465,8 @@ try {
     await reviewer.setViewportSize({ width: 1440, height: 900 });
     await reviewer.goto(shareUrl.split('?')[0].replace('/verify', '/help'));
     await reviewer.getByRole('navigation', { name: 'Primary navigation' }).getByRole('link', { name: 'Verify', exact: true }).click();
-    await reviewer.locator('#log-input').waitFor();
+    await reviewer.locator('#check-file').waitFor(); // owner decision 2 (provisional): Verify opens on "I have files"
+    assert.equal(await reviewer.getByLabel('I have files').isChecked(), true);
     assert.equal(await reviewer.locator('.registry-record').count(), 0, 'Verify without a link shows no old record');
     await fresh.close();
   });
@@ -449,7 +489,7 @@ try {
         await reviewer.goto(shareUrl);
         await reviewer.locator('.registry-record').getByText(UNAVAILABLE).waitFor({ timeout: 15000 })
           .catch(async () => assert.fail(`${status} ${JSON.stringify(body)}: ${await reviewer.locator('#root').innerText().catch(() => '(no root)')}`.slice(0, 600)));
-        await reviewer.locator('#log-input').waitFor(); // the rest of the app still renders
+        await reviewer.locator('#verify-link').waitFor(); // the rest of the app still renders
         assert.equal(await reviewer.locator('.registry-record dl').count(), 0);
         await reviewer.unroute(`${base}/v1/shares/**`, answer);
       }

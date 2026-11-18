@@ -1157,3 +1157,85 @@ input[type=datetime-local] { width: 100%; max-width: 320px; min-width: 0; min-he
   .workbench-rail .nav .nav-apps[open] summary::after { content: "▾"; }
   .workbench-rail .nav .nav-apps > div { position: static; min-width: 0; box-shadow: none; border: 0; }
 }
+
+/* Verify (release layout): the opening choice, one form, the verdict and the file comparison. */
+.verify-chooser { margin: 0 0 16px; padding: 0; border: 0; min-width: 0; }
+.verify-chooser legend { padding: 0; margin-bottom: 8px; font-weight: 700; color: var(--ink); }
+.choice-buttons { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 220px), 1fr)); gap: 8px; }
+.choice-button { position: relative; display: flex; align-items: center; gap: 8px; min-height: 44px; padding: 8px 14px; border: 1px solid var(--field-border); border-radius: 4px; background: var(--surface); color: var(--ink); font-weight: 600; cursor: pointer; transition: background-color .12s; }
+.choice-button:hover { background: var(--mint); }
+.choice-button input { position: absolute; opacity: 0; width: 1px; height: 1px; margin: 0; }
+.choice-button .choice-mark { visibility: hidden; flex: 0 0 auto; color: var(--forest); }
+.choice-button:has(input:checked) { border: 2px solid var(--forest); padding: 7px 13px; background: var(--mint); }
+.choice-button:has(input:checked) .choice-mark { visibility: visible; }
+.choice-button:has(input:focus-visible) { outline: 3px solid var(--forest); outline-offset: 2px; }
+.verify-link .link-row { display: flex; flex-wrap: wrap; gap: 8px; }
+.verify-link .link-row input { flex: 1 1 24ch; min-width: 0; }
+.inline-notice { margin: 0 0 16px; padding: 12px 14px; border: 1px solid var(--line); border-radius: 8px; background: var(--surface); color: var(--ink); }
+.field-error { color: var(--bad); font-weight: 600; }
+.verify-more { margin-top: 16px; }
+.verify-sample { margin: 0 0 8px; }
+.verify-sample a { display: inline-flex; align-items: center; min-height: 44px; }
+.verify-advanced { margin-bottom: 16px; }
+.verify-advanced[open] > .panel-body { padding-top: 12px; }
+
+.verdict { display: grid; gap: 12px; margin-top: 16px; padding-top: 16px; border-top: 1px solid var(--line); }
+.verdict-headline { display: flex; align-items: center; gap: 10px; margin: 0; font-size: 1.3rem; }
+.verdict.ok .verdict-headline { color: var(--ok); }
+.verdict.warn .verdict-headline { color: var(--warn); }
+.verdict.bad .verdict-headline { color: var(--bad); }
+.verdict-headline .status-shape { width: 14px; height: 14px; }
+.verdict-headline .status-shape.warn { width: 16px; height: 14px; }
+.verdict-headline:focus-visible { outline: 3px solid var(--forest); outline-offset: 4px; }
+.verdict-sentence, .verdict-next p { margin: 0; }
+.verdict-lines { display: grid; margin: 0; border-top: 1px solid var(--line); font-size: .9rem; }
+.verdict-lines > div { display: grid; grid-template-columns: minmax(120px, .8fr) minmax(0, 2.2fr); gap: 4px 12px; padding: 8px 0; border-bottom: 1px solid var(--line); }
+.verdict-lines dt { color: var(--muted); }
+.verdict-lines dd { margin: 0; min-width: 0; overflow-wrap: anywhere; }
+.verdict-lines .trust-line { margin: 0; }
+@media (max-width: 480px) { .verdict-lines > div { grid-template-columns: minmax(0, 1fr); } }
+.compare-wrap .status-label { display: inline-flex; align-items: center; gap: 6px; max-width: none; }
+.compare-wrap .status-label .status-shape { width: 8px; height: 8px; }
+.compare-wrap .status-label .status-shape.warn { width: 10px; height: 9px; }
+
+/* The comparison keeps its columns only in a container at least 720px wide (EXPERIENCE.md "Width rules"). */
+.compare-wrap { container-type: inline-size; }
+.compare-table { width: 100%; }
+.compare-table .hash-cell code { margin-right: 8px; }
+.copy-hash { min-height: 44px; }
+.compare-summaries { display: none; margin: 0; padding: 0; list-style: none; }
+.compare-summaries > li { display: grid; gap: 6px; padding: 12px 0; border-bottom: 1px solid var(--line); }
+.compare-summaries > li > p { margin: 0; }
+.compare-name { font-weight: 600; overflow-wrap: break-word; word-break: normal; }
+.compare-facts { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; }
+.compare-details > div { display: grid; gap: 8px; justify-items: start; padding-top: 8px; }
+.compare-details code { overflow-wrap: anywhere; }
+@container (max-width: 719.98px) {
+  .compare-table { display: none; }
+  .compare-summaries { display: block; }
+}
+.field-hint a, .verify-check .field-hint a { text-decoration: underline; text-underline-offset: 2px; }
+.verify-check .panel-body > .button.primary { justify-self: start; width: auto; }
+.compare-table td, .compare-table th { overflow-wrap: normal; }
+.compare-table td:first-child { min-width: 16ch; overflow-wrap: break-word; }
+.compare-table td:nth-child(2), .compare-table th:nth-child(2) { white-space: nowrap; text-align: right; }
+.compare-table .hash-cell { display: flex; align-items: center; gap: 8px; white-space: nowrap; }
+.compare-table .hash-cell code { margin: 0; }
+.verify-advanced { margin: 0 0 16px; }
+.verify-files { display: grid; gap: 16px; min-width: 0; }
+.verify-files[hidden] { display: none; }
+/* DESIGN.md shapes on Verify: warn is a diamond, bad a square (the older global .status-shape draws them the other way). */
+.verdict-headline .status-shape.warn, .compare-wrap .status-shape.warn { clip-path: none; background: none; border: 2px solid currentColor; border-radius: 0; transform: rotate(45deg); width: 11px; height: 11px; }
+.verdict-headline .status-shape.bad, .compare-wrap .status-shape.bad { border-radius: 0; transform: none; }
+.compare-wrap .status-label .status-shape.warn { width: 8px; height: 8px; }
+/* Forced colours: the chosen tab keeps system text colour; a thick Highlight border and the check mark show the choice. */
+@media (forced-colors: active) {
+  .choice-button:has(input:checked) { background: Canvas; color: CanvasText; border: 4px solid Highlight; padding: 5px 11px; forced-color-adjust: none; }
+  .choice-button:has(input:checked) .choice-mark { color: Highlight; }
+  .button.primary:disabled { forced-color-adjust: auto; color: GrayText; border-color: GrayText; }
+}
+/* A disabled main action looks disabled: muted fill, no brand colour, no hover lift. */
+.button.primary:disabled, .button.primary:disabled:hover { background: #dfe5e1; border-color: #c4cdc7; color: #5d6b63; box-shadow: none; transform: none; cursor: not-allowed; }
+.verdict-downloads { width: 100%; }
+.verdict-downloads > summary { justify-content: flex-start; width: fit-content; border: 1px solid var(--line); border-radius: 8px; padding: 0 14px; background: var(--surface); }
+.verdict-downloads > .actions-row { padding-top: 8px; }
