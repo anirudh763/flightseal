@@ -372,7 +372,10 @@ function App() {
   const [pendingResume, setPendingResume] = useState(null); // { job, go }: waiting on the one question about an unsaved result
   const resumeFocusRef = useRef('');
   const protectDone = !!resumedJob || (protectMode === 'embedded' ? !!protectSealed : manifestSealed);
+  const [manifestRunning, setManifestRunning] = useState(false); // Large files is reading or sealing
+  const sealRunning = protectStep > 0 || manifestRunning; // a seal in progress: Resume would hide it and then its result
   const resumeJob = (job) => {
+    if (sealRunning) return; // the Jobs page also disables Resume and says why (SEAL_RUNNING)
     const open = (mode, focus) => { setProtectMode(mode); resumeFocusRef.current = focus; if (screen === 'protect') setResumeTick((n) => n + 1); else navigate('protect'); };
     setPendingResume(null);
     if (protectSealed?.jobId === job.id) { setResumedJob(null); open('embedded', 'handoff-title'); return; }
@@ -1850,7 +1853,7 @@ function App() {
           {resumedJob && <Handoff headingId="resumed-handoff-title"
             summary={`Sealed · ${resumedJob.items} file${resumedJob.items === 1 ? '' : 's'}${resumedJob.mode === 'large' ? ` · ${exactBytes(resumedJob.bytes)}` : ''}${resumedJob.jobRef ? ` · ${resumedJob.jobRef}` : ''}`}
             kind={resumedJob.mode === 'large' ? 'list' : 'file'} fileName={resumedJob.name} receiptName={`${resumedJob.name.replace(/(\.manifest)?\.fseal$/, '')}.receipt.txt`} unsaved={false} downloaded receiptSaved
-            notHeld={`Choose ${resumedJob.name} again to download it; HashWing didn't keep a copy.`}
+            notHeld={`HashWing didn't keep a copy of ${resumedJob.name}. Use the copy you downloaded when you sealed it.`}
             onDownloadReceipt={() => download(`${resumedJob.name.replace(/(\.manifest)?\.fseal$/, '')}.receipt.txt`, resumedJob.receipt)} onReceiptSaved={() => {}}
             handoverId="resumed-handover-text" handover={resumedJob.receipt} onCopy={copyResumed} copyStatus={copyStatus}
             onSealMore={() => { setResumedJob(null); setCopyStatus(''); sealStartFocusRef.current = true; }} />}
@@ -1869,7 +1872,7 @@ function App() {
             <button id="protect-seal" className="button primary" type="button" disabled={!protectFile || !!busy} onClick={runProtectSeal}>Seal this file</button>
             {protectStep > 0 && <div className="seal-progress"><label htmlFor="protect-progress">Step {protectStep} of 4 · {PROTECT_STEPS[protectStep - 1]}</label><progress id="protect-progress" max="4" value={protectStep} aria-valuetext={`Step ${protectStep} of 4: ${PROTECT_STEPS[protectStep - 1]}`} /><button className="button secondary" type="button" onClick={cancelProtectSeal}>Cancel</button></div>}
           </>}
-          {protectMode === 'embedded' && protectSealed && !resumedJob && <Handoff headingRef={handoffRef} headingId="handoff-title" ask={!!pendingResume} onKeep={() => setPendingResume(null)}
+          {protectMode === 'embedded' && protectSealed && !resumedJob && <Handoff headingRef={handoffRef} headingId="handoff-title" ask={!!pendingResume && protectMode === 'embedded'} onKeep={() => setPendingResume(null)}
             summary={`Sealed · 1 file${protectSealed.jobRef ? ` · ${protectSealed.jobRef}` : ''}`}
             kind="file" fileName={protectSealed.log.name} receiptName={`${protectSealed.name}.receipt.txt`} unsaved={protectUnsaved} downloaded={!!protectSealed.saved?.file} receiptSaved={!!protectSealed.saved?.receipt} requested={protectSealed.requested}
             onDownload={() => { download(protectSealed.log.name, protectSealed.log, 'application/octet-stream'); markProtectSaved(protectSealed.log, 'file', 'requested'); }} onSaved={() => markProtectSaved(protectSealed.log, 'file')}
@@ -1879,12 +1882,12 @@ function App() {
             details={<>{protectSealed.savedKey && <SenderFingerprint fingerprint={protectSealed.fingerprint} />}<details className="report-details handoff-about"><summary>What is this? <ChevronDown size={17} aria-hidden="true" /></summary><div className="manifest-options-body prose"><p>{protectSealed.savedKey ? 'Signed with the key loaded under Trust. Anyone holding that private key can sign other files, so keep its backup private.' : 'The signing key was made for this file only and was discarded, never stored or exported, so no further receipt can be made with it.'} Anyone can seal a different file with another key; that is why the receipt you send now is what counts later. Sealing shows the file has not changed since now; it cannot show what happened before you sealed it.</p></div></details></>}
             shareNote={__REGISTRY_URL__ ? <RegistryShareNote /> : null}
             onSealMore={sealMoreProtect} />}
-          <ManifestSeal hidden={protectMode !== 'manifest' || !!resumedJob} output={manifestOutput} jobScope={localScope} newJobId={newJobId} onJob={(row, scope) => { setResumedJob(null); setPendingResume(null); addJob(row, scope); }} ask={!!pendingResume} onKeep={() => setPendingResume(null)} setOutput={setManifestOutput} carry={carryToLarge} common={sealCommon} jobRef={jobRef} signingKey={signingKey} onActiveChange={setManifestSealActive} onUnsaved={setManifestUnsaved} onSealed={__REGISTRY_URL__ ? registrySealed : undefined} onDone={setManifestSealed} onSealMore={() => { setJobRef(''); afterSealMore(); }} shareNote={__REGISTRY_URL__ ? <RegistryShareNote /> : null} />
+          <ManifestSeal hidden={protectMode !== 'manifest' || !!resumedJob} output={manifestOutput} jobScope={localScope} newJobId={newJobId} onJob={(row, scope) => { setResumedJob(null); setPendingResume(null); addJob(row, scope); }} ask={!!pendingResume && protectMode === 'manifest'} onKeep={() => setPendingResume(null)} onRunning={setManifestRunning} setOutput={setManifestOutput} carry={carryToLarge} common={sealCommon} jobRef={jobRef} signingKey={signingKey} onActiveChange={setManifestSealActive} onUnsaved={setManifestUnsaved} onSealed={__REGISTRY_URL__ ? registrySealed : undefined} onDone={setManifestSealed} onSealMore={() => { setJobRef(''); afterSealMore(); }} shareNote={__REGISTRY_URL__ ? <RegistryShareNote /> : null} />
         </div></section>
       </section>
       {/* Every build lists jobs here (AC-60); the flag-on build still shows registry-ui's list instead, until the registry chips join this one. */}
       {!__REGISTRY_URL__ && screen === 'protect' && <div className="screen"><SealedRecent rows={jobs.rows} storage={jobs.storage} notice={jobsNotice || jobs.error} allJobsHref={workspaceHref('jobs')} onAllJobs={(e) => { if (e.button !== 0 || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return; e.preventDefault(); navigate('jobs'); }} /></div>}
-      {screen === 'jobs' && <JobsPage rows={jobs.rows} storage={jobs.storage} error={jobs.error || jobsNotice} q={route.params.get('q') || ''} page={Number(route.params.get('page')) || 1}
+      {screen === 'jobs' && <JobsPage rows={jobs.rows} loaded={jobsState.scope === localScope} resumeBlocked={sealRunning} storage={jobs.storage} error={jobs.error || jobsNotice} q={route.params.get('q') || ''} page={Number(route.params.get('page')) || 1}
         onUrl={setJobsUrl} onResume={resumeJob} onRemove={removeJob} onDownload={(name, text) => download(name, text, 'application/json')}
         sealHref={workspaceHref('protect')} onSeal={(e) => { if (e.button !== 0 || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return; e.preventDefault(); navigate('protect'); }} />}
       {__REGISTRY_URL__ && <section className="screen" aria-label="Registry status" hidden={screen !== 'protect'}><RegistryBoundary><SealedOnDevice onSignIn={() => navigate('help')} /></RegistryBoundary></section>}
@@ -2409,7 +2412,7 @@ const friendlyLimit = (cause) => cause instanceof RangeError && /exceeds 65536 b
 // Every part not yet saved had its download started (a click, not proof): the unsaved-work gate can then offer "I saved it".
 const startedAll = (r) => ['file', 'receipt'].every((k) => r.saved?.[k] || r.requested?.[k]);
 
-function ManifestSeal({ hidden, output, setOutput, carry, common, jobRef, signingKey, onActiveChange, onUnsaved, onSealed, onDone, onSealMore, shareNote, jobScope, newJobId, onJob, ask, onKeep }) {
+function ManifestSeal({ hidden, output, setOutput, carry, common, jobRef, signingKey, onActiveChange, onUnsaved, onSealed, onDone, onSealMore, shareNote, jobScope, newJobId, onJob, ask, onKeep, onRunning }) {
   const [files, setFiles] = useState([]);
   const [includeNames, setIncludeNames] = useState(false);
   const [notes, setNotes] = useState({});
@@ -2427,6 +2430,7 @@ function ManifestSeal({ hidden, output, setOutput, carry, common, jobRef, signin
   useEffect(() => () => controllerRef.current?.abort(), []);
   const unsavedList = !!output && !(output.saved.file && output.saved.receipt); // the list and its receipt message, as #37 keeps them
   useEffect(() => { onActiveChange(!!phase || unsavedList); }, [phase, unsavedList, onActiveChange]);
+  useEffect(() => { onRunning?.(!!phase); }, [phase]); // eslint-disable-line react-hooks/exhaustive-deps
   useEffect(() => { onDone(!!output); if (output) headingRef.current?.focus(); }, [output?.log]); // eslint-disable-line react-hooks/exhaustive-deps -- seal finished: the handoff heading
   const fail = (text) => { setError(text); requestAnimationFrame(() => document.getElementById('manifest-files')?.focus()); }; // the message is read with the field
   useEffect(() => () => onActiveChange(false), [onActiveChange]);

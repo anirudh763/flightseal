@@ -98,8 +98,8 @@ export function Handoff({ headingRef, headingId, summary, kind, fileName, receip
     <h2 id={headingId} ref={headingRef} tabIndex="-1">Send these to your client</h2>
     <ol className="handoff-steps">
       <li>
-        <div className="handoff-step-head"><span className="handoff-step-title">{list ? 'Download the list' : 'Download the sealed file'}</span><code className="wrap">{fileName}</code></div>
-        <p className="field-hint">{list ? 'It holds the fingerprints, not your files.' : 'It holds your original file, byte for byte.'}</p>
+        <div className="handoff-step-head"><span className="handoff-step-title">{notHeld ? (list ? 'The list' : 'The sealed file') : list ? 'Download the list' : 'Download the sealed file'}</span><code className="wrap">{fileName}</code></div>
+        {!notHeld && <p className="field-hint">{list ? 'It holds the fingerprints, not your files.' : 'It holds your original file, byte for byte.'}</p>}
         {notHeld ? <p className="field-hint jobs-not-held">{notHeld}</p> /* a resumed job whose bytes this tab no longer holds */
           : <div className="actions-row"><button type="button" className={`button ${downloaded || fileRequested || asking ? 'secondary' : 'primary'}`} aria-label={list ? 'Download sealed list' : 'Download sealed file'} onClick={onDownload}><Download aria-hidden="true" size={16} />Download</button></div>}
         <p className="field-hint download-status" role="status">{fileRequested ? `Download started: ${fileName}. Check your Downloads folder.` : ''}</p>{/* always mounted, so the text is announced */}

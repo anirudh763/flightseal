@@ -5,7 +5,8 @@
 // database (AC-02, AC-60), memory-only storage, one primary per step, axe and no horizontal scroll at 320/390/768/1440.
 // Run after `npm --prefix newweb run build`.
 import { createRequire } from 'node:module';
-import { mkdirSync, readFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, openSync, ftruncateSync, closeSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import { randomBytes } from 'node:crypto';
 import { join, resolve, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -130,6 +131,10 @@ try {
     assert.deepEqual(await page.locator('.jobs-table tbody td:nth-child(3)').allInnerTexts(), ['Sealed locally', 'Sealed locally'], 'flag off: Sealed locally only');
     assert.equal(await page.getByLabel(/Status/).count(), 0, 'flag off: no status filter');
     await layout(page, 'jobs list', [320, 390, 768, 1440]);
+    await page.setViewportSize({ width: 320, height: 900 }); await frame(page);
+    const order = await page.locator('.jobs-table tbody tr').first().evaluate((tr) => ['.jobs-name', '.jobs-ref', '.jobs-status', '.jobs-when', '.jobs-actions'].map((c) => tr.querySelector(c).getBoundingClientRect().top));
+    assert.deepEqual([...order].sort((x, y) => x - y), order, `320px: package, job ref, status, time, actions (${order})`);
+    await page.setViewportSize({ width: 1440, height: 900 });
   });
 
   await check('Export downloads the metadata and receipt message only', async () => {
@@ -164,7 +169,8 @@ try {
     await page.locator('.confirm-box').getByRole('button', { name: 'Discard it' }).click();
     await page.locator('#resumed-handover-text').waitFor();
     await page.waitForFunction(() => document.activeElement?.id === 'resumed-handoff-title');
-    assert.equal(await page.locator('.jobs-not-held').innerText(), "Choose flight-12.ulg.fseal again to download it; HashWing didn't keep a copy.");
+    assert.equal(await page.locator('.jobs-not-held').innerText(), "HashWing didn't keep a copy of flight-12.ulg.fseal. Use the copy you downloaded when you sealed it.");
+    assert.equal(await page.getByText('It holds your original file, byte for byte.').count(), 0, 'no claim about a file that is not here');
     assert.equal(await page.getByRole('button', { name: 'Download sealed file' }).count(), 0, 'not held: no Download');
     assert.equal(await page.locator('#resumed-handover-text').inputValue(), exported.receiptMessage);
     assert.match(await page.locator('.seal-summary').innerText(), /^Sealed · 1 file · J-1042$/);
@@ -197,6 +203,16 @@ try {
 
   await check('search as you type, 25 per page, page and search in the URL, Back and Forward, no match and Clear search', async () => {
     await seed(page, 60);
+    await page.evaluate(async () => { // rows the app never wrote: a numeric ref, an extra field, a 5 MB name. They are skipped, not shown.
+      const hex = [...new Uint8Array(await crypto.subtle.digest('SHA-256', new TextEncoder().encode('guest')))].map((b) => b.toString(16).padStart(2, '0')).join('');
+      const db = await new Promise((ok) => { const r = indexedDB.open(`hashwing-jobs-v1-${hex}`, 1); r.onsuccess = () => ok(r.result); });
+      const tx = db.transaction('jobs', 'readwrite');
+      const base = { mode: 'small', items: 1, bytes: 1, receipt: 'fseal-receipt v1', sealedAt: 1 };
+      tx.objectStore('jobs').put({ ...base, id: 'bad-1', jobRef: 42, name: 'numeric-ref.fseal' });
+      tx.objectStore('jobs').put({ ...base, id: 'bad-2', jobRef: '', name: 'extra-field.fseal', log: 'bytes' });
+      tx.objectStore('jobs').put({ ...base, id: 'bad-3', jobRef: '', name: 'x'.repeat(5_000_000) });
+      await new Promise((ok) => { tx.oncomplete = ok; }); db.close();
+    });
     await page.reload(); await page.locator('#page-jobs').waitFor();
     await page.locator('.jobs-table caption').waitFor();
     assert.equal(await page.locator('.jobs-table caption').innerText(), 'Showing 1–25 of 61');
@@ -205,7 +221,7 @@ try {
     await page.waitForFunction(() => document.querySelector('.jobs-table caption')?.textContent === 'Showing 26–50 of 61');
     assert.equal(new URL(page.url()).hash, '#/app/jobs?page=2');
     await page.waitForFunction(() => document.activeElement?.tagName === 'CAPTION', null, { timeout: 3000 });
-    await page.waitForFunction(() => [...document.querySelectorAll('[role=status]')].some((n) => n.textContent === 'Showing 26–50 of 61'));
+    assert.ok(!(await page.locator('[role=status]').allInnerTexts()).includes('Showing 26–50 of 61'), 'a page change is read once, from the focused caption');
     await page.getByRole('button', { name: 'Next' }).click();
     await page.waitForFunction(() => document.querySelector('.jobs-table caption')?.textContent === 'Showing 51–61 of 61');
     assert.equal(await page.getByRole('button', { name: 'Next' }).isDisabled(), true);
@@ -214,6 +230,11 @@ try {
     await page.goForward();
     await page.waitForFunction(() => document.querySelector('.jobs-table caption')?.textContent === 'Showing 51–61 of 61');
     const search = page.getByLabel('Search job reference or file name');
+    await search.pressSequentially('4');
+    await page.waitForFunction(() => /jobs? match/.test(document.querySelector('.jobs-table caption')?.textContent || ''));
+    assert.ok(!(await page.locator('#main').innerText()).includes('numeric-ref'), 'a bad row is not shown, and searching does not crash');
+    await search.fill('');
+    await page.goBack(); await page.waitForFunction(() => document.querySelector('.jobs-table caption')?.textContent === 'Showing 51–61 of 61');
     await search.pressSequentially('s-05');
     await page.waitForFunction(() => document.querySelector('.jobs-table caption')?.textContent === '10 jobs match');
     assert.equal(new URL(page.url()).hash, '#/app/jobs?q=s-05');
@@ -221,6 +242,9 @@ try {
     await page.waitForFunction(() => [...document.querySelectorAll('[role=status]')].some((n) => n.textContent === '10 jobs match'));
     await page.goBack(); // one step leaves the whole search
     await page.waitForFunction(() => document.querySelector('.jobs-table caption')?.textContent === 'Showing 51–61 of 61');
+    await page.goto(`${url}#/app/jobs?page=9`); // out of range: settles on the last page, replacing the URL
+    await page.waitForFunction(() => location.hash === '#/app/jobs?page=3');
+    assert.equal(await page.locator('.jobs-table caption').innerText(), 'Showing 51–61 of 61');
     await page.goto(`${url}#/app/jobs?q=J-20`);
     await page.waitForFunction(() => document.querySelector('.jobs-table caption')?.textContent === '1 job matches');
     await search.fill('zzz');
@@ -229,6 +253,29 @@ try {
     await page.getByRole('button', { name: 'Clear search' }).click();
     await page.waitForFunction(() => document.querySelector('.jobs-table caption')?.textContent === 'Showing 1–25 of 61');
     assert.equal(await page.evaluate(() => document.activeElement?.id), 'jobs-search');
+  });
+
+  await check('a seal in progress: Resume is disabled with the reason, and the running seal keeps its progress', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'hashwing-jobs-'));
+    const big = join(dir, 'big.mp4'); const fd = openSync(big, 'w'); ftruncateSync(fd, 2 * 1024 ** 3); closeSync(fd);
+    try {
+      await go(page, 'protect');
+      await page.getByLabel(/^Large files/).check();
+      await page.locator('#manifest-files').setInputFiles(big);
+      await page.getByRole('button', { name: 'Seal the list' }).click();
+      await page.locator('#manifest-seal-progress').waitFor();
+      await go(page, 'jobs');
+      const resume = page.getByRole('button', { name: /^Resume / }).first();
+      assert.equal(await resume.isDisabled(), true);
+      assert.equal(await page.locator('#jobs-resume-blocked').innerText(), 'Finish or cancel the seal in progress first.');
+      await go(page, 'protect');
+      assert.equal(await page.locator('#manifest-seal-progress').isVisible(), true, 'the running seal is still shown');
+      await page.locator('.seal-progress').getByRole('button', { name: 'Cancel' }).click();
+      await page.getByText('Sealing cancelled. Your files are still chosen.').first().waitFor();
+      await go(page, 'jobs');
+      assert.equal(await page.getByRole('button', { name: /^Resume / }).first().isDisabled(), false);
+      assert.equal(await page.locator('#jobs-resume-blocked').count(), 0);
+    } finally { rmSync(dir, { recursive: true, force: true }); }
   });
 
   await check('owner scoping (AC-57): a profile sees none of the guest\'s rows, logout hides its rows, signing back in shows them', async () => {
@@ -283,6 +330,25 @@ try {
     await p.locator('.jobs-recent').getByText('flight-12.ulg.fseal').waitFor();
     await layout(p, 'jobs memory', [320]);
     await ctx.close();
+  });
+  await check('a full job list and a failed job write each say so; the seal itself still finishes', async () => {
+    const full = await browser.newContext({ serviceWorkers: 'block', viewport: { width: 1440, height: 900 } });
+    const p = await full.newPage();
+    p.on('pageerror', (e) => runtimeErrors.push(`full: ${e}`));
+    await p.goto(`${url}#/app/jobs`); await p.locator('#page-jobs').waitFor();
+    await seed(p, 1000);
+    await sealSmall(p, 'F-1');
+    await p.getByText("This browser's job list is full (1,000 jobs). Remove old jobs on Jobs to keep new ones.").waitFor();
+    await full.close();
+    const broken = await browser.newContext({ serviceWorkers: 'block', viewport: { width: 1440, height: 900 } });
+    await broken.addInitScript(() => { const put = IDBObjectStore.prototype.put; IDBObjectStore.prototype.put = function (...a) { if (this.name === 'jobs') throw new DOMException('refused', 'DataError'); return put.apply(this, a); }; });
+    const b = await broken.newPage();
+    b.on('pageerror', (e) => runtimeErrors.push(`broken: ${e}`));
+    await b.goto(`${url}#/app/protect`); await b.locator('#page-protect').waitFor();
+    await sealSmall(b, 'E-1');
+    await b.getByText("Couldn't add this to Jobs. The sealed file and receipt message above are not affected.").waitFor();
+    assert.equal(await b.locator('#handover-text').isVisible(), true);
+    await broken.close();
   });
   await context.close();
 } finally {

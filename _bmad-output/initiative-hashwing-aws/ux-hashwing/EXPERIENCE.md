@@ -483,7 +483,7 @@ Jobs                                        Saved in this browser only. Not a cl
 - **What a job is.** A local record of one sealing: optional job reference, package name, mode, item count and byte total, the receipt message, the registry row state (flag on), and the sealed time. Never file bytes, never the signing key.
 - **Status values and filter.** Sealed locally, Waiting for connection, Registering, Last confirmed by this device {date}, Needs attention, Registered, later deleted. Flag off shows Sealed locally only, and the filter is hidden. Filter options are those values plus All.
 - **Search.** Case-insensitive substring over job reference and package name, applied as you type, 25 rows per page. The page and search are in the URL (`#/jobs?q=…&page=2`) so Back and Forward step through them.
-- **Resume.** Opens Seal & send at the after-sealing step for that job: download (only while the sealed file or list is still held in this tab's memory; it is never written to browser storage), copy message, share link. If the package bytes are not held, it says "Choose {name} again to download it; HashWing didn't keep a copy." Large-file originals are never held.
+- **Resume.** Opens Seal & send at the after-sealing step for that job: download (only while the sealed file or list is still held in this tab's memory; it is never written to browser storage), copy message, share link. If the package bytes are not held, it says "HashWing didn't keep a copy of {name}. Use the copy you downloaded when you sealed it." (changed 2026-11-18 in review: there is no file chooser on that step), and the download step drops its "It holds…" line. Large-file originals are never held. While a seal is running, Resume is disabled with "Finish or cancel the seal in progress first."
 - **Export.** Downloads `hashwing-job-{ref or date}.json` with the job's metadata and receipt message. Not the files.
 - **Remove.** A confirm dialog: "Remove this job from this browser? The sealed file and anything you sent are not affected." Buttons "Remove" and "Keep it" (default focus). A job with a pending registry proof says the proof stays in the export list until it registers or is exported.
 - **Retention.** "Kept until you remove it or clear this browser's data." Shown once under the heading.
@@ -536,7 +536,8 @@ Every route keeps its hash URL, Back/Forward and heading focus. Inside a route, 
 | Seal or check error | the field in error, which names the message through `aria-describedby` (no `role="alert"` on top) | none; the message is read with the field |
 | Check finished | the verdict headline (`tabindex="-1"`), whose text is read on focus | none (no separate live text, so it is not read twice) |
 | Seal more files | the "What are you sealing?" heading | none |
-| Jobs page or search changed | the table caption | "Showing 26–50 of 61" or "3 jobs match" |
+| Jobs page changed (Previous, Next) | the table caption, which is read on focus | none (not read twice) |
+| Jobs search changed (as you type) | stays in the search field | "3 jobs match" |
 | Job removed | the next row's Resume button, or the heading if none | "Job removed" |
 | Progress | stays put | `<progress>` with `aria-valuetext` ("4.1 GiB of 8.4 GiB"); announced at 25%, 50%, 75% and on completion |
 

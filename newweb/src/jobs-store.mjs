@@ -26,7 +26,10 @@ async function sha256hex(value) {
 }
 export const jobsDbName = async (scope) => `hashwing-jobs-v1-${await sha256hex(scope)}`;
 const done = (tx) => new Promise((resolve, reject) => { tx.oncomplete = () => resolve(); tx.onerror = () => reject(tx.error); tx.onabort = () => reject(tx.error || new Error('aborted')); });
-const newest = (rows) => rows.sort((a, b) => b.sealedAt - a.sealedAt);
+// Reading back: only rows that pass the same check as a write, projected to the allowed fields. Anything else in the
+// database (another page on this origin, an old version, a hand edit) is skipped rather than allowed to break the page.
+const valid = (rows) => rows.flatMap((r) => { try { return [checkJob(r)]; } catch { return []; } });
+const newest = (rows) => valid(rows).sort((a, b) => b.sealedAt - a.sealedAt);
 
 const memory = new Map(); // scope -> rows: this tab only, so switching profiles and back keeps them until the tab closes
 function memoryStore(scope) {
@@ -34,7 +37,7 @@ function memoryStore(scope) {
   const rows = memory.get(scope);
   return {
     storage: 'memory',
-    async list() { return newest([...rows.values()].map((r) => ({ ...r }))); },
+    async list() { return newest([...rows.values()]); },
     async put(row) { const clean = checkJob(row); if (!rows.has(clean.id) && rows.size >= MAX_JOBS) throw new RangeError('jobs-store: full'); rows.set(clean.id, clean); },
     async remove(id) { rows.delete(id); },
     close() {},

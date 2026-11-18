@@ -21,13 +21,16 @@ export function jobExport(job) {
 
 const Status = () => <span className="status-label jobs-status"><CircleDot aria-hidden="true" size={12} />Sealed locally</span>;
 
-export function JobsPage({ rows, storage, error, q, page, onUrl, onResume, onRemove, onDownload, sealHref, onSeal }) {
+export const SEAL_RUNNING = 'Finish or cancel the seal in progress first.';
+const REMOVE_FAILED = "Couldn't remove this job. Try again, or reload the page.";
+
+export function JobsPage({ rows, loaded, storage, error, q, page, onUrl, onResume, resumeBlocked, onRemove, onDownload, sealHref, onSeal }) {
   const [exportError, setExportError] = useState('');
+  const [removeError, setRemoveError] = useState('');
   const [announce, setAnnounce] = useState('');
   const [removing, setRemoving] = useState(null);
   const captionRef = useRef(null);
   const searchRef = useRef(null);
-  const typingRef = useRef(false);
   const focusCaptionRef = useRef(false);
   const dialogRef = useRef(null);
   const keepRef = useRef(null);
@@ -43,20 +46,21 @@ export function JobsPage({ rows, storage, error, q, page, onUrl, onResume, onRem
     ? `${matches.length} job${matches.length === 1 ? ' matches' : 's match'}${pages > 1 ? ` · showing ${first}–${last}` : ''}`
     : `Showing ${first}–${last} of ${matches.length}`;
   const seen = useRef(null);
-  useEffect(() => { // page or search changed: say so once, politely; a page change also moves focus to the caption
+  useEffect(() => { // a page change moves focus to the caption (read once on focus); a search change is announced politely
     const key = `${needle}|${current}`;
-    if (seen.current !== null && seen.current !== key) setAnnounce(caption);
-    seen.current = key;
     if (focusCaptionRef.current) { focusCaptionRef.current = false; captionRef.current?.focus(); }
+    else if (seen.current !== null && seen.current !== key) setAnnounce(caption);
+    seen.current = key;
   }, [needle, current]); // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => { if (loaded && rows.length && page !== current) onUrl({ q, page: current }, 'replace'); }, [loaded, rows.length, page, current]); // eslint-disable-line react-hooks/exhaustive-deps -- an out-of-range ?page settles on a real one
   useEffect(() => { // after Remove: the next row's Resume, or the page heading
     const next = afterRemoveRef.current;
     if (!next) return;
     afterRemoveRef.current = null;
     (next.id && document.getElementById(`job-resume-${next.id}`) || document.getElementById('page-jobs'))?.focus();
   }, [rows]);
-  // Typing replaces the URL after its first letter, so Back leaves the search in one step; Previous and Next push.
-  const search = (value) => { onUrl({ q: value, page: 1 }, typingRef.current ? 'replace' : 'push'); typingRef.current = true; };
+  // Starting a search adds a history entry; editing one replaces it, so Back leaves the search in one step. Previous and Next push.
+  const search = (value) => onUrl({ q: value, page: 1 }, q ? 'replace' : 'push');
   const goPage = (n) => { focusCaptionRef.current = true; onUrl({ q, page: n }, 'push'); };
   const exportJob = (job) => {
     try { const out = jobExport(job); onDownload(out.name, out.text); setExportError(''); }
@@ -69,30 +73,32 @@ export function JobsPage({ rows, storage, error, q, page, onUrl, onResume, onRem
     afterRemoveRef.current = { id: (shown[i + 1] || shown[i - 1])?.id || null };
     triggerRef.current = null;
     dialogRef.current?.close();
-    await onRemove(job.id);
-    setAnnounce('Job removed');
+    try { await onRemove(job.id); setRemoveError(''); setAnnounce('Job removed'); }
+    catch { afterRemoveRef.current = null; setRemoveError(REMOVE_FAILED); }
   };
   return <section className="screen jobs-screen" aria-label="Jobs">
     <div className="jobs-intro"><p>Saved in this browser only. Not a cloud copy.</p><p className="field-hint">Kept until you remove it or clear this browser's data.</p></div>
     {storage === 'memory' && <p className="jobs-notice">{STORAGE_MEMORY}</p>}
     {error && <p className="jobs-notice" role="alert">{error}</p>}
     {exportError && <p className="jobs-notice receipt-error" role="alert">{exportError}</p>}
+    {removeError && <p className="jobs-notice receipt-error" role="alert">{removeError}</p>}
+    {resumeBlocked && rows.length > 0 && <p className="jobs-notice" id="jobs-resume-blocked">{SEAL_RUNNING}</p>}
     {!rows.length ? <div className="jobs-empty"><p>Nothing sealed in this browser yet.</p><a href={sealHref} onClick={onSeal}>Seal files</a></div> : <>
       <div className="jobs-search">
         <label className="field-label" htmlFor="jobs-search">Search job reference or file name</label>
-        <input id="jobs-search" ref={searchRef} type="search" value={q} maxLength={200} autoComplete="off" onChange={(e) => search(e.target.value)} onBlur={() => { typingRef.current = false; }} />
+        <input id="jobs-search" ref={searchRef} type="search" value={q} maxLength={200} autoComplete="off" onChange={(e) => search(e.target.value)} />
       </div>
-      {!matches.length ? <div className="jobs-empty"><p>No jobs match "{q.trim()}".</p><button type="button" className="button secondary" onClick={() => { typingRef.current = false; onUrl({ q: '', page: 1 }, 'push'); searchRef.current?.focus(); }}>Clear search</button></div> : <>
+      {!matches.length ? <div className="jobs-empty"><p>No jobs match "{q.trim()}".</p><button type="button" className="button secondary" onClick={() => { onUrl({ q: '', page: 1 }, 'push'); searchRef.current?.focus(); }}>Clear search</button></div> : <>
         <table className="jobs-table">
           <caption ref={captionRef} tabIndex="-1">{caption}</caption>
           <thead><tr><th scope="col">Job ref</th><th scope="col">Package</th><th scope="col">Status</th><th scope="col">Sealed</th><th scope="col">Actions</th></tr></thead>
           <tbody>{shown.map((job) => <tr key={job.id}>
-            <td className="jobs-ref">{job.jobRef || <><span aria-hidden="true">—</span><span className="visually-hidden">No job reference</span></>}</td>
+            <td className={`jobs-ref${job.jobRef ? '' : ' jobs-ref-empty'}`}>{job.jobRef || <><span aria-hidden="true">—</span><span className="visually-hidden">No job reference</span></>}</td>
             <td className="jobs-name wrap">{job.name}</td>
             <td><Status /></td>
             <td className="jobs-when">{when(job.sealedAt)}</td>
             <td><div className="jobs-actions">
-              <button id={`job-resume-${job.id}`} type="button" className="button secondary" aria-label={`Resume ${job.name}`} onClick={() => onResume(job)}>Resume</button>
+              <button id={`job-resume-${job.id}`} type="button" className="button secondary" aria-label={`Resume ${job.name}`} disabled={resumeBlocked} aria-describedby={resumeBlocked ? 'jobs-resume-blocked' : undefined} onClick={() => onResume(job)}>Resume</button>
               <button type="button" className="button secondary" aria-label={`Export ${job.name}`} onClick={() => exportJob(job)}>Export</button>
               <button type="button" className="button secondary" aria-label={`Remove ${job.name}`} onClick={(e) => askRemove(job, e)}>Remove</button>
             </div></td>

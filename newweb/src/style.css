@@ -1251,6 +1251,7 @@ input[type=datetime-local] { width: 100%; max-width: 320px; min-width: 0; min-he
 .jobs-search input { min-height: 44px; }
 table.jobs-table { min-width: 0; width: 100%; table-layout: auto; }
 .jobs-table caption { padding: 8px 0; text-align: left; color: var(--muted); font-variant-numeric: tabular-nums; }
+.jobs-table caption:focus-visible { outline: 3px solid #2355ba; outline-offset: 3px; }
 .jobs-table th, .jobs-table td { padding: 8px; text-align: left; vertical-align: middle; border-bottom: 1px solid var(--line); }
 .jobs-when { font-variant-numeric: tabular-nums; white-space: nowrap; }
 .jobs-name { min-width: 0; overflow-wrap: anywhere; }
@@ -1267,9 +1268,12 @@ table.jobs-table { min-width: 0; width: 100%; table-layout: auto; }
 /* 390px and below: each row becomes a summary (package, status, time), then full-width secondary actions. */
 @media (max-width: 600px) {
   .jobs-table thead { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0, 0, 0, 0); }
-  .jobs-table, .jobs-table tbody, .jobs-table tr, .jobs-table td { display: block; }
+  .jobs-table, .jobs-table tbody, .jobs-table td { display: block; }
   .jobs-table caption { display: block; }
-  .jobs-table tr { padding: 10px 0; border-bottom: 1px solid var(--line); }
+  /* package first, its job ref under it, then status and time, then the actions */
+  .jobs-table tr { display: flex; flex-direction: column; padding: 10px 0; border-bottom: 1px solid var(--line); }
+  .jobs-table .jobs-name { order: 1; } .jobs-table .jobs-ref { order: 2; color: var(--muted); } .jobs-table td:nth-child(3) { order: 3; } .jobs-table .jobs-when { order: 4; } .jobs-table td:last-child { order: 5; }
+  .jobs-table .jobs-ref-empty { display: none; }
   .jobs-table td { padding: 2px 0; border: 0; }
   .jobs-table .jobs-name { font-weight: 600; }
   .jobs-actions { display: grid; gap: 6px; margin-top: 8px; }
