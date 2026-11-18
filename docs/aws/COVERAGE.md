@@ -3,7 +3,8 @@
 Columns:
 
 - **Local:** pytest over the in-memory table with an injected clock (`python3 -m pytest -q registry/tests`). These
-  are unit tests, not integration tests.
+  are unit tests, not integration tests. Rows that say so were also run in Playwright Chromium against the dev ONLY
+  `registry/devserver/server.py` on a loopback port (`node --test newweb/tests/outbox-browser.mjs`).
 - **LocalStack:** `registry/localstack/e2e.py` against `localstack/localstack:4.12.0@sha256:0df3a97da57de03a588c05d9b8f390f15c7033fc7c4512f94619d344bc3cd317`
   (community edition), through a **REST API v1 `{proxy+}` stand-in** with the dev-hs256 adapter, a real Lambda
   (python3.12, arm64) and DynamoDB. Evidence: [evidence/localstack-4.12.0.json](evidence/localstack-4.12.0.json).
@@ -31,6 +32,7 @@ Columns:
 | Monthly quota → 429 with no partial write | yes | — | not verified | |
 | Body over 4096 bytes → 413; invalid base64 body → 400; deeply nested JSON or token header → 400 / 401 | yes | — | not verified | |
 | Share lifecycle; unknown / withdrawn / expired / deleted → identical 404 | yes | pass (create, view, withdraw, 404) | not verified | |
+| Malformed share paths (bad characters, wrong length, extra segments) → the same 404 status, headers and body as an unknown token, from any origin, in the Lambda. On the HTTP API, empty or multi-segment paths get API Gateway's own 404 instead | yes | — | not verified | |
 | Withdrawn share stays 404 after an identical register retry | yes | pass | not verified | |
 | Deletion withdraws the registration's shares and tombstones it | yes | pass (state read back from DynamoDB) | not verified | |
 | Store read errors fail closed (503) | yes (injected failures) | — | not verified | |
@@ -46,7 +48,7 @@ Columns:
 | Lambda and REST API after `docker restart` | — | **did not survive** (function and API gone) | not verified | |
 | DynamoDB data after `docker rm` and re-create on the same volume | — | survived | not verified | |
 | Lambda and REST API after re-create | — | **did not survive** | not verified | |
-| HTTP API, JWT authorizer, `$default` stage throttling | — | blocked: not in the community plan | not verified | synthesised; asserted in `infra/test/stack.test.ts` |
+| HTTP API, JWT authorizer, `$default` stage throttling (2 rps, burst 5) | — | blocked: not in the community plan | not verified | synthesised; asserted in `infra/test/stack.test.ts` |
 | Public share route throttle (2 rps, burst 5) on top of the stage default | — | blocked: HTTP API not in the community plan | not verified | synthesised; asserted (`RouteSettings` and the stage's dependency on the route) |
 | CORS on the HTTP API: exact allowlisted origins, no `*`, no credentials, `authorization` / `content-type` / `idempotency-key` | — | blocked: HTTP API not in the community plan | not verified | synthesised; asserted (bad origins rejected at synth) |
 | CORS in the Lambda (`CORS_ORIGINS`): preflight 204/403, origin echoed only when allowlisted, public share view `*` without credentials | yes | not run (the REST v1 stand-in run sets no `CORS_ORIGINS`) | not verified | |
@@ -57,7 +59,9 @@ Columns:
 | IAM scoped to the table ARN with item actions only | — | not enforced by LocalStack community | not verified | synthesised; asserted |
 | Log group with 7-day retention | — | — | not verified | synthesised; asserted |
 | Optional budget (only with `BudgetEmail`) | — | — | not verified | synthesised; asserted |
+| Lambda asset holds only `handler.py` and `registry/*.py` (no dev server, tests, LocalStack scripts or `__pycache__`) | — | — | not verified | synthesised; asserted (built asset directory listed) |
 | `cdklocal deploy` of the real stack + e2e against the HTTP API | — | not run (needs LocalStack Pro; `deploy_cdklocal.sh` exits 2 without a token) | not verified | yes |
 | `cdk destroy` leaves nothing behind | — | — | not verified | runbook only |
 | Cost figures | — | — | not verified | estimate in [COST.md](COST.md) |
+| Accepted low-severity disclosure: `POST /v1/shares` with a token hash that was ever used (even withdrawn or expired) → 409 `conflict`, an unused one → 201 (which creates a real share, counted toward the 10-share limit). Visible only to a caller who holds the token or its hash and has an active registration; it names no org | yes (409 asserted for a withdrawn, expired share) | — | not verified | accepted, see [ARCHITECTURE_AWS.md](ARCHITECTURE_AWS.md) Shares |
 | Known gap: a backup restore drops registrations and shares created after the backup, while the browser outbox may still show "Registered" | no (not fixed) | — | not verified | see [ARCHITECTURE_AWS.md](ARCHITECTURE_AWS.md) Backup restore |

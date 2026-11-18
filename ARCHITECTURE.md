@@ -2,7 +2,7 @@
 
 **Status (2026-11-17):** verification and sealing remain browser-local. The optional HTTP runtime now adds session-owned SQLite workspaces, explicit source/result uploads, durable sessions and logical snapshots alongside direct routes and process health. GitHub Pages remains a static deployment. The native C++ CLI and the new
 WebAssembly bridge and React console are implemented under `wasm/`, `newweb/` and `docs/console/`. No AWS account or credentials are configured, and no cloud resources
-have been created. AWS below is an optional proposal, not the deployed architecture.
+have been created. The optional receipt registry below is implemented and tested locally and in LocalStack, not deployed.
 
 ## Current system
 
@@ -48,39 +48,39 @@ structure is a sequential SHA-256 chain, not a Merkle tree. A receipt binds a re
 independently held receipt and independently trusted public key are required for protection against a complete
 rewrite.
 
-## Optional AWS archive design (not deployed)
+## Optional receipt registry on AWS (not deployed)
+
+`registry/` (Python Lambda) and `infra/` (CDK) implement an optional witness server for receipts. A pilot's sealer
+sends a receipt v1 line; the registry checks its Ed25519 signature against the company's enrolled key and stores only
+the commitment: org, key fingerprint, head, count and the time the server received it. A company can hand out
+unguessable share links that show only that commitment. The registry never receives logs, files, manifests, salts,
+per-file digests, file names, GPS or notes, and the browser seals and verifies without it.
 
 ```mermaid
 flowchart LR
-  O[Operator workstation: convert / seal after download] -->|explicit upload| S3[(Versioned S3 Object Lock: log + receipts + manifest)]
-  O -->|trusted-key provisioning outside log upload| T[Verifier / witness]
-  E[S3 object-created event] --> L[Lambda: bounds, identifiers, signature and chain validation]
-  L -->|optional signing adapter after Ed25519 interoperability test| K[AWS KMS Ed25519]
-  L -->|metadata only; no telemetry payload| A[Athena query over validated manifest/catalog]
-  V[Investigator] -->|authorized read| S3
-  V -->|downloaded artifacts + trusted key| B[Local browser or CLI verification]
+  P[Pilot browser: seal locally] -->|receipt v1 + ID token| G[API Gateway HTTP API + Cognito JWT authorizer]
+  A[Company admin] -->|enroll key, delete, withdraw| G
+  V[Anyone with a share link] -->|GET /v1/shares/token, no login| G
+  G --> L[Lambda python3.12: identity, schema, signature, key state]
+  L --> D[(DynamoDB: commitments, idempotency, shares, tombstones)]
+  F[Original files] -. stay on operator storage .- P
 ```
 
-This is a possible archive and review workflow, not a real-time sealing service. A completed object event cannot
-provide receipts throughout a flight. If a future service is asked to seal, its witness and signing trust boundary
-must be designed separately so one compromised operator role cannot replace both the log and its receipts. Use
-S3 Object Lock with versioning and a deliberately selected retention mode: governance mode allows principals with
-the bypass permission to change retention/delete; compliance mode prevents deletion of a protected version during
-retention, including by the account root. Object Lock protects object versions from specified changes/deletion;
-it does not show that contents are accurate or that the first uploaded version was honest ([AWS Object Lock
-overview](https://docs.aws.amazon.com/AmazonS3/latest/userguide/object-lock.html), [retention modes](https://docs.aws.amazon.com/AmazonS3/latest/userguide/object-lock.html#object-lock-retention-modes)).
+**Status.** The code and its tests run locally. The CDK stack synthesises with no credentials. A LocalStack 4.12.0
+community run exercised the Lambda and DynamoDB through a REST API v1 stand-in with a dev-only HS256 identity
+adapter; the HTTP API and Cognito are designed and synthesised only. Nothing has been deployed to real AWS. The
+registry's received time is its own clock, not a trusted timestamp; RFC 3161 and S3 Object Lock are not built.
+$5 a month is a workload target, not a cap.
 
-AWS KMS now documents `ECC_NIST_EDWARDS25519` with `ED25519_SHA_512` (`MessageType: RAW`) and
-`ED25519_PH_SHA_512` (`MessageType: DIGEST`). These are not interchangeable. Before mapping KMS to receipt v1,
-verify a real KMS signature over the exact v1 message against the existing OpenSSL/browser verifier and confirm
-public-key serialization. ECDSA is not a substitute: v1 requires Ed25519. Until that fixture passes, keep KMS as an
-unapproved integration point ([AWS KMS key specs and algorithms](https://docs.aws.amazon.com/kms/latest/developerguide/symm-asymm-choose-key-spec.html), [KMS Sign API](https://docs.aws.amazon.com/kms/latest/APIReference/API_Sign.html)).
+- [docs/aws/ARCHITECTURE_AWS.md](docs/aws/ARCHITECTURE_AWS.md): trust boundaries, identity adapter, data stored and never stored, idempotency, withdrawal, deletion and restore
+- [docs/aws/COVERAGE.md](docs/aws/COVERAGE.md): what was checked locally, in LocalStack, on real AWS (nothing) and designed only
+- [docs/aws/COST.md](docs/aws/COST.md): us-east-1 estimate, error and abuse scenarios
+- [docs/aws/RUNBOOK_AWS.md](docs/aws/RUNBOOK_AWS.md): deploy, destroy, roll back, restore, LocalStack
+- [Architecture spine](_bmad-output/initiative-hashwing-aws/architecture-hashwing-aws/architecture-hashwing-aws.md): the binding decisions for further AWS work
 
-Lambda should process an S3 object reference rather than accept a large log in an API request. Bound object size,
-receipt count, execution time, retries, and concurrent jobs; make processing idempotent by object version ID. Athena
-should query small manifests/operational metadata, not parse arbitrary raw flight payloads. Do not publish a static
-JSON “metrics” file as a substitute for live telemetry or a metrics endpoint. Cloudflare Pages is a possible static
-hosting alternative only; it does not provide the proposed private archive/signing backend by itself.
+An earlier idea for an S3 Object Lock archive with Lambda validation, KMS Ed25519 signing and Athena queries
+([decision 17](DECISIONS.md)) was not built and is not part of the registry. If KMS signing is ever proposed, a real
+KMS signature over the exact receipt v1 message must first pass the existing verifiers.
 
 ## Readiness and trust boundaries
 
@@ -89,8 +89,9 @@ hosting alternative only; it does not provide the proposed private archive/signi
 - The signing private key is not persisted by the sandbox browser: its generated key is ephemeral and lost when its
   worker is terminated. A downloaded log/receipt after the fact is not an independent witness.
 - Key theft permits forged future receipts. It does not invalidate receipts already held by an independent witness,
-  unless that witness copy is also replaced. There is no built-in certificate registry, identity binding, revocation
-  service, or trusted timestamp. Key rotation/revocation therefore needs an external operator process and a trusted
+  unless that witness copy is also replaced. The local tools have no built-in certificate registry, identity binding,
+  revocation service, or trusted timestamp; the optional registry adds key enrollment and compromise reporting but
+  is not deployed and does not certify company identity. Key rotation/revocation therefore needs an external operator process and a trusted
   key history; a verifier must not infer identity from a key supplied alongside the log.
 - Receipts do not include a flight identifier, so two flights sealed with one key can be confused operationally.
   A signed count/head mismatch can indicate a rewrite or receipts from another flight.
@@ -171,11 +172,11 @@ or native throughput. A separate native crash/recovery benchmark was exercised o
 storage; its workload and platform-specific measurements belong to the verification report, not
 this browser timing panel.
 
-No AWS runtime integration is added by the frontend. The proposed archive/signing services above
-remain proposals and need their own compatibility and operational validation. Local Space Grotesk
+No AWS runtime integration is added by the frontend. The optional receipt registry above is not
+deployed and needs real-AWS validation. Local Space Grotesk
 and JetBrains Mono font assets include their SIL OFL notices under `newweb/public/fonts/`.
 
 
 ## Implemented private server mode
 
-Four product routes (`/overview`, `/workbench`, `/reports`, `/settings`) expose actual workflows and stored evidence. Optional server persistence uses SQLite WAL on a private UID10001 volume, opaque durable Beaker sessions and Argon2 accounts. Origin/CSRF/owner checks, quotas and idempotent saves are enforced by the server. No reconnect upload, private signing-key storage or private API caching occurs. Snapshots stay on the same local volume; they are not an independent device backup. See [server workspaces](SERVER_WORKSPACES.md) for contracts, launch, limits and recovery. AWS diagrams elsewhere remain proposals.
+Four product routes (`/overview`, `/workbench`, `/reports`, `/settings`) expose actual workflows and stored evidence. Optional server persistence uses SQLite WAL on a private UID10001 volume, opaque durable Beaker sessions and Argon2 accounts. Origin/CSRF/owner checks, quotas and idempotent saves are enforced by the server. No reconnect upload, private signing-key storage or private API caching occurs. Snapshots stay on the same local volume; they are not an independent device backup. See [server workspaces](SERVER_WORKSPACES.md) for contracts, launch, limits and recovery. The AWS receipt registry is a separate, optional service and is not deployed.

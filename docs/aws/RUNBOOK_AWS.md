@@ -36,6 +36,26 @@ Clients sign in with SRP and send the **ID token** as `Authorization: Bearer <id
 First steps for a company: an admin calls `GET /v1/keys/challenge`, signs the returned `message` with the
 sealer's Ed25519 key, and posts `{public_key, nonce, signature}` to `POST /v1/keys`.
 
+## When the budget alert fires
+
+The budget email only warns. Nothing stops requests or spend until you act. Pick one:
+
+1. **Stop all traffic now, keep the data.** Delete the `$default` stage. The API then answers nothing and nothing
+   reaches the Lambda:
+
+   ```sh
+   aws apigatewayv2 delete-stage --api-id <ApiId> --stage-name '$default'
+   ```
+
+   CloudFormation does not notice a stage deleted this way, so a plain `npx cdk deploy` may not bring it back.
+   This has not been tested. The one way back known to work is to destroy and deploy again, which also deletes the
+   table.
+2. **Remove everything:** follow "Destroy" below with `npx cdk destroy HashWingRegistry`. The table and the user
+   pool are deleted with the stack.
+
+Then check Cost Explorer for which line grew: API Gateway requests, Lambda, DynamoDB or logs (see the abuse
+scenario in [COST.md](COST.md)). Do not add a WAF: it has a fixed monthly fee.
+
 ## Destroy and check that nothing remains
 
 ```sh

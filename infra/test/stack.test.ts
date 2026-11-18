@@ -3,6 +3,8 @@ import assert from 'node:assert/strict';
 import { App } from 'aws-cdk-lib';
 import { Match, Template } from 'aws-cdk-lib/assertions';
 import { RegistryStack } from '../lib/stack';
+import { existsSync, readdirSync, statSync } from 'node:fs';
+import { join, sep } from 'node:path';
 
 // Synth with no credentials: an environment-agnostic stack performs no lookups.
 for (const v of ['AWS_ACCESS_KEY_ID', 'AWS_SECRET_ACCESS_KEY', 'AWS_SESSION_TOKEN', 'AWS_PROFILE']) delete process.env[v];
@@ -85,11 +87,11 @@ test('Cognito: Lite plan, no self sign-up, org_id and role not writable by the a
   assert.equal(client.Properties.GenerateSecret, false);
 });
 
-test('HTTP API: default stage throttled at rate 10, burst 20', () => {
+test('HTTP API: default stage throttled at rate 2, burst 5 (sized for about 5 users)', () => {
   t.hasResourceProperties('AWS::ApiGatewayV2::Stage', {
     StageName: '$default',
     AutoDeploy: true,
-    DefaultRouteSettings: { ThrottlingRateLimit: 10, ThrottlingBurstLimit: 20 },
+    DefaultRouteSettings: { ThrottlingRateLimit: 2, ThrottlingBurstLimit: 5 },
   });
 });
 
@@ -132,12 +134,12 @@ test('restore mode serves the restored table, closed by RESTORED_FROM, with the 
   assert.throws(() => new RegistryStack(new App(), 'NoId', { restoredTableName: 'x', restoredFrom: 'y' }));
 });
 
-test('the public share check has its own tighter throttle (2 rps, burst 5); other routes keep the stage default', () => {
+test('the public share check has its own tighter throttle (2 rps, burst 5); other routes use the stage default', () => {
   const [[, stage]] = resources('AWS::ApiGatewayV2::Stage');
   assert.deepEqual(stage.Properties.RouteSettings, {
     'GET /v1/shares/{token}': { ThrottlingRateLimit: 2, ThrottlingBurstLimit: 5 },
   });
-  assert.deepEqual(stage.Properties.DefaultRouteSettings, { ThrottlingRateLimit: 10, ThrottlingBurstLimit: 20 });
+  assert.deepEqual(stage.Properties.DefaultRouteSettings, { ThrottlingRateLimit: 2, ThrottlingBurstLimit: 5 });
   // route settings name a route key, so the stage must be created after that route
   const [publicRouteId] = resources('AWS::ApiGatewayV2::Route')
     .find(([, r]) => r.Properties.RouteKey === 'GET /v1/shares/{token}')!;
@@ -172,4 +174,17 @@ test('no fixed-fee services', () => {
     'AWS::Route53::HostedZone', 'AWS::SecretsManager::Secret']) {
     assert.equal(resources(type).length, 0, type);
   }
+});
+
+test('Lambda asset holds only the runtime: handler.py and registry/*.py', () => {
+  const app = new App();
+  new RegistryStack(app, 'Asset');
+  const dir = app.synth().directory;
+  const assets = readdirSync(dir).filter((d) => d.startsWith('asset.') && existsSync(join(dir, d, 'handler.py')));
+  assert.equal(assets.length, 1);
+  const root = join(dir, assets[0]);
+  const files = (readdirSync(root, { recursive: true }) as string[])
+    .filter((f) => statSync(join(root, f)).isFile()).map((f) => f.split(sep).join('/')).sort();
+  assert.ok(files.includes('handler.py') && files.includes('registry/app.py'));
+  for (const f of files) assert.match(f, /^(handler\.py|registry\/[a-z0-9_]+\.py)$/, `unexpected file in asset: ${f}`);
 });
