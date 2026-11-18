@@ -84,8 +84,9 @@ Coordinator corrections applied: `base_name` uses the platform basename (`os.pat
 MANIFEST_MODE.md. A compromised record survives remove, then reload, then the integrity filter.
 
 Surprise: the browser check "Pin controls on the check form" pinned a key that the previous check had marked
-compromised. It now asserts the refusal, then pins a fresh key. The rebuilt CSS gains one `.fixed` rule; it comes
-from Tailwind's source scan, not from any source edit here.
+compromised. It now asserts the refusal, then pins a fresh key. The rebuilt CSS gains one `.fixed` rule even though no
+CSS source changed. The cause is not identified: rebuilding without `_bmad/`, with a real `npm ci` install and without the
+`tests/web/node_modules` symlink gave the same CSS.
 
 ## Review Triage Log
 
@@ -103,8 +104,10 @@ from Tailwind's source scan, not from any source edit here.
 
 Status: built. The five fixes from the intent are implemented, with tests written to fail first. Patched after review: the cap
 comment, a THREAT_MODEL sentence, and the restored licence file. Deferred: the 3 items above. Follow-up review: false (no high
-patched; 0 medium patched). Verification: JS gate 142/142, newweb unit 112/112, pytest 144 passed / 30 skipped,
-test:browser 48 ok, edge-matrix ok. Residual risk: main.jsx copy for Remove (wiring builder).
+patched; 0 medium patched). Verification before the merge: JS gate 142/142, newweb unit 112/112, pytest 144 passed / 30 skipped.
+After merging origin/main 9c47ac3: JS gate 142/142, newweb unit 113/113, outbox 46/46, pytest 145 passed / 30 skipped
+(tests/test_manifest.py: 11 passed, 1 skipped), test:browser 48 ok, edge-matrix 9 ok, e2e 5 ok, routes 6 ok,
+gitleaks: no leaks. Not run: ctest, wasm, outbox-browser, infra, and the Windows branch of the base_name test. Residual risk: main.jsx copy for Remove (wiring builder).
 
 ## Verification
 
