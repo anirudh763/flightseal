@@ -6,7 +6,7 @@ import { WEAK_KEY_MESSAGE, blobSource, checkReceipts, hex, parseHex, parseReceip
 import { parseHandover } from './rawfile.js';
 
 export const MANIFEST_LIMITS = Object.freeze({ maxItems: 100, maxPayloadBytes: 65536, maxNameBytes: 255, maxNoteBytes: 1000, maxSize: 999_999_999_999_999 });
-export const MANIFEST_STATUS = Object.freeze({ match: 'Matches', 'bytes-differ': 'Bytes differ', missing: 'Missing', 'not-in-manifest': 'Not in manifest' });
+export const MANIFEST_STATUS = Object.freeze({ match: 'Matches', 'bytes-differ': 'Bytes differ', missing: 'Missing', 'not-in-manifest': 'Not in the list' }); // label only; the status key is unchanged
 const MAX_SEALED_BYTES = 8 + 20 + MANIFEST_LIMITS.maxPayloadBytes + 36;
 const LONE_SURROGATE = /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/;
 const FIELD = "[A-Za-z0-9%\\-_.!~*'()]*";

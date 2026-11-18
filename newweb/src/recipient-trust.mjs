@@ -98,10 +98,80 @@ export const BYTES_DIFFER = Object.freeze({
 });
 
 const groups = (hex) => String(hex || '').match(/.{1,4}/g)?.join(' ') || '';
-const STATUS = { match: 'Matches', 'bytes-differ': 'Bytes differ', missing: 'Missing', 'not-in-manifest': 'Not in manifest' };
+export const NOT_IN_LIST = 'Not in the list'; // the one name for extra files (EXPERIENCE.md "Verify verdicts"); the status key stays not-in-manifest
+const STATUS = { match: 'Matches', 'bytes-differ': 'Bytes differ', missing: 'Missing', 'not-in-manifest': NOT_IN_LIST };
+
+/**
+ * OWNER DECISION 1 (open; provisional strict choice, coordinator 2026-11-18). true: green "Verified" needs a key on
+ * this device's trusted list, so complete files from an unpinned, replaced or one-time key read
+ * "Files match · signer not confirmed". false: complete files read "Verified" whatever the key (the key trust line
+ * still qualifies it). This is the one switch; nothing else reads the decision.
+ */
+export const VERIFIED_NEEDS_TRUSTED_KEY = true;
+
+export const NOT_VERIFIED_NEXT = 'Check that you chose the right sealed file, pasted the whole receipt message, and entered the key the sender gave you separately.';
+const plural = (n, one, many) => `${n} ${n === 1 ? one : many}`;
+
+/**
+ * The Verify headline, first row that applies wins (EXPERIENCE.md "Verify verdicts"). signed: the signature checked
+ * out against the key used; reason: why not, when it didn't. items/extras: pairFiles output (status keys);
+ * coverage: { covered, total } receipt coverage or null. next.action: 'trust' | 'originals' | 'report' | null.
+ */
+export function verdict({ signed, reason = '', trust, items = [], extras = [], coverage = null }) {
+  const status = trust?.status || 'untrusted';
+  if (signed && status === 'compromised') return { key: 'compromised', headline: 'Signed by a key marked compromised', kind: 'bad', sentence: "This key was reported as compromised. Don't rely on these files until the company confirms them.", next: { text: 'Ask the company for a new seal', action: null } };
+  const keyFailed = ['wrong-key', 'invalid-signature', 'weak'].includes(status);
+  if (!signed || keyFailed) return { key: 'not-verified', headline: 'Not verified', kind: 'bad', sentence: keyFailed ? trustLine({ status }) : reason, next: { text: NOT_VERIFIED_NEXT, action: null } };
+  const count = (s) => items.filter((item) => item.status === s).length;
+  if (count('bytes-differ')) return { key: 'differ', headline: 'Files differ', kind: 'warn', sentence: BYTES_DIFFER.text, next: { text: 'Ask for the original files', action: null } };
+  const missing = count('missing');
+  if (missing || (coverage && Number(coverage.covered) < Number(coverage.total))) return { key: 'incomplete', headline: 'Incomplete', kind: 'warn', sentence: missing ? `${count('match')} of ${plural(items.length, 'file was', 'files were')} checked. A file that is missing can't be checked.` : `Receipts cover ${coverage.covered} of ${coverage.total} items.`, next: { text: 'Add the missing originals', action: missing ? 'originals' : null } };
+  if (extras.length) return { key: 'not-in-list', headline: NOT_IN_LIST, kind: 'warn', sentence: `Every listed file matches. ${extras.length === 1 ? "1 other file you chose isn't in the list and was not checked." : `${extras.length} other files you chose aren't in the list and were not checked.`}`, next: { text: "Remove files that aren't in the list", action: 'originals' } };
+  if (VERIFIED_NEEDS_TRUSTED_KEY && status !== 'trusted') return { key: 'signer-not-confirmed', headline: 'Files match · signer not confirmed', kind: 'warn', sentence: "The files match what was sealed, but you haven't confirmed who sealed them.", next: { text: "Confirm the company's fingerprint on Trust", action: 'trust' } };
+  return { key: 'verified', headline: 'Verified', kind: 'ok', sentence: status === 'trusted' ? 'Every file matches what was sealed, signed by a company you trust.' : 'Every file matches what was sealed.', next: { text: 'Download report', action: 'report' } };
+}
+
+/** "12 match · 1 differs · 1 missing · 0 not in the list" */
+export function countsLine(items = [], extras = []) {
+  const n = (s) => items.filter((item) => item.status === s).length;
+  return `${n('match')} match · ${n('bytes-differ')} ${n('bytes-differ') === 1 ? 'differs' : 'differ'} · ${n('missing')} missing · ${extras.length} not in the list`;
+}
+
+/**
+ * Pairing for Verify (AC-55): a named item pairs with the chosen file of the same name, so a renamed byte-identical
+ * file reads Missing plus Not in the list; an item sealed without a name pairs by size and SHA-256. Throws an Error
+ * with the user-facing sentence for the two ambiguous cases. locals: [{ name, bytes, sha256 }] in selection order.
+ * ponytail: matches by name only; folder picks (relative paths) are not offered, add path keys if they are.
+ */
+export function pairFiles(manifest, locals) {
+  const seen = new Set();
+  for (const local of locals) { if (seen.has(local.name)) throw new Error(`Two chosen files have the same path: ${local.name}. Choose one.`); seen.add(local.name); }
+  const folders = new Map();
+  for (const item of manifest.items) {
+    if (!item.name) continue;
+    const base = item.name.split('/').pop();
+    if (folders.has(base) && folders.get(base) !== item.name) throw new Error(`The list has two files named ${base} in different folders. Choose the folder instead of single files so each can be matched.`);
+    folders.set(base, item.name);
+  }
+  const items = manifest.items.map((item) => ({ ...item, status: null, local: null }));
+  const used = new Set();
+  const take = (item, test) => {
+    const index = locals.findIndex((local, i) => !used.has(i) && test(local));
+    if (index < 0) return;
+    used.add(index); item.local = index;
+    item.status = locals[index].bytes === item.bytes && locals[index].sha256 === item.sha256 ? 'match' : 'bytes-differ';
+  };
+  for (const item of items) if (item.name) take(item, (local) => local.name === item.name.split('/').pop());
+  for (const item of items) if (!item.name) take(item, (local) => local.bytes === item.bytes && local.sha256 === item.sha256);
+  for (const item of items) if (item.status === null) item.status = 'missing';
+  const extras = locals.flatMap((local, index) => used.has(index) ? [] : [{ local: index, name: local.name, bytes: local.bytes, sha256: local.sha256, status: 'not-in-manifest' }]);
+  return { items, extras, allMatch: !extras.length && items.every((item) => item.status === 'match') };
+}
 
 /** Report for a verified manifest check. items: compareFiles items; locals: hashed local files. */
 export function manifestReport({ sealedName = '', trust, sources = {}, keyFingerprint = '', head = '', sealedAt = '', items = [], extras = [], locals = [], registry = null }) {
+  const result = verdict({ signed: true, trust, items, extras });
+  const resultLine = `Result: ${result.headline}. ${result.sentence}`;
   const parsed = items.map((item) => ({ ...item, ...parseNote(item.note) }));
   const landings = [...new Set(parsed.map((item) => item.landing).filter(Boolean))];
   const fields = timeFields({ landing: landings.length === 1 ? landings[0] : landings.length ? 'Differs by item (see items)' : '', landingSigned: true, sealedAt, registry });
@@ -120,9 +190,10 @@ export function manifestReport({ sealedName = '', trust, sources = {}, keyFinger
     ...(item.note ? [`  Operator note: ${item.note}`] : []),
     ...(item.status === 'bytes-differ' ? [`  ${BYTES_DIFFER.title}: ${BYTES_DIFFER.text}`] : []),
   ]).flat();
-  const extraLines = extras.map((extra) => `Not in manifest: ${extra.name} (${extra.bytes} bytes, SHA-256 ${extra.sha256})`);
+  const extraLines = extras.map((extra) => `${NOT_IN_LIST}: ${extra.name} (${extra.bytes} bytes, SHA-256 ${extra.sha256})`);
   const text = [
     `HashWing manifest check report: ${sealedName}`,
+    resultLine,
     'Manifest: verified (signature checked)',
     `Key trust: ${line}`,
     ...(entry ? [`Key source: ${sources[entry.source] || entry.source}`] : []),
@@ -139,12 +210,12 @@ export function manifestReport({ sealedName = '', trust, sources = {}, keyFinger
     'Names, sizes and digests come from the signed manifest. Operator notes and times are what the operator entered; HashWing did not measure them.',
   ].join('\n') + '\n';
   const markdown = `# HashWing manifest check report\n\n${[
-    `- Sealed list: ${sealedName}`, '- Manifest: verified (signature checked)', `- Key trust: ${line}`,
+    `- Sealed list: ${sealedName}`, `- ${resultLine}`, '- Manifest: verified (signature checked)', `- Key trust: ${line}`,
     ...(entry ? [`- Key source: ${sources[entry.source] || entry.source}`] : []), `- Key fingerprint: \`SHA-256 ${groups(keyFingerprint)}\``, `- Chain head: \`${head}\``,
   ].join('\n')}\n\n## Times\n\n${fields.map((field) => `- ${field.label}: ${field.value} (${field.basis})`).join('\n')}\n\n## Files\n\n${[...itemLines, ...extraLines].map((l) => (l.startsWith('  ') ? `  - ${l.trim()}` : `- ${l}`)).join('\n')}\n${differs ? `\n## ${BYTES_DIFFER.title}\n\n${BYTES_DIFFER.text}\n` : ''}`;
   const keyTrust = { status: trust?.status || 'untrusted', line, company: entry?.name ?? null, source: entry?.source ?? null, sourceLabel: entry ? (sources[entry.source] || entry.source) : null, addedAt: entry?.addedAt || null, replacedAt: entry?.replacedAt || null, compromisedAt: entry?.compromisedAt || null, fingerprint: keyFingerprint || null };
   const json = JSON.stringify({
-    kind: 'hashwing-manifest-check', sealedFile: sealedName, manifestVerified: true, head, keyTrust,
+    kind: 'hashwing-manifest-check', sealedFile: sealedName, verdict: { key: result.key, headline: result.headline, sentence: result.sentence }, manifestVerified: true, head, keyTrust,
     timeProvenance: { fields, intervalMs: reportedInterval(landings.length === 1 ? landings[0] : '', sealedAt).ms },
     fileComparison: {
       items: parsed.map((item) => ({ id: item.id, status: item.status, statusLabel: STATUS[item.status], name: item.name, bytes: item.bytes, sha256: item.sha256, localName: item.local == null ? null : locals[item.local]?.name ?? null, localSha256: item.local == null ? null : locals[item.local]?.sha256 ?? null, reportedLanding: item.landing || null, derivedFrom: item.derivedFrom || null, note: item.note })),
@@ -154,7 +225,7 @@ export function manifestReport({ sealedName = '', trust, sources = {}, keyFinger
     report: text,
   }, null, 2);
   const pdfLines = [
-    `Sealed list: ${sealedName}`, 'Manifest: verified (signature checked)', `Key trust: ${line}`,
+    `Sealed list: ${sealedName}`, resultLine, 'Manifest: verified (signature checked)', `Key trust: ${line}`,
     ...(entry ? [`Key source: ${sources[entry.source] || entry.source}`] : []), `Key fingerprint: SHA-256 ${groups(keyFingerprint)}`, `Chain head: ${head}`,
     '## Times', ...fields.map((field) => `${field.label}: ${field.value} (${field.basis})`),
     '## Files', ...itemLines.map((l) => l.trim()), ...extraLines,

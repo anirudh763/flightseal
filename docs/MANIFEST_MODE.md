@@ -116,7 +116,12 @@ any name.
    **Matches**.
 2. Take each remaining local file. If its name equals the included name of the lowest-id remaining item with that
    name: **Bytes differ**.
-3. Remaining items are **Missing**. Remaining local files are **Not in manifest**.
+3. Remaining items are **Missing**. Remaining local files are **Not in the list** (status key `not-in-manifest`).
+
+This is `compareFiles` in `docs/manifest.mjs` and `tools/manifest.py`. The console's Verify page pairs by name
+instead (`pairFiles` in `newweb/src/recipient-trust.mjs`, AC-55): a named item pairs with the chosen file of the
+same name, and only items sealed without a name pair by size and digest, so a renamed byte-identical file reads
+Missing plus Not in the list.
 
 Duplicate digests are allowed. Each local file and each item pairs at most once. "Bytes differ" means only that a
 file with that name now has different bytes. Editing, re-saving, a metadata change, recompression, truncation or
@@ -135,7 +140,7 @@ backup" are explained in a "What is this?" disclosure.
   file being read.
 - **More options** (hidden until opened): include file names, operator notes, and the receipt interval and
   signing-key details.
-- **Result chips**: Matches is green, Bytes differ is amber, Missing is grey and Not in manifest is neutral.
+- **Result chips**: Matches is green (circle); Bytes differ, Missing and Not in the list are amber (warn shape).
 - **Limits checked first**: limit errors are checked before any file is read.
 
 ## Implementation
