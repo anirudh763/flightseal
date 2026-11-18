@@ -168,6 +168,7 @@ function App() {
   const [protectStep, setProtectStep] = useState(0); // 1-4 while a small file is being sealed (PROTECT_STEPS)
   const [carryToLarge, setCarryToLarge] = useState(null); // { file }: a too-large small-file pick handed to Large files
   const [protectError, setProtectError] = useState(''); // shown under the file field, which names it through aria-describedby
+  const pasteFocusRef = useRef('');
   const [manifestOutput, setManifestOutput] = useState(null); // ManifestSeal's result: kept here so it survives a route trip, like protectSealed
   const [manifestSealed, setManifestSealed] = useState(false); // ManifestSeal has a result, so its handoff replaces the step panel
   const protectRunRef = useRef(0);
@@ -314,6 +315,25 @@ function App() {
       : !unsavedError && <div className="actions-row"><button type="button" className="button primary" onClick={downloadUnsaved}><Download aria-hidden="true" size={16} />Download unsaved work</button></div>}
   </div>;
   const protectDone = protectMode === 'embedded' ? !!protectSealed : manifestSealed;
+  useEffect(() => { // old receipts say "open #/app/protect and paste this whole message"
+    if (screen !== 'protect') return undefined;
+    const onPaste = (event) => {
+      if (event.target?.closest?.('input, textarea, select, [contenteditable]')) return;
+      const text = event.clipboardData?.getData('text/plain') || '';
+      if (!text.includes('fseal-receipt v1')) return;
+      event.preventDefault();
+      invalidateCheck(); setProtectResult(null); setRestored(null); setCheckText(text); setVerifyMode('files'); // one form takes a file's or a list's message
+      pasteFocusRef.current = 'check-file'; // next step: choose the sealed file or list
+      navigate('verify');
+    };
+    document.addEventListener('paste', onPaste);
+    return () => document.removeEventListener('paste', onPaste);
+  }, [screen]); // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => { // after the route's own heading focus (one frame later), go on to the next step
+    if (screen !== 'verify' || !pasteFocusRef.current) return;
+    const id = pasteFocusRef.current; pasteFocusRef.current = '';
+    requestAnimationFrame(() => requestAnimationFrame(() => document.getElementById(id)?.focus()));
+  }, [screen]);
   useEffect(() => { if (protectSealed?.log) handoffRef.current?.focus(); }, [protectSealed?.log]); // seal finished: the handoff heading
   useEffect(() => { if (!protectDone && sealStartFocusRef.current) { sealStartFocusRef.current = false; document.getElementById('seal-what-title')?.focus(); } }, [protectDone]);
   updateSafeRef.current = !busy && !manifestSealActive && !manifestCheckActive && !(sealOutput && !sealOutputAcknowledged);
@@ -1707,6 +1727,8 @@ function App() {
           {/* One live region that stays mounted: each step (25% at a time), then "Sealed 1 file" as focus moves to the handoff. */}
           <p className="visually-hidden" role="status">{protectMode !== 'embedded' ? '' : protectStep > 0 ? `Step ${protectStep} of 4: ${PROTECT_STEPS[protectStep - 1]}` : protectSealed ? 'Sealed 1 file' : ''}</p>
           {!protectDone && <>
+            {/* Receipts sent before this layout say "open #/app/protect and paste": point them at Verify first thing. */}
+            <p className="seal-verify-link"><a href={workspaceHref('verify')} onClick={(e) => { if (e.button !== 0 || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return; e.preventDefault(); navigate('verify'); }}>Checking a receipt someone sent you? Go to Verify</a></p>
             <h2 id="seal-what-title" tabIndex="-1">What are you sealing?</h2>
             <fieldset className="mode-choice" aria-labelledby="seal-what-title">
               <label><input type="radio" name="protect-mode" value="embedded" checked={protectMode === 'embedded'} onChange={() => setProtectMode('embedded')} />Small file: seal the whole file, up to 45 MiB</label>
@@ -1738,7 +1760,6 @@ function App() {
             shareNote={__REGISTRY_URL__ ? <RegistryShareNote /> : null}
             onSealMore={sealMoreProtect} />}
           <ManifestSeal hidden={protectMode !== 'manifest'} output={manifestOutput} setOutput={setManifestOutput} carry={carryToLarge} common={sealCommon} jobRef={jobRef} signingKey={signingKey} onActiveChange={setManifestSealActive} onUnsaved={setManifestUnsaved} onSealed={__REGISTRY_URL__ ? registrySealed : undefined} onDone={setManifestSealed} onSealMore={() => { setJobRef(''); sealStartFocusRef.current = true; }} shareNote={__REGISTRY_URL__ ? <RegistryShareNote /> : null} />
-          {!protectDone && <p className="seal-verify-link"><a href={workspaceHref('verify')} onClick={(e) => { if (e.button !== 0 || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return; e.preventDefault(); navigate('verify'); }}>Checking files someone sent you? Go to Verify</a></p>}
         </div></section>
       </section>
       {__REGISTRY_URL__ && <section className="screen" aria-label="Registry status" hidden={screen !== 'protect'}><RegistryBoundary><SealedOnDevice onSignIn={() => navigate('help')} /></RegistryBoundary></section>}

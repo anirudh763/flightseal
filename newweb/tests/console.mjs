@@ -1170,7 +1170,23 @@ try {
     // R17 / AC-52: the one-time-key signing line, one primary action, and the checker moved to Verify.
     assert.equal((await panel.locator('.signing-line').innerText()).replace(/\n+/g, '\n'), "Signing\nOne-time key for this file. Your client can't check who sealed it. Set up a company key on Trust.");
     assert.deepEqual(await panel.locator('.button.primary').allInnerTexts(), ['Seal this file']);
-    assert.equal(await page.getByRole('link', { name: 'Checking files someone sent you? Go to Verify' }).count(), 1);
+    // Old receipts say "open #/app/protect and paste": the Verify pointer comes first on the panel, and a pasted
+    // receipt message goes to Verify's receipt box, never to sealing.
+    assert.equal(await panel.locator('a').first().innerText(), 'Checking a receipt someone sent you? Go to Verify');
+    const oldReceipt = ['HashWing receipt for flight.ulg', "Sealed: 2026-05-01T10:00:00.000Z (from the sealing computer's clock, not independently verified)", `Original file: 12 bytes, SHA-256 ${'a'.repeat(64)}`, `Public key: ${'b'.repeat(64)}`, `fseal-receipt v1 count=1 head=${'c'.repeat(64)} key=${'b'.repeat(64)} sig=${'d'.repeat(128)}`, '', 'Keep this message. It is what proves the file was not changed later.', 'To check the file, open https://anirudh763.github.io/flightseal/console/#/app/protect and paste this whole message.', ''].join('\n');
+    await page.evaluate((text) => { const data = new DataTransfer(); data.setData('text/plain', text); document.body.dispatchEvent(new ClipboardEvent('paste', { clipboardData: data, bubbles: true, cancelable: true })); }, oldReceipt);
+    await page.waitForSelector('#page-verify');
+    assert.equal(await page.locator('#check-text').inputValue(), oldReceipt, 'the pasted message is in Verify\'s receipt box');
+    await page.waitForFunction(() => document.activeElement?.id === 'check-file');
+    assert.equal(await page.locator('.seal-file-list').count(), 0, 'nothing was chosen for sealing');
+    await page.locator('#check-text').fill('');
+    await page.goto(`${url}#/app/protect`); await page.waitForSelector('#seal-what-title');
+    const listReceipt = `HashWing manifest receipt\nFiles listed: 2\nfseal-receipt v1 count=1 head=${'c'.repeat(64)}\n`; // a list's message fills the same receipt box
+    await page.evaluate((text) => { const data = new DataTransfer(); data.setData('text/plain', text); document.body.dispatchEvent(new ClipboardEvent('paste', { clipboardData: data, bubbles: true, cancelable: true })); }, listReceipt);
+    await page.waitForFunction(() => document.activeElement?.id === 'check-file'); // Verify has one form for a file or a list
+    assert.equal(await page.locator('#check-text').inputValue(), listReceipt);
+    await page.locator('#check-text').fill('');
+    await page.goto(`${url}#/app/protect`); await page.waitForSelector('#seal-what-title');
     assert.equal(await page.locator('#check-file').isVisible(), false);
     // An error is read with its field: focus moves there, and no alert is raised on top.
     await page.locator('#protect-file').setInputFiles({ name: 'empty.bin', mimeType: 'application/octet-stream', buffer: Buffer.alloc(0) });
