@@ -26,7 +26,7 @@ import { deliverEarlyAccessRequest } from './early-access.mjs';
 import { createEncryptedProfileBackup, inspectEncryptedProfileBackup, commitBackupRestore, previewBackupRestore } from './profile-backup.mjs';
 import { createSyncProvider } from './sync-provider.mjs';
 import { PINS_CHANGED, SOURCES, addTrustedCompany, fingerprintHex, formatFingerprint, listTrustedHistory, listTrustedKeys, markCompromised, pinTrustedKey, removeTrustedKey, trustForKey } from './trusted-keys.mjs';
-import { RegistryBoundary, RegistryPanel, SealedOnDevice, ShareRecordPanel, getRegistry, registryLogout, registrySealed, useRegistryTimeField } from './registry-ui.jsx';
+import { RegistryBoundary, RegistryPanel, SealedOnDevice, ShareRecordPanel, getRegistry, registryLogout, registrySealed, useRegistryTimeField, useRegistryUnsent } from './registry-ui.jsx';
 import { BYTES_DIFFER, TRUST_KIND, composeNote, landingLine, manifestReport, parseLandingLine, parseNote, parseSealedLine, timeFields, toIsoFromLocal, trustLine } from './recipient-trust.mjs';
 
 const syncProvider = createSyncProvider({ supabaseUrl: import.meta.env.VITE_SUPABASE_URL, supabaseAnonKey: import.meta.env.VITE_SUPABASE_ANON_KEY });
@@ -165,6 +165,9 @@ function App() {
   const [sealInterval, setSealInterval] = useState(1000);
   const [sealOutput, setSealOutput] = useState(null);
   const [sealOutputAcknowledged, setSealOutputAcknowledged] = useState(false);
+  const [manifestUnsaved, setManifestUnsaved] = useState(null); // { files, markSaved } from ManifestSeal while its result is not saved
+  const [rescue, setRescue] = useState(null); // { reason, files, error }: unsaved work kept after a logout this tab did not choose
+  const registryUnsent = __REGISTRY_URL__ ? useRegistryUnsent() : 0; // the flag is a build-time constant, so the hook order never changes
   const [videoInfo, setVideoInfo] = useState(null);
   const [videoUrl, setVideoUrl] = useState('');
   const [videoOffset, setVideoOffset] = useState('0');
@@ -210,6 +213,38 @@ function App() {
   const workspaceScreenRef = useRef('sandbox');
   const authAttemptRef = useRef({ mode: null, email: null });
   const updateSafeRef = useRef(true);
+  // Everything in this tab that a reload, logout or account switch would lose. Each part can mark itself saved.
+  const protectUnsaved = !!protectSealed && !(protectSealed.saved?.receipt && protectSealed.saved?.file);
+  const hasUnsavedWork = (!!sealOutput && !sealOutputAcknowledged) || protectUnsaved || !!manifestUnsaved || registryUnsent > 0 || !!rescue;
+  const unsavedParts = () => {
+    const bytes = (t) => new TextEncoder().encode(t);
+    const safeName = (name) => String(name || 'sealed').replace(/[^A-Za-z0-9._-]+/g, '_').slice(0, 100) || 'sealed';
+    const unsent = __REGISTRY_URL__ && registryUnsent ? getRegistry().unsentExport() : null;
+    return [
+      ...(sealOutput && !sealOutputAcknowledged ? [{ files: [{ name: 'sealed.fseal', blob: new Blob([sealOutput.log]) }, { name: 'sealed.receipts', bytes: bytes(sealOutput.receipts) }, { name: 'sealed-public-key.txt', bytes: bytes(`${sealOutput.publicKey}\n`) }], markSaved: () => setSealOutputAcknowledged(true) }] : []),
+      ...(protectUnsaved ? [{ files: [{ name: safeName(protectSealed.log.name), blob: protectSealed.log }, { name: `${safeName(protectSealed.name)}.receipt.txt`, bytes: bytes(protectSealed.handover) }], markSaved: () => setProtectSealed((current) => current && { ...current, saved: { receipt: true, file: true } }) }] : []),
+      ...(manifestUnsaved ? [manifestUnsaved] : []),
+      ...(unsent ? [{ files: [{ name: 'hashwing-pending-proofs.json', bytes: bytes(unsent.text) }], markSaved: unsent.markSaved }] : []),
+      ...(rescue ? [{ files: rescue.files, markSaved: () => setRescue(null) }] : []),
+    ];
+  };
+  const unsavedRef = useRef(unsavedParts);
+  unsavedRef.current = unsavedParts;
+  const markProtectSaved = (part) => setProtectSealed((current) => current && { ...current, saved: { ...current.saved, [part]: true } });
+  const downloadUnsaved = async () => {
+    const parts = unsavedRef.current();
+    if (!parts.length) return;
+    try {
+      const zip = await createStoreZip(parts.flatMap((part) => part.files));
+      const url = URL.createObjectURL(zip); const anchor = document.createElement('a'); anchor.href = url; anchor.download = 'hashwing-unsaved-work.zip'; document.body.append(anchor); anchor.click(); anchor.remove(); setTimeout(() => URL.revokeObjectURL(url), 0);
+      for (const part of parts) part.markSaved();
+      setProfileMenuMessage('');
+    } catch (cause) {
+      const message = `Couldn't make the download (${cause?.message || 'unknown error'}). Your work is still here, so download each file from its own section.`;
+      setRescue((current) => current && { ...current, error: message });
+      setProfileMenuMessage(message);
+    }
+  };
   updateSafeRef.current = !busy && !manifestSealActive && !manifestCheckActive && !(sealOutput && !sealOutputAcknowledged);
 
   const navigate = useCallback((next, options = {}) => {
@@ -257,11 +292,11 @@ function App() {
   useEffect(() => { if (route.kind === 'workspace') workspaceScreenRef.current = route.screen; }, [route.kind, route.screen]);
 
   useEffect(() => {
-    if (!sealOutput || sealOutputAcknowledged) return undefined;
+    if (!hasUnsavedWork) return undefined;
     const warnBeforeUnload = (event) => { event.preventDefault(); event.returnValue = ''; };
     addEventListener('beforeunload', warnBeforeUnload);
     return () => removeEventListener('beforeunload', warnBeforeUnload);
-  }, [sealOutput, sealOutputAcknowledged]);
+  }, [hasUnsavedWork]);
 
   useEffect(() => {
     const input = workbenchFileRef.current;
@@ -1021,7 +1056,7 @@ function App() {
   };
 
   const copyHandover = async () => {
-    try { await navigator.clipboard.writeText(protectSealed.handover); setCopyStatus('Copied. Paste it into an email or message to the person who will keep it.'); }
+    try { await navigator.clipboard.writeText(protectSealed.handover); markProtectSaved('receipt'); setCopyStatus('Copied. Paste it into an email or message to the person who will keep it.'); }
     catch { setCopyStatus('This browser blocked copying. Select the text in the box and copy it, or download the receipt.'); }
   };
 
@@ -1057,7 +1092,7 @@ function App() {
     setError('');
   };
   const beginDemo = () => {
-    if (sealOutput && !sealOutputAcknowledged) { setProfileMenuMessage('Download the sealed files or acknowledge them in the workspace before switching sessions.'); return false; }
+    if (hasUnsavedWork) { setProfileMenuMessage('Download your unsaved work before switching sessions.'); return false; }
     if (activeSession) clearSensitiveWorkspace();
     let session;
     try { session = setLocalSession({ kind: 'guest' }); }
@@ -1087,13 +1122,20 @@ function App() {
     setCsvDraft(null); setShareDialogOpen(false); setFeedbackDialogOpen(false); setInstallDialogOpen(false);
     setSealOutput(null); setSealOutputAcknowledged(false); setCurrentSample(null); setDemoLabel(''); setError(''); setOperationStatus('');
     setVideoOffset('0'); clearVideo();
+    setProtectFile(null); setProtectSealed(null); setProtectResult(null); setRestored(null); setProtectLanding(''); setProtectTimes(null); setCopyCompare(null); setCopyStatus(''); setCheckFile(null); setCheckText('');
     receiptInvalidRef.current = false; receiptInvalidMessageRef.current = ''; sealPickerRef.current = false;
     if (receiptInputRef.current) receiptInputRef.current.value = '';
     if (workbenchFileRef.current) workbenchFileRef.current.value = '';
     document.querySelectorAll('#root input[type="file"]').forEach((input) => { input.value = ''; });
   };
+  // A logout this tab did not choose (another tab, or the workspace server) keeps the unsaved files in memory for one download.
+  const keepUnsavedThenClear = (reason) => {
+    const files = unsavedRef.current().flatMap((part) => part.files);
+    clearSensitiveWorkspace();
+    if (files.length) setRescue({ reason, files, error: '' });
+  };
   const logout = () => {
-    if (sealOutput && !sealOutputAcknowledged) { setProfileMenuMessage('Download the sealed files or acknowledge them in the workspace before logging out.'); return; }
+    if (hasUnsavedWork) { setProfileMenuMessage('Download your unsaved work before logging out.'); return; }
     try { announceLocalLogout({ userId: activeSession?.userId || null }); }
     catch { clearLocalSession(); }
     clearSensitiveWorkspace();
@@ -1111,10 +1153,9 @@ function App() {
       localProfileFor({ kind: 'account', userId: message?.userId })?.email === authAttemptRef.current.email;
     if (!sameActiveProfile && !removedProfile && !storageWasCleared && !pendingLoginMatches) return;
     authEpochRef.current++;
-    if (__REGISTRY_URL__) registryLogout();
-    if (!activeSession) return;
+    if (!activeSession) { if (__REGISTRY_URL__) registryLogout(); return; }
     clearLocalSession();
-    clearSensitiveWorkspace();
+    keepUnsavedThenClear('other-tab'); // collects this tab's unsent proofs before clearSensitiveWorkspace signs the registry out
     setActiveSession(null); setLocalProfile(null); setSavedContext(null); setSavedContextError(''); setProfileMenuMessage('');
     legacyGuestInitializedRef.current = false; initialLegacyLoadedRef.current = false;
     history.replaceState(null, '', `${location.pathname}${location.search}#/`);
@@ -1124,7 +1165,7 @@ function App() {
 
   const finishAuthentication = async (profile, requestedRoute, importGuest, submittedEpoch) => {
     if (submittedEpoch !== authEpochRef.current) return { error: 'This sign-in was canceled because the local session changed. Try again.' };
-    if (sealOutput && !sealOutputAcknowledged) return { error: 'Download the sealed files or acknowledge them in the workspace before switching accounts.' };
+    if (hasUnsavedWork) return { error: 'This tab has work that is not saved yet. Download it first, then sign in.' };
     const guestContext = activeSession?.kind === 'guest' && importGuest && currentSample
       ? { screen: workspaceScreenRef.current, sample: currentSample, record: selectedRecord } : null;
     try {
@@ -1178,7 +1219,7 @@ function App() {
   };
   const removeActiveProfile = async () => {
     if (activeSession?.kind !== 'account' || !localProfile?.id) return;
-    if (sealOutput && !sealOutputAcknowledged) { setProfileMenuMessage('Download or acknowledge the pending sealed output before removing this profile.'); return; }
+    if (hasUnsavedWork) { setProfileMenuMessage('Download your unsaved work before removing this profile.'); return; }
     if (!window.confirm('Remove this local profile and its saved view from this browser? This cannot be undone.')) return;
     const id = localProfile.id;
     const epoch = authEpochRef.current;
@@ -1377,7 +1418,7 @@ function App() {
   const selectedFileName = workbenchFileRef.current?.files?.[0]?.name || '';
   useEffect(()=>{
     const readCurrent=()=>result ? {kind:result.source?'sealing':'verification',title:result.label,payload:{engine:result.native.engine,verdict:result.overallVerdict||result.native.verdict,status:result.native.status,records:String(result.native.records),good_bytes:String(result.native.goodBytes),sha256:result.native.fileSha256,chain_head:result.native.head,public_key:result.key,receipt_count:result.receiptChecks.length,covered:String(result.receiptCoverage?.covered??result.native.covered),uncovered:String(result.receiptCoverage?.uncovered??result.native.uncovered),first_failure:result.indexed.problem?{type:result.indexed.problem.token,record:String(result.indexed.problem.record),offset:String(result.indexed.problem.offset)}:null,source:result.source||null}} : null;
-    globalThis.WorkspaceStore.register({readCurrent,readArtifacts:()=>result?[{name:'source.fseal',blob:result.file},...(result.receipts?[{name:'witness.receipts',blob:new Blob([result.receipts],{type:'text/plain'})}]:[])]:[],onLogout:clearSensitiveWorkspace,restore:async(run,files,isCurrent)=>{if(!files[0])throw Error('No source artifact was saved with this run. Download its report instead.');const receipts=files[1]?await files[1].text():'';if(!isCurrent())return;navigate('sandbox');await runVerify(new File([files[0]],'saved-source.fseal'),receipts,run.payload.public_key||'',run.title,run.payload.source||null);}});
+    globalThis.WorkspaceStore.register({readCurrent,readArtifacts:()=>result?[{name:'source.fseal',blob:result.file},...(result.receipts?[{name:'witness.receipts',blob:new Blob([result.receipts],{type:'text/plain'})}]:[])]:[],onLogout:()=>keepUnsavedThenClear('workspace'),restore:async(run,files,isCurrent)=>{if(!files[0])throw Error('No source artifact was saved with this run. Download its report instead.');const receipts=files[1]?await files[1].text():'';if(!isCurrent())return;navigate('sandbox');await runVerify(new File([files[0]],'saved-source.fseal'),receipts,run.payload.public_key||'',run.title,run.payload.source||null);}});
     globalThis.WorkspaceStore.capture(readCurrent(),{autosave:false});
   },[result]);
   const returnTo = route.params.get('returnTo') || '';
@@ -1388,12 +1429,18 @@ function App() {
 
   if (route.kind === 'legal') return <><header className="auth-header"><a className="landing-brand" href="#/"><span className="brand-mark" aria-hidden="true">H</span><span>HashWing</span></a><nav className="auth-persistent-actions" aria-label="Account and workspace"><a href="#/login">Log in</a><a href="#/signup">Create account</a><a href="#/app/sandbox">Launch Workspace</a></nav></header><LegalPage page={route.page} onBack={() => setHashRoute('#/')} onClearCache={() => { navigator.serviceWorker?.controller?.postMessage({ type: 'CLEAR_FLIGHTSEAL_CACHES' }); setOfflineReady(false); setOfflineStatus('FlightSeal-owned caches were requested for removal. Other apps’ caches are left alone.'); }} cacheStatus={offlineStatus} onFeedback={() => setFeedbackDialogOpen(true)} onInstall={installApp} onRestartQuickStart={() => { setQuickStartDismissed(false); try { localStorage.removeItem(quickStartStorageKey); } catch {} setHashRoute(routeHash('sandbox')); }} /><InstallGuide open={installDialogOpen} onClose={() => setInstallDialogOpen(false)} ios={installKind === 'ios'} /><FeedbackDialog key={`feedback-${privateResetVersion}`} open={feedbackDialogOpen} onClose={() => setFeedbackDialogOpen(false)} route={route.route} /></>;
 
-  if (route.kind === 'landing') return <LandingPage key={privateResetVersion} onProtect={() => setHashRoute(routeHash('protect'))} onDemo={() => loadDemo(false)} onContinue={() => setHashRoute(routeHash('sandbox', { sample: currentSample || 'intact', record: selectedRecord }))} result={result} busy={busy} error={error} installKind={installKind} onInstall={installApp} onFeedback={() => setFeedbackDialogOpen(true)} installOpen={installDialogOpen} onInstallClose={() => setInstallDialogOpen(false)} feedbackOpen={feedbackDialogOpen} onFeedbackClose={() => setFeedbackDialogOpen(false)} route={route.route} />;
+  const rescueNotice = rescue && <section className="rescue-notice" aria-labelledby="rescue-title"><h2 id="rescue-title">Unsaved work</h2>
+    <p role="status">{rescue.reason === 'other-tab' ? 'You were logged out in another tab. This tab kept work that was not saved yet.' : 'Your workspace session ended. This tab kept work that was not saved yet.'} It stays only until you close this tab.</p>
+    {rescue.error && <p className="receipt-error" role="alert">{rescue.error}</p>}
+    <div className="actions-row"><button type="button" className="button primary" onClick={downloadUnsaved}><Download aria-hidden="true" size={16} />Download unsaved work</button><button type="button" className="button secondary" onClick={() => setRescue(null)}>Discard</button></div>
+  </section>;
+  if (route.kind === 'landing') return <>{rescueNotice}<LandingPage key={privateResetVersion} onProtect={() => setHashRoute(routeHash('protect'))} onDemo={() => loadDemo(false)} onContinue={() => setHashRoute(routeHash('sandbox', { sample: currentSample || 'intact', record: selectedRecord }))} result={result} busy={busy} error={error} installKind={installKind} onInstall={installApp} onFeedback={() => setFeedbackDialogOpen(true)} installOpen={installDialogOpen} onInstallClose={() => setInstallDialogOpen(false)} feedbackOpen={feedbackDialogOpen} onFeedbackClose={() => setFeedbackDialogOpen(false)} route={route.route} /></>;
   if (route.kind === 'signup' || route.kind === 'login') return <AuthPage
     key={privateResetVersion}
     mode={route.kind}
     returnTo={returnTo}
-    outputNeedsAck={!!sealOutput && !sealOutputAcknowledged}
+    outputNeedsAck={hasUnsavedWork}
+    onDownloadUnsaved={downloadUnsaved}
     onReturnToWorkspace={() => setHashRoute(routeHash('sandbox', { sample: currentSample, record: selectedRecord }))}
     guestCanImport={activeSession?.kind === 'guest' && !!currentSample}
     currentSampleName={demoLabel}
@@ -1425,7 +1472,8 @@ function App() {
           currentSample={currentSample}
           savedContext={savedContext}
           savedContextError={savedContextError}
-          hasUnacknowledgedOutput={!!sealOutput && !sealOutputAcknowledged}
+          hasUnacknowledgedOutput={hasUnsavedWork}
+          onDownloadUnsaved={downloadUnsaved}
           message={profileMenuMessage}
           onSave={saveCurrentView}
           onRestore={restoreSavedView}
@@ -1521,13 +1569,13 @@ function App() {
               <textarea id="handover-text" className="mono-input" readOnly rows={9} value={protectSealed.handover} />
               <div className="actions-row">
                 <button className="button primary" type="button" onClick={copyHandover}><Copy aria-hidden="true" size={16} />Copy message</button>
-                <a className="button secondary" href={`mailto:?subject=${encodeURIComponent(`HashWing receipt for ${protectSealed.name}`)}&body=${encodeURIComponent(protectSealed.handover)}`}><Mail aria-hidden="true" size={16} />Email it</a>
-                <button className="button secondary" type="button" onClick={() => download(`${protectSealed.name}.receipt.txt`, protectSealed.handover)}><Download aria-hidden="true" size={16} />Download receipt</button>
+                <a className="button secondary" href={`mailto:?subject=${encodeURIComponent(`HashWing receipt for ${protectSealed.name}`)}&body=${encodeURIComponent(protectSealed.handover)}`} onClick={() => markProtectSaved('receipt')}><Mail aria-hidden="true" size={16} />Email it</a>
+                <button className="button secondary" type="button" onClick={() => { download(`${protectSealed.name}.receipt.txt`, protectSealed.handover); markProtectSaved('receipt'); }}><Download aria-hidden="true" size={16} />Download receipt</button>
               </div>
               {copyStatus && <p className="field-hint" role="status">{copyStatus}</p>}
               <h3>Keep the sealed file</h3>
               <p>It holds your original log, byte for byte. Store it like the original and send it when someone asks for this flight.</p>
-              <button className="button secondary" type="button" onClick={() => download(protectSealed.log.name, protectSealed.log, 'application/octet-stream')}><Download aria-hidden="true" size={16} />Download sealed file</button>
+              <button className="button secondary" type="button" onClick={() => { download(protectSealed.log.name, protectSealed.log, 'application/octet-stream'); markProtectSaved('file'); }}><Download aria-hidden="true" size={16} />Download sealed file</button>
               <p className="field-hint">{protectSealed.savedKey ? 'Signed with the key loaded under Trust. Anyone holding that private key can sign other files, so keep its backup private.' : 'The signing key was made for this file only and was discarded, never stored or exported, so no further receipt can be made with it.'} Anyone can seal a different file with another key; that is why the receipt you send now is what counts later. Sealing shows the file has not changed since now; it cannot show what happened before you sealed it.</p>
             </div>}
           </div></section>
@@ -1558,7 +1606,7 @@ function App() {
       </section>}
       {/* Always mounted (hidden elsewhere), so changing mode or route never drops a running hash or an unsaved sealed list. */}
       <section className="screen protect-screen" aria-label="Large files" hidden={screen !== 'protect' || protectMode !== 'manifest'}>
-        <div className="section-grid"><ManifestSeal signingKey={signingKey} onActiveChange={setManifestSealActive} onSealed={__REGISTRY_URL__ ? registrySealed : undefined} /><ManifestCheck onActiveChange={setManifestCheckActive} /></div>
+        <div className="section-grid"><ManifestSeal signingKey={signingKey} onActiveChange={setManifestSealActive} onUnsaved={setManifestUnsaved} onSealed={__REGISTRY_URL__ ? registrySealed : undefined} /><ManifestCheck onActiveChange={setManifestCheckActive} /></div>
       </section>
       {/* Always mounted (hidden elsewhere) like the section above, so a share link made here survives a visit to another page. */}
       {__REGISTRY_URL__ && <section className="screen" aria-label="Registry status" hidden={screen !== 'protect'}><RegistryBoundary><SealedOnDevice onSignIn={() => navigate('help')} /></RegistryBoundary></section>}
@@ -1774,7 +1822,7 @@ function TeamAccessForm() {
   </form>;
 }
 
-function AuthPage({ mode, returnTo, guestCanImport, currentSampleName, outputNeedsAck, onReturnToWorkspace, expectedEpoch, isCurrent, onAuthAttempt, onLogin, onSignup, onComplete, onDemo, installKind, onInstall, onFeedback, installOpen, onInstallClose, feedbackOpen, onFeedbackClose, route }) {
+function AuthPage({ mode, returnTo, guestCanImport, currentSampleName, outputNeedsAck, onDownloadUnsaved, onReturnToWorkspace, expectedEpoch, isCurrent, onAuthAttempt, onLogin, onSignup, onComplete, onDemo, installKind, onInstall, onFeedback, installOpen, onInstallClose, feedbackOpen, onFeedbackClose, route }) {
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [confirm, setConfirm] = useState('');
@@ -1802,7 +1850,7 @@ function AuthPage({ mode, returnTo, guestCanImport, currentSampleName, outputNee
     <main id="auth-main" className={`auth-layout${creating ? ' auth-signup' : ''}`} tabIndex="-1">
       <section className="auth-context"><span className="landing-kicker">Local profile</span><h1>{creating ? 'Keep your workspace context.' : 'Return to your saved view.'}</h1><p>Profiles are stored only in this browser. They help restore an included-sample view; they do not upload files or create a cloud account.</p><ul><li><Check size={16} aria-hidden="true" />All HashWing tools stay free.</li><li><Check size={16} aria-hidden="true" />Flight logs, receipts and keys are not saved in a profile.</li><li><Check size={16} aria-hidden="true" />Passwords use a salted PBKDF2 verifier on this device.</li></ul><a href="#/app/help">Read local handling and trust limits <ArrowRight size={14} aria-hidden="true" /></a></section>
       <section className="auth-form-wrap" aria-labelledby={`page-${mode}`}><div className="auth-form-card"><p className="landing-kicker">{creating ? 'Create a local account' : 'Log in on this device'}</p><h2 id={`page-${mode}`} tabIndex="-1">{creating ? 'Create account' : 'Log in'}</h2><form onSubmit={submit} noValidate>
-        {outputNeedsAck && <div className="auth-output-warning" role="alert"><p>A sealed output is still waiting to be downloaded or acknowledged in this tab.</p><button type="button" className="auth-return-workspace" onClick={onReturnToWorkspace}>Return to workspace</button></div>}
+        {outputNeedsAck && <div className="auth-output-warning" role="alert"><p>This tab has work that is not saved yet. Download it before you sign in.</p><button type="button" className="auth-return-workspace" onClick={onDownloadUnsaved}>Download unsaved work</button><button type="button" className="auth-return-workspace" onClick={onReturnToWorkspace}>Return to workspace</button></div>}
         <div className="auth-field"><label htmlFor="auth-email">Email</label><input id="auth-email" type="email" name="email" autoComplete="email" inputMode="email" maxLength="254" required value={email} onChange={(event) => setEmail(event.target.value)} /></div>
         <div className="auth-field"><label htmlFor="auth-password">Password</label><div className="auth-password-wrap"><input id="auth-password" type={showPassword ? 'text' : 'password'} name="password" autoComplete={creating ? 'new-password' : 'current-password'} minLength="12" maxLength="128" required value={password} onChange={(event) => setPassword(event.target.value)} aria-describedby="password-help" /><button type="button" className="password-toggle" aria-label={showPassword ? 'Hide password' : 'Show password'} aria-pressed={showPassword} onClick={() => setShowPassword((value) => !value)}>{showPassword ? 'Hide' : 'Show'}</button></div><small id="password-help">Use 12–128 characters. Paste and password managers are supported.</small></div>
         {creating && <div className="auth-field"><label htmlFor="auth-confirm">Confirm password</label><input id="auth-confirm" type={showPassword ? 'text' : 'password'} name="confirm-password" autoComplete="new-password" minLength="12" maxLength="128" required value={confirm} onChange={(event) => setConfirm(event.target.value)} /></div>}
@@ -1812,7 +1860,7 @@ function AuthPage({ mode, returnTo, guestCanImport, currentSampleName, outputNee
         <button className="auth-submit" type="submit" disabled={pending || outputNeedsAck}>{creating ? 'Create account' : 'Log in'} <ArrowRight size={16} aria-hidden="true" /></button>
       </form>
       <div className="auth-switch">{creating ? <>Already have a local profile? <a href="#/login">Log in</a></> : <>New on this device? <a href="#/signup">Create account</a></>}</div>{guestCanImport && <button type="button" className="auth-return-workspace" onClick={onReturnToWorkspace}>Cancel and return to guest workspace</button>}
-      <button className="auth-demo" type="button" disabled={outputNeedsAck} onClick={() => { if (onDemo() === false) setError('Download or acknowledge the pending sealed output first.'); }}><FlaskConical size={16} aria-hidden="true" />Continue with Demo</button>
+      <button className="auth-demo" type="button" disabled={outputNeedsAck} onClick={() => { if (onDemo() === false) setError('Download your unsaved work first.'); }}><FlaskConical size={16} aria-hidden="true" />Continue with Demo</button>
       <p className="auth-recovery-note">No email, password-reset or cloud service is connected. If this browser's profile data is cleared, the profile cannot be recovered.</p>
       </div></section>
     </main>
@@ -2003,7 +2051,7 @@ function EncryptedBackupControls({ profileId, isOwnerCurrent }) {
   </section>;
 }
 
-function ProfileMenu({ isCurrent, session, profile, currentSample, savedContext, savedContextError, hasUnacknowledgedOutput, message, onSave, onRestore, onDeleteSaved, onRemoveProfile, onLogout, onNavigateAuth, syncStatus }) {
+function ProfileMenu({ isCurrent, session, profile, currentSample, savedContext, savedContextError, hasUnacknowledgedOutput, onDownloadUnsaved, message, onSave, onRestore, onDeleteSaved, onRemoveProfile, onLogout, onNavigateAuth, syncStatus }) {
   const menuRef = useRef(null);
   const email = profile?.email || (session?.kind === 'guest' ? 'Demo session' : 'Workspace access');
   return <details className="profile-menu" ref={menuRef} onKeyDown={closeDisclosure}>
@@ -2017,7 +2065,7 @@ function ProfileMenu({ isCurrent, session, profile, currentSample, savedContext,
         <button type="button" onClick={onRestore} disabled={!savedContext}>Restore saved view{savedContext ? ` · ${savedContext.screen}` : ''}</button>
         {(savedContext || savedContextError) && <button type="button" onClick={onDeleteSaved}>{savedContextError ? 'Remove damaged saved view' : 'Remove saved view'}</button>}
         <p className="profile-menu-note">Files, receipts, keys and payloads are not saved.</p>
-        {hasUnacknowledgedOutput && <p className="profile-menu-message" role="alert">Download or acknowledge the pending output before logging out.</p>}
+        {hasUnacknowledgedOutput && <><p className="profile-menu-message" role="alert">This tab has work that is not saved yet. Download it before you log out.</p><button type="button" className="profile-download-unsaved" onClick={onDownloadUnsaved}>Download unsaved work</button></>}
         {savedContextError && <p className="profile-menu-message" role="alert">{savedContextError}</p>}
         {message && <p className="profile-menu-message" role="status">{message}</p>}
         <button type="button" className="profile-logout" disabled={hasUnacknowledgedOutput} onClick={onLogout}>Log out</button><button type="button" className="profile-remove" disabled={hasUnacknowledgedOutput} onClick={onRemoveProfile}>Remove local profile and saved view</button>
@@ -2025,6 +2073,7 @@ function ProfileMenu({ isCurrent, session, profile, currentSample, savedContext,
         {session?.kind === 'guest' && <p className="profile-menu-note">Guest state is separate from every local profile.</p>}
         <button type="button" onClick={() => onNavigateAuth('signup')}>Create local account</button>
         <button type="button" onClick={() => onNavigateAuth('login')}>Log in</button>
+        {session?.kind === 'guest' && hasUnacknowledgedOutput && <><p className="profile-menu-message" role="alert">This tab has work that is not saved yet. Download it before you end the session.</p><button type="button" className="profile-download-unsaved" onClick={onDownloadUnsaved}>Download unsaved work</button></>}
         {session?.kind === 'guest' && <button type="button" className="profile-logout" disabled={hasUnacknowledgedOutput} onClick={onLogout}>End demo session</button>}
       </>}
     </div>
@@ -2195,7 +2244,7 @@ const friendlyLimit = (cause) => cause instanceof RangeError && /exceeds 65536 b
   : / name /.test(cause.message) ? `${cause.message} Rename the file or turn off Include file names under More options, then press Seal again.`
   : `${cause.message} Shorten it under More options, then press Seal again.`;
 
-function ManifestSeal({ signingKey, onActiveChange, onSealed }) {
+function ManifestSeal({ signingKey, onActiveChange, onUnsaved, onSealed }) {
   const [files, setFiles] = useState([]);
   const [includeNames, setIncludeNames] = useState(false);
   const [notes, setNotes] = useState({});
@@ -2211,6 +2260,10 @@ function ManifestSeal({ signingKey, onActiveChange, onSealed }) {
   useEffect(() => () => controllerRef.current?.abort(), []);
   useEffect(() => { onActiveChange(!!phase || (!!output && !output.saved)); }, [phase, output, onActiveChange]);
   useEffect(() => () => onActiveChange(false), [onActiveChange]);
+  useEffect(() => { // the sealed list and its receipt, until the list is downloaded
+    onUnsaved(output && !output.saved ? { files: [{ name: output.log.name, blob: output.log }, { name: `${output.base}.receipt.txt`, bytes: new TextEncoder().encode(output.handover) }], markSaved: () => setOutput((current) => current && { ...current, saved: true }) } : null);
+  }, [output, onUnsaved]);
+  useEffect(() => () => onUnsaved(null), [onUnsaved]);
   const reset = () => { controllerRef.current?.abort(); setOutput(null); setMessage(''); setError(''); };
   const choose = (list) => {
     reset(); setNotes({}); setEdited({}); setDerived({}); setLandingLocal(''); // a landing time belongs to one batch

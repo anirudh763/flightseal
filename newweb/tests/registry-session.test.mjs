@@ -65,7 +65,7 @@ test('signing out and in as another owner forgets the previous owner\'s file nam
   r.logout();
 });
 
-test('sign-out tells the other tabs which owner left, never the token; logout tells them all', async () => {
+test('sign-out tells the other tabs which owner left, never the token; an app logout stays in this tab', async () => {
   const r = getRegistry();
   const [channel] = channels;
   assert.equal(channel?.name, 'hashwing-registry');
@@ -74,11 +74,11 @@ test('sign-out tells the other tabs which owner left, never the token; logout te
   channel.posted.length = 0;
   r.signOut();
   r.logout();
-  assert.deepEqual(channel.posted, [{ type: 'signout', owner: 'orgA/u5' }, { type: 'logout' }]);
+  assert.deepEqual(channel.posted, [{ type: 'signout', owner: 'orgA/u5' }], 'the profile logout message (local-auth) reaches only that profile\'s tabs');
   assert.ok(!JSON.stringify(channel.posted).includes(tok.split('.')[1]));
 });
 
-test('another tab\'s messages: a sign-out for this owner signs out, another owner\'s is ignored, logout clears everything', async () => {
+test('another tab\'s messages: a sign-out for this owner signs out, another owner\'s is ignored, an old every-tab logout is ignored', async () => {
   const r = getRegistry();
   const [channel] = channels;
   assert.ok(await r.signIn(tokenFor('u6')));
@@ -91,11 +91,38 @@ test('another tab\'s messages: a sign-out for this owner signs out, another owne
   await r.sealed(receipt(6), 'kept-here.ulg'); // signed out: in this tab's memory list
   assert.ok(await r.signIn(tokenFor('u7')));
   channel.posted.length = 0;
-  channel.deliver({ type: 'logout' });
-  assert.equal(r.snapshot().owner, null);
-  assert.deepEqual(r.snapshot().pending, []);
-  assert.equal(r.names.size, 0);
+  channel.deliver({ type: 'logout' }); // sent by older tabs on any sign-in, switch or demo start: never wipes this tab
+  assert.equal(r.snapshot().owner, 'orgA/u7');
   assert.deepEqual(channel.posted, [], 'a received message is not sent on again');
+  r.logout();
+});
+
+test('an unsent proof keeps the registry owner it was sealed under and is never sent under another owner', async () => {
+  const r = getRegistry();
+  assert.ok(await r.signIn(tokenFor('u8')));
+  for (let i = 0; i < 200; i++) await r.sealed(receipt(1000 + i)); // fill this owner's queue
+  const held = receipt(2000);
+  await r.sealed(held, 'held-flight.ulg'); // queue full: kept in memory, tagged orgA/u8
+  assert.deepEqual(r.snapshot().pending.map((p) => [p.receipt, p.owner]), [[held, 'orgA/u8']]);
+  r.signOut();
+  assert.ok(await r.signIn(tokenFor('u9')));
+  assert.deepEqual(r.snapshot().pending.map((p) => p.owner), ['orgA/u8'], 'held, not queued under orgA/u9');
+  assert.ok(!(await r.snapshot().outbox.list()).some((row) => row.receipt === held));
+  assert.equal(r.names.has(held), false, 'another owner never sees its file name');
+  const out = await r.exportPending();
+  assert.ok(out.ok && JSON.parse(out.text).receipts.includes(held), 'it can still be exported');
+  r.logout();
+});
+
+test('a proof sealed while signed out has no owner and is sent under the next sign-in', async () => {
+  const r = getRegistry();
+  const free = receipt(3000);
+  await r.sealed(free, 'free.ulg');
+  assert.deepEqual(r.snapshot().pending.map((p) => p.owner), [null]);
+  assert.ok(await r.signIn(tokenFor('u10')));
+  assert.deepEqual(r.snapshot().pending, []);
+  assert.ok((await r.snapshot().outbox.list()).some((row) => row.receipt === free));
+  r.logout();
 });
 
 test('the Verify time row for each state of this device\'s outbox row', () => {
@@ -108,7 +135,7 @@ test('the Verify time row for each state of this device\'s outbox row', () => {
   assert.deepEqual(registryTimeField(row({ state: 'registered', disposition: 'active', received_at: '2026-11-17T10:00:05Z' }), lines), { value: 'Registered at 2026-11-17T10:00:05Z', basis });
   assert.deepEqual(registryTimeField(row({ state: 'registered', disposition: 'deleted', received_at: '2026-11-17T10:00:05Z' }), lines), { value: 'Registered, later deleted', basis: "the registry's statement, not proof of the files; its hosted record was deleted" });
   assert.deepEqual(registryTimeField(row({ state: 'needs_attention', reason: 'quota_exceeded', label: 'Needs attention' }), lines), { value: 'Needs attention', basis: "Your company's monthly registration limit is reached; this proof is saved and can be exported" });
-  assert.equal(registryTimeField(row({ state: 'needs_attention', reason: 'key_not_enrolled', label: 'Needs attention' }), lines).basis, "This signing key isn't enrolled for your company yet. Ask your admin to enroll it on the Trust page, then try again.");
+  assert.equal(registryTimeField(row({ state: 'needs_attention', reason: 'key_not_enrolled', label: 'Needs attention' }), lines).basis, "This signing key isn't enrolled for your company yet. Ask your company's registry admin to enroll this key's fingerprint, then try again.");
   assert.equal(registryTimeField(row({ state: 'needs_attention', reason: 'made_up', label: 'Needs attention' }), lines).basis, "The registry couldn't accept this receipt. Export it and contact your admin.");
   assert.deepEqual(registryTimeField(row({ state: 'registering', label: 'Registering' }), lines), { value: 'Not yet registered', basis: "this device's list: Registering" });
   assert.deepEqual(registryTimeField({ ...row({ state: 'sealed_local', label: 'Sealed locally' }), online: false }, lines), { value: 'Not yet registered', basis: "this device's list: Waiting for connection" });

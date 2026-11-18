@@ -218,12 +218,13 @@ try {
   const page = watch(await ctx.newPage(), 'flag-on');
   await page.goto(`${flagOn.url}#/app/protect`);
   await page.locator('#page-protect').waitFor();
-  let shareUrl;
+  let shareUrl, localFingerprint;
 
   await check('signed out: a seal shows "Sealed locally" and the list notice "Sign in to the company registry to send these.", whose Sign in opens Trust', async () => {
     await page.getByRole('heading', { name: 'Sealed on this device' }).waitFor();
     await page.getByText('Nothing sealed on this device yet.').waitFor();
     await sealSmall(page, 'local-flight.ulg');
+    localFingerprint = await page.locator('.handover .fingerprint').innerText();
     await chipIs(page, 'local-flight.ulg', 'Sealed locally');
     const row = await openRow(page, 'local-flight.ulg');
     await row.getByText('Sealed on this device. Not sent to the registry yet.').waitFor();
@@ -243,7 +244,9 @@ try {
     await go(page, 'protect');
     await chipIs(page, 'local-flight.ulg', 'Needs attention');
     const row = await openRow(page, 'local-flight.ulg');
-    await row.getByText("This signing key isn't enrolled for your company yet. Ask your admin to enroll it on the Trust page, then try again.").waitFor();
+    await row.getByText("This signing key isn't enrolled for your company yet. Ask your company's registry admin to enroll this key's fingerprint, then try again.").waitFor();
+    assert.ok(!(await row.innerText()).includes('Trust page'), 'no enroll control exists, so the copy names none');
+    assert.equal(await row.locator('.registry-fingerprint .fingerprint').innerText(), localFingerprint, "the row shows this key's fingerprint for the admin");
     await row.getByRole('button', { name: 'Try again' }).waitFor();
     await row.locator('.registry-tech summary').click();
     await row.getByText('Technical details: key_not_enrolled').waitFor();
@@ -650,6 +653,96 @@ try {
       await chipIs(b, 'tab-b.ulg', 'Sealed locally');
       await sleep(3000);
       assert.equal((await registerLog('tab-pilot')).length, sends, 'tab B sent nothing after the sign-out in tab A');
+    } finally { await c.close(); }
+  });
+
+
+  // Lost work. A local profile in two tabs of one browser shares localStorage; each tab has its own session.
+  const profileIn = async (page, email, mode = 'signup') => {
+    await page.goto(`${flagOn.url}#/${mode}`);
+    await page.getByLabel('Email').fill(email);
+    await page.getByLabel('Password', { exact: true }).fill('lost work password 42');
+    if (mode === 'signup') await page.getByLabel('Confirm password').fill('lost work password 42');
+    await page.locator('#auth-main').getByRole('button', { name: mode === 'signup' ? 'Create account' : 'Log in', exact: true }).click();
+    await page.waitForFunction(() => location.hash.startsWith('#/app/'));
+  };
+  const appLogout = async (page) => {
+    const menu = page.locator('.profile-menu');
+    if (!(await menu.evaluate((d) => d.open))) await menu.locator('summary').click();
+    await menu.getByRole('button', { name: 'Log out', exact: true }).click();
+    await page.waitForFunction(() => location.hash === '#/');
+  };
+  const reloadWarns = (page) => page.evaluate(() => { const event = new Event('beforeunload', { cancelable: true }); window.dispatchEvent(event); return event.defaultPrevented; });
+
+  await check('reload: an unsaved Seal & send result or an unsent proof warns first; once saved and exported, no warning', async () => {
+    const c = await newContext();
+    try {
+      const a = watch(await c.newPage(), 'reload');
+      await a.goto(`${flagOn.url}#/app/protect`);
+      await sealSmall(a, 'reload-flight.ulg');
+      assert.equal(await reloadWarns(a), true, 'a fresh seal warns before reload');
+      await Promise.all([a.waitForEvent('download'), a.getByRole('button', { name: 'Download receipt' }).click()]);
+      await Promise.all([a.waitForEvent('download'), a.getByRole('button', { name: 'Download sealed file' }).click()]);
+      assert.equal(await reloadWarns(a), true, 'the unsent proof still warns (it lives in this tab only)');
+      await a.locator('.registry-more > summary').click();
+      await Promise.all([a.waitForEvent('download'), a.getByRole('button', { name: 'Export pending proofs' }).click()]);
+      assert.equal(await reloadWarns(a), false, 'saved and exported: nothing left to lose');
+    } finally { await c.close(); }
+  });
+
+  await check('another tab logs this profile out: this tab keeps its unsaved result and unsent proof for one download', async () => {
+    const c = await newContext();
+    try {
+      const a = watch(await c.newPage(), 'lost-a'), b = watch(await c.newPage(), 'lost-b');
+      await profileIn(a, 'lost-a@example.test');
+      await sealSmall(a, 'kept-flight.ulg');
+      await profileIn(b, 'lost-a@example.test', 'login');
+      await appLogout(b);
+      await a.waitForFunction(() => location.hash === '#/');
+      const notice = a.locator('.rescue-notice');
+      await notice.getByText('You were logged out in another tab. This tab kept work that was not saved yet.').waitFor();
+      const [download] = await Promise.all([a.waitForEvent('download'), notice.getByRole('button', { name: 'Download unsaved work' }).click()]);
+      assert.equal(download.suggestedFilename(), 'hashwing-unsaved-work.zip');
+      const zip = readFileSync(await download.path()).toString('latin1');
+      for (const name of ['kept-flight.ulg.fseal', 'kept-flight.ulg.receipt.txt', 'hashwing-pending-proofs.json']) assert.ok(zip.includes(name), `zip has ${name}`);
+      await notice.waitFor({ state: 'detached' });
+      assert.equal(await reloadWarns(a), false);
+      assert.equal(await a.evaluate(() => sessionStorage.getItem('hashwing-registry-token')), null);
+    } finally { await c.close(); }
+  });
+
+  await check('another profile signing in, starting the demo or logging out leaves this tab\'s unsent proof and sign-in alone', async () => {
+    const c = await newContext();
+    try {
+      const a = watch(await c.newPage(), 'other-a'), b = watch(await c.newPage(), 'other-b');
+      await profileIn(a, 'keep-a@example.test');
+      await sealSmall(a, 'other-flight.ulg');
+      await chipIs(a, 'other-flight.ulg', 'Sealed locally');
+      await profileIn(b, 'keep-b@example.test');
+      await b.goto(`${flagOn.url}#/`);
+      await b.locator('.landing-persistent-actions').getByRole('button', { name: 'Launch Workspace' }).click();
+      await appLogout(b);
+      await sleep(500);
+      assert.ok((await a.evaluate(() => location.hash)).startsWith('#/app/protect'), 'tab A is still in its workspace');
+      await chipIs(a, 'other-flight.ulg', 'Sealed locally');
+      assert.equal(await a.locator('#handover-text').count(), 1, 'the Seal & send result is still on screen');
+    } finally { await c.close(); }
+  });
+
+  await check('local logout with unsaved work is held until it is downloaded', async () => {
+    const c = await newContext();
+    try {
+      const a = watch(await c.newPage(), 'held');
+      await profileIn(a, 'held@example.test');
+      await sealSmall(a, 'held-flight.ulg');
+      const menu = a.locator('.profile-menu');
+      await menu.locator('summary').click();
+      assert.equal(await menu.getByRole('button', { name: 'Log out', exact: true }).isDisabled(), true);
+      await Promise.all([a.waitForEvent('download'), menu.getByRole('button', { name: 'Download unsaved work' }).click()]);
+      await menu.getByRole('button', { name: 'Log out', exact: true }).click();
+      await a.waitForFunction(() => location.hash === '#/');
+      await a.goto(`${flagOn.url}#/app/protect`);
+      assert.equal(await a.locator('#handover-text').count(), 0, 'the next session does not see the last one\'s result');
     } finally { await c.close(); }
   });
 
