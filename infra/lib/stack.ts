@@ -18,7 +18,15 @@ export interface RegistryStackProps extends StackProps {
   readonly restoredFrom?: string;
   /** A new random ID per restore. The marker written by registry.restore must name it and the restored table. */
   readonly restoreId?: string;
+  /**
+   * Browser origins allowed to call the API (CORS). Exact https origins only: no "*", no wildcard hosts.
+   * API Gateway answers preflight and adds the headers; credentials (cookies) are never allowed.
+   */
+  readonly corsOrigins?: string[];
 }
+
+export const DEFAULT_CORS_ORIGINS = ['https://anirudh763.github.io'];
+const CORS_ORIGIN = /^https:\/\/[a-z0-9]([a-z0-9.-]*[a-z0-9])?(:[0-9]{1,5})?$/;
 
 /** Routes served by the Lambda. Only the public share check has no authorizer. */
 export const ROUTES: Array<[apigw.HttpMethod, string]> = [
@@ -31,10 +39,12 @@ export const ROUTES: Array<[apigw.HttpMethod, string]> = [
   [apigw.HttpMethod.GET, '/v1/keys'],
   [apigw.HttpMethod.POST, '/v1/keys/{fp}/compromised'],
   [apigw.HttpMethod.POST, '/v1/epoch'],
+  [apigw.HttpMethod.GET, '/v1/epoch'],
   [apigw.HttpMethod.POST, '/v1/shares'],
   [apigw.HttpMethod.DELETE, '/v1/shares/{token}'],
 ];
 export const PUBLIC_ROUTE: [apigw.HttpMethod, string] = [apigw.HttpMethod.GET, '/v1/shares/{token}'];
+export const PUBLIC_THROTTLE = { rate: 2, burst: 5 };
 
 export class RegistryStack extends Stack {
   constructor(scope: Construct, id: string, props: RegistryStackProps = {}) {
@@ -102,8 +112,23 @@ export class RegistryStack extends Stack {
       accessTokenValidity: Duration.minutes(15),
     });
 
-    const api = new apigw.HttpApi(this, 'Api', { createDefaultStage: false });
-    new apigw.HttpStage(this, 'DefaultStage', {
+    const corsOrigins = props.corsOrigins ?? DEFAULT_CORS_ORIGINS;
+    if (corsOrigins.length === 0) throw new Error('corsOrigins: give at least one origin (omit it for the default)');
+    for (const o of corsOrigins) {
+      if (!CORS_ORIGIN.test(o)) throw new Error(`corsOrigins: ${JSON.stringify(o)} is not an exact https origin`);
+    }
+    const api = new apigw.HttpApi(this, 'Api', {
+      createDefaultStage: false,
+      corsPreflight: {
+        allowOrigins: corsOrigins,
+        allowMethods: [apigw.CorsHttpMethod.GET, apigw.CorsHttpMethod.POST, apigw.CorsHttpMethod.DELETE,
+          apigw.CorsHttpMethod.OPTIONS],
+        allowHeaders: ['authorization', 'content-type', 'idempotency-key'],
+        allowCredentials: false,
+        maxAge: Duration.minutes(10),
+      },
+    });
+    const stage = new apigw.HttpStage(this, 'DefaultStage', {
       httpApi: api,
       stageName: '$default',
       autoDeploy: true,
@@ -115,7 +140,17 @@ export class RegistryStack extends Stack {
     for (const [method, path] of ROUTES) {
       api.addRoutes({ path, methods: [method], integration, authorizer: jwt });
     }
-    api.addRoutes({ path: PUBLIC_ROUTE[1], methods: [PUBLIC_ROUTE[0]], integration });
+    const [publicRoute] = api.addRoutes({ path: PUBLIC_ROUTE[1], methods: [PUBLIC_ROUTE[0]], integration });
+    // The only unauthenticated route gets its own, tighter limit: a flood of random links costs at most
+    // PUBLIC_THROTTLE.rate requests a second (see the abuse scenario in docs/aws/COST.md). A person checking links
+    // needs far less; the burst covers opening a handful at once. The signed-in routes keep the stage default.
+    // RouteSettings is a free-form map in CloudFormation, so it is written with its CloudFormation key names.
+    (stage.node.defaultChild as apigw.CfnStage).addPropertyOverride('RouteSettings', {
+      [`${PUBLIC_ROUTE[0]} ${PUBLIC_ROUTE[1]}`]: {
+        ThrottlingRateLimit: PUBLIC_THROTTLE.rate, ThrottlingBurstLimit: PUBLIC_THROTTLE.burst,
+      },
+    });
+    stage.node.addDependency(publicRoute); // route settings must name a route that already exists
 
     const budgetEmail = new CfnParameter(this, 'BudgetEmail', {
       type: 'String',
