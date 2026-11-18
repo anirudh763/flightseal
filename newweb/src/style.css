@@ -119,7 +119,7 @@ p { line-height: 1.58; }
 .field-hint { margin: 6px 0 0; color: var(--muted); font-size: .8rem; }
 .field-label { display: block; margin-bottom: 7px; color: var(--ink); font-weight: 680; font-size: .87rem; }
 .field-label span { color: var(--muted); font-weight: 450; }
-input[type=file], input[type=number], input[type=text], .mono-input { width: 100%; min-height: 44px; color: var(--ink); border: 1px solid var(--field-border); border-radius: 6px; background: white; padding: 8px 10px; }
+input[type=file], input[type=number], input[type=text], input[type=search], .mono-input { width: 100%; min-height: 44px; color: var(--ink); border: 1px solid var(--field-border); border-radius: 6px; background: white; padding: 8px 10px; }
 input[type=file] { padding: 6px; }
 input[type=file]::file-selector-button { min-height: 30px; margin-right: 10px; border: 1px solid var(--line); border-radius: 4px; background: #f0f7f2; color: var(--forest); cursor: pointer; }
 input[type=number] { max-width: 180px; font-variant-numeric: tabular-nums; }
@@ -572,7 +572,7 @@ p { line-height: 1.45; }
 .mutation { min-height: 52px; padding: 8px 10px; font-size: 12px; }
 .mutation small { font-size: 11px; }
 .field-label { margin-bottom: 5px; font-size: 12px; }
-input[type=file], input[type=number], input[type=text], .mono-input, select { min-height: 44px; border-color: var(--field-border); border-radius: 4px; font-size: 13px; }
+input[type=file], input[type=number], input[type=text], input[type=search], .mono-input, select { min-height: 44px; border-color: var(--field-border); border-radius: 4px; font-size: 13px; }
 .records-layout { grid-template-columns: minmax(0, 1.1fr) minmax(280px, .9fr); gap: 12px; }
 .record-list { max-height: 580px; }
 .record-list li { border-color: #e7eaed; }
@@ -697,7 +697,7 @@ button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible
 .panel, .result-panel, .sample-toolbar, .video-panel, .telemetry-panel, .record-detail, .auth-form-card, .mega-menu, .preview-window { color: #25364b; background: #f1f5f9; border-color: #c3cedb; }
 .panel, .result-panel, .sample-toolbar, .video-panel, .telemetry-panel, .record-detail { background-image: linear-gradient(145deg, #f1f5f9, #f1f5f9); }
 .panel p, .panel dd, .panel li, .panel label, .panel small, .panel dt, .result-top p, .stats-grid span, .field-hint, .record-list small, .sample-current span, .prose p, .prose li, .prose dd, .profile-menu-note, .profile-menu-message { color: #25364b; }
-.button, .clear-session, .command-file-input, input[type=file], input[type=number], input[type=text], input[type=email], input[type=password], textarea, select, .auth-field input { color: #25364b; background-color: #f1f5f9; border-color: #64758a; }
+.button, .clear-session, .command-file-input, input[type=file], input[type=number], input[type=text], input[type=search], input[type=email], input[type=password], textarea, select, .auth-field input { color: #25364b; background-color: #f1f5f9; border-color: #64758a; }
 .button.primary, .landing-demo, .auth-submit { color: #f1f5f9; background-color: #2355ba; border-color: #2355ba; }
 .button:hover:not(:disabled), .button.secondary:hover:not(:disabled) { background-color: #c3cedb; border-color: #2355ba; }
 .button.primary:hover:not(:disabled), .landing-demo:hover:not(:disabled), .auth-submit:hover:not(:disabled) { color: #f1f5f9; background-color: #176342; }
@@ -1260,6 +1260,7 @@ table.jobs-table { min-width: 0; width: 100%; table-layout: auto; }
 .jobs-recent-rows .jobs-name { flex: 1 1 12rem; font-weight: 600; }
 .jobs-recent-rows .jobs-when { color: var(--muted); font-size: .8rem; }
 .jobs-all { margin: 10px 0 0; }
+.jobs-recent { margin-top: 16px; }
 .jobs-all a, .jobs-empty a { display: inline-flex; align-items: center; min-height: 44px; }
 /* 390px and below: each row becomes a summary (package, status, time), then full-width secondary actions. */
 @media (max-width: 600px) {

@@ -23,7 +23,8 @@ mkdirSync(OUT, { recursive: true });
 const require = createRequire(join(ROOT, 'package.json'));
 const { chromium } = require('playwright');
 const AXE = readFileSync(require.resolve('axe-core/axe.min.js'), 'utf8');
-const FORBIDDEN = ['Company registry', 'Test sign-in', 'Sealed on this device', 'hashwing-outbox', 'hashwing-pending', 'hashwing-registry-signouts', '/v1/envelopes', '/v1/shares', 'registry-test-secret', 'dev-hs256',
+// "Sealed on this device" ships in every build now (AC-60), so the registry list is caught by its own strings instead.
+const FORBIDDEN = ['Company registry', 'Test sign-in', 'Export pending proofs', 'Not sent to the registry yet', 'hashwing-outbox', 'hashwing-pending', 'hashwing-registry-signouts', '/v1/envelopes', '/v1/shares', 'registry-test-secret', 'dev-hs256',
   'REGISTRY_URL', 'execute-api', 'amazonaws.com', '__dev/token'];
 const JWT = /eyJ[\w-]+\.eyJ[\w-]+\./; // any signed token (a pasted dev token is an HS256 JWT)
 const LINK_DEAD = "This link doesn't open. It may have been withdrawn or expired, or it was copied incompletely. Ask the sender for a new link.";
@@ -220,8 +221,14 @@ try {
     for (const screen of ['protect', 'verify', 'help']) {
       await go(page, screen);
       const text = await page.locator('body').innerText();
-      for (const s of ['Company registry', 'Sealed on this device', 'Test sign-in', 'Sign in to the company registry', "The registry's record"]) assert.ok(!text.includes(s), `${screen} shows ${s}`);
+      for (const s of ['Company registry', 'Export pending proofs', 'Test sign-in', 'Sign in to the company registry', "The registry's record"]) assert.ok(!text.includes(s), `${screen} shows ${s}`);
     }
+    // AC-60: the job list sits under the sealing result and Jobs works, with no registry chip, request or database.
+    await go(page, 'protect');
+    await page.locator('.jobs-recent').getByText('off-flight.ulg.fseal').waitFor();
+    assert.equal(await page.locator('.jobs-recent .jobs-status').first().innerText(), 'Sealed locally');
+    await go(page, 'jobs');
+    assert.deepEqual(await page.locator('.jobs-table tbody .jobs-name').allInnerTexts(), ['off-flight.ulg.fseal']);
     await page.goto(`${flagOff.url}console/#/app/verify?share=${'A'.repeat(43)}`);
     await page.locator('#page-verify').waitFor();
     assert.ok(!(await page.locator('body').innerText()).includes("The registry's record"));

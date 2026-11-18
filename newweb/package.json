@@ -7,7 +7,7 @@
     "dev": "vite --host 127.0.0.1",
     "build": "vite build && node scripts/copy-notices.mjs && python3 ../tools/refresh_console_cache.py",
     "preview": "node ../tests/web/serve.mjs 4173 /flightseal",
-    "test:browser": "node tests/console.mjs && node tests/manifest-mode.mjs"
+    "test:browser": "node tests/console.mjs && node tests/manifest-mode.mjs && node tests/jobs.mjs"
   },
   "dependencies": {
     "lucide-react": "1.73.0",

@@ -134,6 +134,7 @@ jobs:
           npm ci
           node --test tests/report-pdf.test.mjs
           node --test tests/trusted-keys.test.mjs tests/recipient-trust.test.mjs
+          node --test tests/jobs-store.test.mjs tests/routes.test.mjs
           npm run build
       - name: Registry outbox and client unit tests (state machine, backoff, allowlist, owner isolation, stale results)
         run: node --test newweb/tests/outbox.test.mjs newweb/tests/registry-client.test.mjs newweb/tests/registry-session.test.mjs

@@ -1870,7 +1870,7 @@ function App() {
         </div></section>
       </section>
       {/* Every build lists jobs here (AC-60); the flag-on build still shows registry-ui's list instead, until the registry chips join this one. */}
-      {!__REGISTRY_URL__ && screen === 'protect' && <section className="screen" aria-label="Sealed on this device"><SealedRecent rows={jobs.rows} storage={jobs.storage} notice={jobsNotice || jobs.error} allJobsHref={workspaceHref('jobs')} onAllJobs={(e) => { if (e.button !== 0 || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return; e.preventDefault(); navigate('jobs'); }} /></section>}
+      {!__REGISTRY_URL__ && screen === 'protect' && <div className="screen"><SealedRecent rows={jobs.rows} storage={jobs.storage} notice={jobsNotice || jobs.error} allJobsHref={workspaceHref('jobs')} onAllJobs={(e) => { if (e.button !== 0 || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return; e.preventDefault(); navigate('jobs'); }} /></div>}
       {screen === 'jobs' && <JobsPage rows={jobs.rows} storage={jobs.storage} error={jobs.error || jobsNotice} q={route.params.get('q') || ''} page={Number(route.params.get('page')) || 1}
         onUrl={setJobsUrl} onResume={resumeJob} onRemove={removeJob} onDownload={(name, text) => download(name, text, 'application/json')}
         sealHref={workspaceHref('protect')} onSeal={(e) => { if (e.button !== 0 || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return; e.preventDefault(); navigate('protect'); }} />}
