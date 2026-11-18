@@ -13,7 +13,8 @@ export function canonicalConsoleURL(current, consoleURL = new URL('./console/', 
   const receipt = destination === 'receipts' ? selection || parameters.get('receipt') : null;
   if (record && /^\d{1,10}$/.test(record)) selected.set('record', String(Number(record)));
   if (receipt && /^\d{1,5}$/.test(receipt)) selected.set('receipt', String(Number(receipt)));
-  target.hash = `/${destination}${selected.size ? `?${selected}` : ''}`;
+  const bare = !routes[route] && !selected.size && !current.searchParams.has('record');
+  if (!bare) target.hash = `/${destination}${selected.size ? `?${selected}` : ''}`; // a bare root opens the console's front door
   return target;
 }
 
