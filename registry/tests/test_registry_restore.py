@@ -1,5 +1,5 @@
 import pytest
-from registry_helpers import SEED_A, call, enroll, line, make_app, register, token
+from registry_helpers import SEED_A, call, enroll, line, make_app, register, share, token
 
 from registry.restore import apply_tombstones
 from registry.store import MemoryTable, StoreUnavailable
@@ -13,7 +13,7 @@ def _world():
     for i in (1, 2, 3):
         _, reg, _ = register(app, pilot, line(SEED_A, i), idem=f"idem-key-000000000{i}")
         ids.append(reg["registration_id"])
-        paths.append(call(app, "POST", "/v1/shares", pilot, {"registration_id": reg["registration_id"]})[1]["path"])
+        paths.append(share(app, pilot, reg["registration_id"])[1]["path"])
     backup = MemoryTable()
     backup.items = {k: dict(v) for k, v in live.items.items()}  # the backup, taken before the changes below
     call(app, "DELETE", paths[0], pilot)  # withdraw share 0
@@ -71,6 +71,6 @@ def test_restore_reapplies_compromised_keys_and_the_epoch():
     assert ("ORG#orgA", "ACTIVE_KEY") not in backup.items
     assert backup.items[("ORG#orgA", "EPOCH")]["epoch"] == 2
     s, out, _ = register(restored, pilot, line(SEED_A, 7), env_id=old_envelope)
-    assert (s, out["error"]) == (422, "envelope_expired")
+    assert (s, out["error"]) == (422, "epoch_mismatch")
     s, out, _ = register(restored, pilot, line(SEED_A, 7), idem="idem-key-0000000009")
     assert (s, out["error"]) == (403, "key_not_active")

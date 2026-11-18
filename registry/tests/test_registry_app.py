@@ -2,7 +2,7 @@
 import base64
 import json
 
-from registry_helpers import (SEED_A, SEED_B, call, enroll, envelope, line, make_app, register, token)
+from registry_helpers import (SEED_A, SEED_B, call, enroll, envelope, line, make_app, register, share, token)
 
 from registry import ed25519, receipt
 from registry.store import MemoryTable
@@ -141,7 +141,7 @@ def test_expired_wrong_sub_and_stale_epoch_envelopes():
     assert (s, out["error"]) == (422, "envelope_expired")
     other_sub = token(clock, sub="pilot-2")
     s, out, _ = register(app, other_sub, line(SEED_A, 5), env_id=envelope(app, pilot), idem="idem-key-0000000002")
-    assert (s, out["error"]) == (422, "envelope_expired")
+    assert (s, out["error"]) == (422, "sub_mismatch")
     other_org = token(clock, org="orgB")
     s, out, _ = register(app, pilot, line(SEED_A, 5), env_id=envelope(app, other_org), idem="idem-key-0000000003")
     assert (s, out["error"]) == (422, "envelope_expired")
@@ -149,7 +149,7 @@ def test_expired_wrong_sub_and_stale_epoch_envelopes():
     _, committed, _ = register(app, pilot, line(SEED_A, 9), env_id=env_id, idem="idem-key-0000000004")
     assert call(app, "POST", "/v1/epoch", token(clock, role="admin"), {})[1] == {"epoch": 1}
     s, out, _ = register(app, pilot, line(SEED_A, 5), env_id=env_id, idem="idem-key-0000000005")
-    assert (s, out["error"]) == (422, "envelope_expired")
+    assert (s, out["error"]) == (422, "epoch_mismatch")
     # a retry of an already-committed registration still gets its original ack
     s, out, _ = register(app, pilot, line(SEED_A, 9), env_id=env_id, idem="idem-key-0000000004")
     assert s == 200 and out == committed
@@ -177,7 +177,8 @@ def test_body_too_big_is_413_before_parsing():
 
 
 def _share(app, tok, rid, **extra):
-    return call(app, "POST", "/v1/shares", tok, {"registration_id": rid, **extra})
+    s, out, _ = share(app, tok, rid, **extra)
+    return s, out, None
 
 
 def test_share_lifecycle_and_identical_404s():
@@ -368,12 +369,12 @@ def test_bad_base64_body_is_400():
     assert (r["statusCode"], json.loads(r["body"])) == (400, {"error": "bad_request"})
 
 
-def test_deleting_a_registration_whose_share_ttl_expired_leaves_only_an_expiring_stub():
+def test_deleting_a_registration_whose_share_record_is_gone_leaves_a_withdrawn_stub():
     app, table, clock, pilot = setup()
     _, reg, _ = register(app, pilot, line(SEED_A, 5))
     _, share, _ = _share(app, pilot, reg["registration_id"])
     key = next(k for k in table.items if k[0].startswith("SHARE#"))
     del table.items[key]  # TTL already removed it
     assert call(app, "DELETE", f"/v1/registrations/{reg['registration_id']}", token(clock, role="admin"))[0] == 200
-    assert table.items[key]["ttl"] == clock.t + 86400
+    assert table.items[key]["state"] == "withdrawn" and "ttl" not in table.items[key]  # a permanent claim on the hash
     assert call(app, "GET", share["path"])[0] == 404

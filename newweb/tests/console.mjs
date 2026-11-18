@@ -906,7 +906,7 @@ try {
     const pad = (n) => String(n).padStart(2, '0');
     const landed = new Date(Math.floor((Date.now() - 3600e3) / 1000) * 1000);
     await page.locator('.protect-options summary').first().click();
-    await page.locator('#protect-landing').fill(`${landed.getFullYear()}-${pad(landed.getMonth() + 1)}-${pad(landed.getDate())}T${pad(landed.getHours())}:${pad(landed.getMinutes())}:${pad(landed.getSeconds())}`);
+    await page.locator('#protect-landing').fill(`${landed.getFullYear()}-${pad(landed.getMonth() + 1)}-${pad(landed.getDate())}T${pad(landed.getHours())}:${pad(landed.getMinutes())}:${pad(landed.getSeconds())}`.replace(/:00$/, '')); // Chrome normalises zero seconds away, and fill() rejects a value that changes
     await page.getByRole('button', { name: 'Seal this log' }).click();
     await page.waitForSelector('#handover-text', { timeout: 60000 });
     const handover = await page.locator('#handover-text').inputValue();

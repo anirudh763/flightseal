@@ -20,7 +20,7 @@ flowchart LR
   end
   subgraph AWS["AWS account (us-east-1)"]
     C[Cognito user pool, Lite plan]
-    G["API Gateway HTTP API<br/>$default stage: rate 10, burst 20<br/>JWT authorizer on every route but one"]
+    G["API Gateway HTTP API<br/>$default stage: rate 10, burst 20<br/>public share route: rate 2, burst 5<br/>JWT authorizer on every route but one"]
     L["Lambda python3.12 arm64<br/>128 MB, 5 s"]
     D[("DynamoDB, one table<br/>on demand, TTL attribute ttl")]
     W[CloudWatch Logs, 7 days]
@@ -40,7 +40,7 @@ flowchart LR
 
 | Boundary | What crosses it | What is checked |
 |---|---|---|
-| Internet to API Gateway | Bearer ID token, JSON body up to 4096 bytes | JWT signature, issuer, audience and expiry by the API Gateway authorizer; throttling at the stage |
+| Internet to API Gateway | Bearer ID token, JSON body up to 4096 bytes | JWT signature, issuer, audience and expiry by the API Gateway authorizer; throttling at the stage; CORS for the allowlisted console origins only (see [CORS](#cors)) |
 | API Gateway to Lambda | Verified claims (`sub`, `custom:org_id`, `custom:role`) | The Lambda trusts only these claims for identity. A body field named `org_id` (or any field not on the route's allowlist) is a 400 |
 | Lambda to DynamoDB | Condition-guarded writes and transactions | IAM allows GetItem, PutItem, UpdateItem, DeleteItem, Query and ConditionCheckItem on the table ARN only. Transactions are authorised through those item actions ([AWS docs](https://docs.aws.amazon.com/amazondynamodb/latest/developerguide/transaction-apis-iam.html)); there is no separate TransactWriteItems permission |
 | Company to registry | A company public key | Enrollment needs an admin and a fresh, single-use challenge signed by the new key |
@@ -78,6 +78,7 @@ One table, string keys `PK`/`SK`:
 | `ORG#o / REG#<rid>` | fp, head, count, received_at, state, up to 10 share hashes |
 | `ORG#o / IDEM#<key>` | payload hash, rid, received_at, expiry (`DEDUPE_SECONDS`, default 7 days) |
 | `SHARE#<sha256(token)> / SHARE` | org, rid, state, expiry (default 30 days, at most 365) |
+| `ORG#o / SIDEM#<key>` | share idempotency: rid, token hash, the share's expiry, and its own expiry (`DEDUPE_SECONDS`) |
 | `TOMB#<org>#<id> / TOMB` | a withdrawal, deletion, key-compromise or epoch record, never expired |
 
 ### Never stored
@@ -88,8 +89,11 @@ head and count.
 
 ## Requests
 
-Order: size (413 over 4096 bytes) → identity (401/403) → body schema (400) → idempotency lookup → envelope (422) →
-receipt format (400) → signature (422) → key state (403) → one transaction.
+Order (as in `app.py`): size (413 over 4096 bytes) → identity (401/403) → body schema (400) → idempotency lookup →
+receipt format (400) → signature (422) → envelope (422 `envelope_expired`, `sub_mismatch` or `epoch_mismatch`;
+only here does a lookup of an already committed registration happen, so a retry of a committed one gets its ack) →
+key state (403) → one transaction. The signature is checked before the envelope and before any existence lookup,
+so an unsigned request cannot learn whether a registration exists.
 
 A new registration is one `TransactWriteItems`: put REG if absent, put IDEM if absent or expired, and add one to the
 month's quota if it is under the limit. Either all three happen or none do, so a 429 leaves nothing behind. When the
@@ -105,10 +109,63 @@ different payload), an existing REG returns the original ack (or 410 if deleted)
 - The same receipt under a new key, or after the idempotency record expired, finds the existing registration
   (`rid` is derived from org, fingerprint, head and count) and returns its ack, or 410 if it was deleted. A retry
   never creates a second registration or a new share.
-- An envelope that has expired (or was invalidated by `POST /v1/epoch`) blocks new registrations but not the
-  retry of one that already committed.
+- An envelope that is unusable blocks new registrations but not the retry of one that already committed. The 422
+  says why: `envelope_expired` (expired, or unknown in this org, which includes TTL-deleted), `sub_mismatch` (issued to
+  another user) or `epoch_mismatch` (issued before the last `POST /v1/epoch`). Any signed-in caller can read the
+  current epoch with `GET /v1/epoch`, so a client can drop a cached envelope before it is refused.
 - After a deletion, an identical retry with the original idempotency key still returns the original ack with
   `disposition: "deleted"` until the idempotency record expires (at most `DEDUPE_SECONDS`).
+
+### Shares
+
+`POST /v1/shares` takes `{registration_id, token_hash, idempotency_key, expires_days?}`. **The client makes the token**:
+32 random bytes from `crypto.getRandomValues`, base64url (43 characters). It sends only the token's SHA-256 (64
+lowercase hex) and keeps the token. The registry stores the hash, as it always did, so the stored data and the public
+`GET /v1/shares/{token}` (which hashes the token it is given) are unchanged.
+
+This was chosen over "rotate on retry" because a lost response then costs nothing. A retry with the same
+`(idempotency_key, registration_id, token_hash)` returns 200 with the same share, and the client already holds the
+token. A server-made token could only be recovered by issuing a new one.
+
+- The same idempotency key with another registration or another token hash is 409 `idempotency_conflict`.
+- **A token hash is never reusable.** Share records have no TTL, and deleting a registration leaves a withdrawn
+  record (no TTL) for every share it issued, even one whose record was lost. A restore writes a withdrawn record for
+  every share tombstone whose share is missing from the backup. So a hash used once stays claimed. Reusing it gets
+  409 `conflict`, unless it is the same org and registration: then it is that caller's own retry, after the
+  idempotency record expired, and it gets the share back with its current disposition. Without this, a link holder
+  could re-register an old withdrawn hash once TTL had removed its record, and the old link would show their
+  registration. Share records are about 150 bytes, at most 10 per registration.
+- A replay never reopens anything. It reports the share's current `disposition` (`active`, `withdrawn` or
+  `expired`).
+- A replay is answered before the 10-share limit is checked, so a retry at the limit still gets its share.
+- The response has no token: `{registration_id, expires_at, disposition}`.
+- **Enumeration resistance is unchanged.** Unknown, expired, withdrawn and malformed links get the same 404. The
+  registry cannot check the randomness of a token it never sees, so a weak token chosen by a member only weakens that
+  member's own link. The shipped client always uses 256 random bits.
+
+### CORS
+
+The console runs on another origin (GitHub Pages), so the API answers CORS for an allowlist of exact origins:
+
+- **Stack:** the HTTP API's `corsPreflight` sets the allowed origins. The default is `https://anirudh763.github.io`;
+  change it with `-c corsOrigins=https://a.example,https://b.example`. The settings are:
+  - allowed methods: GET, POST, DELETE and OPTIONS
+  - allowed headers: `authorization`, `content-type` and `idempotency-key`
+  - `allowCredentials: false`, preflight cached 10 minutes
+
+  API Gateway answers the preflight itself. The stack rejects `*`, wildcard hosts and non-https origins, and a
+  synth test checks this.
+- **Lambda (`CORS_ORIGINS`):** handles CORS where no API Gateway CORS is configured, which is the dev server and the
+  LocalStack REST stand-in.
+  - The value is a comma list of exact origins. A `scheme://host:*` entry allows any port; it is for dev only.
+  - `*` and wildcard hosts are ignored.
+  - An allowlisted `Origin` gets that origin back, with `Vary: Origin`. Any other origin gets no CORS header.
+  - Preflight is 204 for an allowed origin and 403 `cors_forbidden` otherwise. It is answered before identity
+    and the restore gate, so the 503 or 401 that follows can be read by the console.
+  - Credentials are never allowed: the token travels in `Authorization`, not in a cookie.
+- **Public share view:** in the Lambda it sends `Access-Control-Allow-Origin: *` with no credentials, so any
+  recipient's page can read it. On the deployed HTTP API, the API-wide CORS settings apply to this route too (API
+  Gateway overrides integration CORS headers), so there it is limited to the allowlist.
 
 ## Withdrawal, deletion and backups
 
@@ -132,12 +189,17 @@ different payload), an existing REG returns the original ack (or 410 if deleted)
   This needs the source table to still be readable. If it is gone, tombstones written after the backup are lost and
   the restored table must stay closed until someone decides what to do (see [RUNBOOK_AWS.md](RUNBOOK_AWS.md)).
 
+  **Known gap (not fixed):** a restore also drops every registration and share created after the backup. The
+  browser outbox keeps its acknowledgement, so it may still show "Registered" for a proof the restored table no
+  longer has. Nothing tells the browser, and the outbox does not resend a proof it already holds an ack for.
+
 ## What TTL does not guarantee
 
 DynamoDB TTL deletes expired items in the background, typically within days, with no exact deadline. The registry
 never relies on it: every read checks `expires_at` itself, so an expired envelope, challenge, idempotency record or
 share is treated as gone even while the item still exists, and conditional writes treat an expired-but-present
-idempotency record as absent. TTL only keeps the table small. Tombstones and registrations have no TTL.
+idempotency record as absent. TTL only keeps the table small. Tombstones, registrations and share records have
+no TTL (a share hash must stay claimed; see Shares).
 
 ## Failure behaviour
 
