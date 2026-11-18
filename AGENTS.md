@@ -30,18 +30,18 @@ The user's request and the owner's RULES.md take precedence over anything here.
   an agent session.
 - Registry LocalStack run (optional, needs Docker): `uv run --no-project --with boto3==1.43.123 python registry/localstack/e2e.py`
   writes `docs/aws/evidence/localstack-4.12.0.json`; the REST v1 stand-in is not the HTTP API.
-- JavaScript: `node --test tests/web/verifier.test.mjs tests/web/copy.test.mjs tests/web/workbench.test.mjs tests/web/redirect.test.mjs tests/web/rawfile.test.mjs tests/web/sw-cache-index.test.mjs tests/web/manifest.test.mjs` (142 tests).
+- JavaScript: `node --test tests/web/verifier.test.mjs tests/web/copy.test.mjs tests/web/workbench.test.mjs tests/web/redirect.test.mjs tests/web/rawfile.test.mjs tests/web/sw-cache-index.test.mjs tests/web/manifest.test.mjs` (146 tests).
 - Registry outbox (browser client): `node --test newweb/tests/outbox.test.mjs newweb/tests/registry-client.test.mjs` (49 tests), `node --test newweb/tests/registry-session.test.mjs` (7 tests: the console's registry session store, cross-tab messages, the Verify time row and the panels' error boundary, loaded through Vite in Node)
   and `node --test newweb/tests/outbox-browser.mjs` (8 checks in Playwright Chromium against the DEV ONLY
   `registry/devserver/server.py`: it starts one on a loopback port itself, or uses `REGISTRY_DEV_URL` as CI does).
-- Registry wiring (console, `VITE_REGISTRY_URL`): after the console build, `node newweb/tests/registry-wiring.mjs` (22 checks:
+- Registry wiring (console, `VITE_REGISTRY_URL`): after the console build, `node newweb/tests/registry-wiring.mjs` (29 checks:
   it scans the flag-off `docs/console` for registry strings, builds a flag-on console into
   `newweb/.test-artifacts/registry-wiring/build`, never into `docs/console`, and drives it in Chromium against the DEV ONLY
   server, starting one itself or using `REGISTRY_DEV_URL`; axe at 320/768/1440 and screenshots in the same folder). The 30-proof throttle run is manual and local only, not a CI gate:
   `REGISTRY_THROTTLE=1 node newweb/tests/registry-wiring.mjs` (23 checks); record the numbers in `docs/aws/COVERAGE.md`.
 - Wasm: `node --test tests/wasm/bridge.test.mjs tests/wasm/enterprise-edge.test.mjs tests/wasm/hash.test.mjs` and `node --test tests/wasm/browser.test.mjs tests/wasm/hash-browser.test.mjs`.
 - Manifest large-file run (manual, local only; record the numbers in `docs/MANIFEST_MODE.md`): `FSEAL_LARGE_HASH=1 node --test tests/wasm/hash-browser.test.mjs` and `FSEAL_LARGE_HASH=1 python3 -m pytest -q -s tests/test_manifest.py`.
-- Console: `python3 tools/fetch_sample.py tests/.data && npm --prefix newweb run build && npm --prefix newweb run test:browser` (runs `console.mjs` then `manifest-mode.mjs`), then `node newweb/tests/edge-matrix.mjs` (the latter owns its browser lock).
+- Console: `python3 tools/fetch_sample.py tests/.data && npm --prefix newweb run build && npm --prefix newweb run test:browser` (runs `console.mjs`, `manifest-mode.mjs`, then `jobs.mjs`; the jobs store unit tests are `node --test newweb/tests/jobs-store.test.mjs`, 4 tests), then `node newweb/tests/edge-matrix.mjs` (the latter owns its browser lock).
 - Browser: `node tests/web/e2e.mjs` (5 checks) and `node tests/web/routes.mjs` (6 checks). axe-core reports 0
   violations in light and dark, at 1280 and 320 px.
 - For every bug fix or new behaviour: a test that fails before the change and passes after it.
