@@ -158,6 +158,8 @@ function App() {
   const [protectStep, setProtectStep] = useState(0); // 1-4 while a small file is being sealed (PROTECT_STEPS)
   const [carryToLarge, setCarryToLarge] = useState(null); // { file }: a too-large small-file pick handed to Large files
   const [protectError, setProtectError] = useState(''); // shown under the file field, which names it through aria-describedby
+  const [pastedManifestReceipt, setPastedManifestReceipt] = useState(null); // { text }: a list's receipt message pasted on Seal & send
+  const pasteFocusRef = useRef('');
   const [manifestOutput, setManifestOutput] = useState(null); // ManifestSeal's result: kept here so it survives a route trip, like protectSealed
   const [manifestSealed, setManifestSealed] = useState(false); // ManifestSeal has a result, so its handoff replaces the step panel
   const protectRunRef = useRef(0);
@@ -293,6 +295,26 @@ function App() {
       : !unsavedError && <div className="actions-row"><button type="button" className="button primary" onClick={downloadUnsaved}><Download aria-hidden="true" size={16} />Download unsaved work</button></div>}
   </div>;
   const protectDone = protectMode === 'embedded' ? !!protectSealed : manifestSealed;
+  useEffect(() => { // old receipts say "open #/app/protect and paste this whole message"
+    if (screen !== 'protect') return undefined;
+    const onPaste = (event) => {
+      if (event.target?.closest?.('input, textarea, select, [contenteditable]')) return;
+      const text = event.clipboardData?.getData('text/plain') || '';
+      if (!text.includes('fseal-receipt v1')) return;
+      event.preventDefault();
+      const list = /^\s*HashWing manifest receipt/m.test(text);
+      if (list) setPastedManifestReceipt({ text }); else { invalidateCheck(); setCheckText(text); }
+      pasteFocusRef.current = list ? 'manifest-check-file' : 'check-file'; // next step: choose the sealed file
+      navigate('verify');
+    };
+    document.addEventListener('paste', onPaste);
+    return () => document.removeEventListener('paste', onPaste);
+  }, [screen]); // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => { // after the route's own heading focus (one frame later), go on to the next step
+    if (screen !== 'verify' || !pasteFocusRef.current) return;
+    const id = pasteFocusRef.current; pasteFocusRef.current = '';
+    requestAnimationFrame(() => requestAnimationFrame(() => document.getElementById(id)?.focus()));
+  }, [screen]);
   useEffect(() => { if (protectSealed?.log) handoffRef.current?.focus(); }, [protectSealed?.log]); // seal finished: the handoff heading
   useEffect(() => { if (!protectDone && sealStartFocusRef.current) { sealStartFocusRef.current = false; document.getElementById('seal-what-title')?.focus(); } }, [protectDone]);
   updateSafeRef.current = !busy && !manifestSealActive && !manifestCheckActive && !(sealOutput && !sealOutputAcknowledged);
@@ -1637,6 +1659,8 @@ function App() {
           {/* One live region that stays mounted: each step (25% at a time), then "Sealed 1 file" as focus moves to the handoff. */}
           <p className="visually-hidden" role="status">{protectMode !== 'embedded' ? '' : protectStep > 0 ? `Step ${protectStep} of 4: ${PROTECT_STEPS[protectStep - 1]}` : protectSealed ? 'Sealed 1 file' : ''}</p>
           {!protectDone && <>
+            {/* Receipts sent before this layout say "open #/app/protect and paste": point them at Verify first thing. */}
+            <p className="seal-verify-link"><a href={workspaceHref('verify')} onClick={(e) => { if (e.button !== 0 || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return; e.preventDefault(); navigate('verify'); }}>Checking a receipt someone sent you? Go to Verify</a></p>
             <h2 id="seal-what-title" tabIndex="-1">What are you sealing?</h2>
             <fieldset className="mode-choice" aria-labelledby="seal-what-title">
               <label><input type="radio" name="protect-mode" value="embedded" checked={protectMode === 'embedded'} onChange={() => setProtectMode('embedded')} />Small file: seal the whole file, up to 45 MiB</label>
@@ -1668,7 +1692,6 @@ function App() {
             shareNote={__REGISTRY_URL__ ? <RegistryShareNote /> : null}
             onSealMore={sealMoreProtect} />}
           <ManifestSeal hidden={protectMode !== 'manifest'} output={manifestOutput} setOutput={setManifestOutput} carry={carryToLarge} common={sealCommon} jobRef={jobRef} signingKey={signingKey} onActiveChange={setManifestSealActive} onUnsaved={setManifestUnsaved} onSealed={__REGISTRY_URL__ ? registrySealed : undefined} onDone={setManifestSealed} onSealMore={() => { setJobRef(''); sealStartFocusRef.current = true; }} shareNote={__REGISTRY_URL__ ? <RegistryShareNote /> : null} />
-          {!protectDone && <p className="seal-verify-link"><a href={workspaceHref('verify')} onClick={(e) => { if (e.button !== 0 || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return; e.preventDefault(); navigate('verify'); }}>Checking files someone sent you? Go to Verify</a></p>}
         </div></section>
       </section>
       {__REGISTRY_URL__ && <section className="screen" aria-label="Registry status" hidden={screen !== 'protect'}><RegistryBoundary><SealedOnDevice onSignIn={() => navigate('help')} /></RegistryBoundary></section>}
@@ -1725,7 +1748,7 @@ function App() {
         <div className="panel verify-panel"><div className="panel-head"><ShieldCheck aria-hidden="true" size={18} /><h2 id="verify-title">Verification inputs</h2></div><div className="panel-body input-grid"><div><label className="field-label" htmlFor="log-input">HashWing / FlightSeal .fseal log <span>(up to {fmtBytes(MAX_UI_BYTES)})</span></label><input id="log-input" type="file" accept=".fseal,application/octet-stream" onChange={(e) => chooseLog(e.target.files?.[0] || null)} /></div><div><label className="field-label" htmlFor="receipt-input">Witness receipts <span>(optional)</span></label><input id="receipt-input" ref={receiptInputRef} type="file" accept=".receipts,text/plain" aria-invalid={receiptInputError ? 'true' : undefined} aria-describedby={receiptInputError ? 'receipt-input-error' : undefined} onChange={(e) => chooseReceipts(e.target.files?.[0] || null)} />{receiptLoading && <p className="field-hint" role="status">Reading receipts…</p>}{receiptInputError && <p id="receipt-input-error" className="field-hint receipt-error">{receiptInputError}</p>}{receiptSelected && <button className="button secondary remove-receipts" type="button" onClick={removeReceipts}>Remove receipts</button>}</div><div className="field-wide"><label className="field-label" htmlFor="trusted-key">Public key for receipt check <span>(64 lowercase hexadecimal digits)</span></label><input id="trusted-key" className="mono-input" value={keyText} onChange={(e) => { invalidateCheck(); setKeyText(e.target.value); }} autoComplete="off" spellCheck="false" /><TrustedKeyPinControls value={keyText} onUse={(value) => { invalidateCheck(); setKeyText(value); }} /></div><div className="field-wide actions-row"><button className="button primary" type="button" disabled={!logFile || logFile.size > MAX_UI_BYTES || receiptLoading || !!receiptInputError || !!busy} onClick={verifyPicked}>Run check</button><button className="button secondary" type="button" disabled={!!busy} onClick={() => loadDemo(false)}>Load included 800-record demo</button></div></div></div>{result && <ResultPanel result={result} resultTitle={resultTitle} reportText={reportText} onDownloadText={() => download('hashwing-verification-report.txt', reportText)} onDownloadMarkdown={() => download('hashwing-evidence-report.md', reportMarkdown, 'text/markdown;charset=utf-8')} onDownloadJson={() => download('hashwing-verification-report.json', reportJson, 'application/json')} onNavigate={navigate} onShare={() => setShareDialogOpen(true)} trust={shownTrust} />}</section>}
 
       {/* Always mounted (hidden elsewhere), so a running check of large files survives a visit to another page. */}
-      <section className="screen" aria-label="Large files" hidden={screen !== 'verify'}><ManifestCheck onActiveChange={setManifestCheckActive} /></section>
+      <section className="screen" aria-label="Large files" hidden={screen !== 'verify'}><ManifestCheck onActiveChange={setManifestCheckActive} incoming={pastedManifestReceipt} /></section>
 
       {screen === 'records' && <section className="screen">{!result ? <EmptyState onNavigate={navigate} /> : <div className="records-layout"><section className="panel records-panel"><div className="panel-head"><List aria-hidden="true" size={18} /><h2>Records <span className="subcount">{fmtBig(result.native.records)}</span></h2></div><ol className="record-list">{pageRows.map((row, localIndex) => { const index = Number(row.index ?? rowStart + localIndex); const broken = !!result.indexed.problem && index === Number(result.indexed.problem.record); return <li key={index} className={`${broken ? 'record-broken' : 'record-pass'} ${index === selectedRecord ? 'selected' : ''}`}><button type="button" aria-current={index === selectedRecord ? 'true' : undefined} onClick={() => setSelectedRecord(index)}><span className="record-index">{fmtBig(index)}</span><span className="record-status">{broken ? `${problemLabel(result.indexed.problem.token)} (${result.indexed.problem.token})` : 'Checked'}</span><span className="record-bytes">{row.len == null ? 'problem row' : fmtBytes(row.len)}</span></button></li>; })}</ol><div className="pagination"><button className="button secondary" disabled={page === 0} onClick={() => setPage(0)}>First</button><button className="button secondary" disabled={page === 0} onClick={() => setPage((v) => Math.max(0, v - 1))}>Previous</button><span>Page {page + 1} of {pageCount}</span><button className="button secondary" disabled={page >= pageCount - 1} onClick={() => setPage((v) => Math.min(pageCount - 1, v + 1))}>Next</button><button className="button secondary" disabled={page >= pageCount - 1} onClick={() => setPage(pageCount - 1)}>Last</button></div></section><section className="panel detail-panel" aria-labelledby="record-detail-title"><div className="panel-head"><FileCheck2 aria-hidden="true" size={18} /><h2 id="record-detail-title">Record {fmtBig(selectedRecord)}</h2></div><div className="panel-body">{recordError ? <div role="alert" className="alert error-alert"><p>{recordError}</p><button className="button secondary" onClick={() => loadRecord(selectedRecord)}>Retry</button></div> : !recordDetail ? <p className="muted" role="status">Loading record…</p> : <><div className="detail-actions"><button className="button secondary" type="button" onClick={() => navigate('video')}>Video</button></div><RecordDetail record={recordDetail} /></>}</div></section></div>}</section>}
 
@@ -2315,9 +2338,10 @@ function ItemNote({ note, showLanding }) {
   return <>{showLanding && landing && <span className="manifest-note">Reported landing time: {landing} (operator-entered, signed)</span>}{derivedFrom && <span className="manifest-note">Edited copy of: {derivedFrom} (operator-entered, signed)</span>}{text && <span className="manifest-note">Operator note: {text}</span>}</>;
 }
 const STATUS_KIND = { match: 'ok', 'bytes-differ': 'warn', missing: 'grey', 'not-in-manifest': 'neutral' };
-function ManifestCheck({ onActiveChange }) {
+function ManifestCheck({ onActiveChange, incoming }) {
   const [sealed, setSealed] = useState(null);
   const [text, setText] = useState('');
+  useEffect(() => { if (incoming) setText(incoming.text); }, [incoming]); // a receipt message pasted on Seal & send
   const [key, setKey] = useState('');
   const [locals, setLocals] = useState([]);
   const [progress, setProgress] = useState(null);
