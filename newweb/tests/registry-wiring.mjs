@@ -768,10 +768,14 @@ try {
       await sealSmall(a, 'reload-flight.ulg');
       assert.equal(await reloadWarns(a), true, 'a fresh seal warns before reload');
       await Promise.all([a.waitForEvent('download'), a.getByRole('button', { name: 'Download receipt' }).click()]);
-      await a.getByRole('button', { name: 'Yes, receipt saved' }).click();
       await Promise.all([a.waitForEvent('download'), a.getByRole('button', { name: 'Download sealed file' }).click()]);
       assert.equal(await reloadWarns(a), true, 'a Download click is not proof the save finished');
-      await a.locator('.handoff-confirm').getByRole('button', { name: 'Yes, saved' }).click();
+      // No question after a download; the sign-in gate is where the user says it saved, without downloading again.
+      await a.evaluate(() => { location.hash = '/login'; });
+      await a.locator('#auth-main').getByRole('button', { name: 'I saved it' }).click();
+      await a.waitForFunction(() => !document.querySelector('.auth-output-warning'));
+      await a.evaluate(() => { location.hash = '/app/protect'; });
+      await a.locator('#handover-text').waitFor();
       assert.equal(await reloadWarns(a), false, 'the unsent proof is saved on this device, so nothing is left to lose');
       await a.reload();
       await a.locator('#page-protect').waitFor();
