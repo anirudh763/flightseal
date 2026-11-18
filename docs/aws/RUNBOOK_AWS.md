@@ -47,8 +47,8 @@ expire; nothing in this design revokes them sooner.
 
 The Lambda's cognito adapter also needs `COGNITO_ISSUER` (`https://cognito-idp.us-east-1.amazonaws.com/<UserPoolId>`)
 and `COGNITO_CLIENT_ID` (`<UserPoolClientId>`). Without both, every signed-in request is 503
-`identity_unavailable` and the log says `identity config`. The stack does not set them yet (infra packet); until it
-does, a deploy answers 503 to every signed-in request. A bad or wrong token is 401.
+`identity_unavailable` and the log says `identity config`. The stack sets both from its own user pool and app client
+(`infra/lib/stack.ts`), with a synth assertion. A bad or wrong token is 401.
 
 ## Onboard a company
 
@@ -71,7 +71,7 @@ operator with `tools/registry_onboard.py`, never by the app or the invitee. Not 
 
 Before creating anyone the script checks that the pool allows admin-created users only and that its
 `TemporaryPasswordValidityDays` is between 1 and 7 (change the limit with `--max-temp-days`). The pool setting
-itself is set by the infra stack (PR #39, not yet on main). Cognito makes the temporary password and emails it;
+itself is set by the infra stack (`infra/lib/stack.ts`: 3 days). Cognito makes the temporary password and emails it;
 the script never sees or prints one. The email is lowercased, so `A@x.com` and `a@x.com` are one user. A user
 who already exists is refused and left unchanged. The script needs `boto3` and the owner's
 credentials only for a real run; `--dry-run` calls nothing.

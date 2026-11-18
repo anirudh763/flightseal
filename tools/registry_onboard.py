@@ -27,7 +27,7 @@ from registry.identity import ORG_ID, ROLES  # noqa: E402
 ORGS = Path(__file__).resolve().with_name("registry_orgs.json")
 POOL_ID = re.compile(r"([a-z]{2}(?:-[a-z]+)+-\d)_[0-9A-Za-z]{1,32}")
 EMAIL = re.compile(r"[^@\s]+@[^@\s]+\.[^@\s]+")
-DEFAULT_MAX_TEMP_DAYS = 7  # upper bound only; the pool's own setting is set by the infra stack (PR #39)
+DEFAULT_MAX_TEMP_DAYS = 7  # upper bound only; the pool's own setting is set by the infra stack (infra/lib/stack.ts: 3 days)
 
 
 class Refused(Exception):
