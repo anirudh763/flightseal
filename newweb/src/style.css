@@ -925,7 +925,7 @@ button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible
 
 @media (max-width: 768px) { input:not([type=checkbox]):not([type=radio]), textarea, select { font-size: max(16px, 1em) !important; } }
 
-.verify-demo { grid-column: 1 / -1; }
+.verify-demo, .verify-layout > .verify-check { grid-column: 1 / -1; }
 .verify-demo .panel-body { display: grid; gap: 12px; }
 .verify-demo p { margin: 0; max-width: 76ch; }
 .demo-guidance { display: flex; align-items: center; flex-wrap: wrap; gap: 8px 16px; color: var(--muted); }
@@ -1116,3 +1116,44 @@ input[type=datetime-local] { width: 100%; max-width: 320px; min-width: 0; min-he
 .app-shell:not(.canonical-page) .command-actions { display: flex; width: auto; justify-content: flex-end; }
 .registry-bar-link { display: inline-block; max-width: 40vw; line-height: 44px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 @media (forced-colors: active) { .nav a[aria-current=page] { border-left: 4px solid Highlight; font-weight: 700; } }
+/* Seal & send: one step panel, then the handoff (EXPERIENCE.md "Release layout, locked"). */
+.seal-panel { max-width: 1040px; }
+.seal-body, .manifest-body { display: grid; gap: 10px; }
+.seal-body h2 { margin: 0; font-size: 1.08rem; font-weight: 700; }
+.seal-body .button.primary, .seal-body .button.secondary { justify-self: start; }
+.seal-total { padding-top: 6px; border-top: 1px solid var(--line); font-weight: 600; }
+.seal-file-list { padding-left: 0; list-style: none; }
+.signing-line { display: grid; gap: 6px; padding: 10px 12px; border: 1px solid var(--line); border-radius: var(--radius); }
+.signing-line p { margin: 0; }
+.signing-line a { color: var(--forest); text-decoration: underline; }
+.signing-fingerprint { display: flex; flex-wrap: wrap; gap: 8px 12px; align-items: center; }
+.signing-fingerprint .fingerprint { flex: 1 1 22ch; min-width: 0; }
+.seal-progress { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; }
+.seal-progress label { flex: 1 1 100%; font-variant-numeric: tabular-nums; }
+.seal-progress progress { flex: 1 1 200px; height: 10px; }
+.seal-verify-link { margin: 0; }
+.seal-verify-link a { display: inline-flex; align-items: center; min-height: 44px; color: var(--forest); }
+.handoff { margin-top: 0; padding-top: 0; border-top: 0; }
+.seal-summary { color: var(--muted); font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
+.handoff-steps { display: grid; gap: 16px; margin: 0; padding-left: 1.4em; list-style: decimal outside; }
+.handoff-steps > li { padding-left: 4px; } /* a list item, so the step number shows */
+.handoff-steps > li > * { margin: 0; }
+.handoff-steps > li > * + * { margin-top: 8px; }
+.handoff-steps textarea { display: block; width: 100%; }
+.handoff-steps > li::marker { font-weight: 700; font-variant-numeric: tabular-nums; }
+.handoff-step-head { display: flex; flex-wrap: wrap; gap: 4px 12px; align-items: baseline; }
+.handoff-step-title { font-weight: 700; }
+.handoff-original-list { margin: 4px 0; padding-left: 1.2em; }
+
+/* At phone and tablet width "Other apps" belongs in the Menu panel, after More tools, not on a row of its own. */
+.workbench-rail .nav-apps { display: none; }
+@media (max-width: 768px) {
+  .workbench-rail .rail-apps { display: none; }
+  .workbench-rail .nav .nav-apps { display: block; grid-column: 1 / -1; justify-self: stretch; flex-basis: 100%; margin: 0; padding-top: 6px; border-top: 1px solid var(--line); }
+  .workbench-rail .nav .nav-apps summary { min-height: 44px; padding: 8px 10px; border: 0; color: #25364b; font-size: 13px; }
+  .workbench-rail .nav .nav-apps summary { list-style: none; }
+  .workbench-rail .nav .nav-apps summary::-webkit-details-marker { display: none; }
+  .workbench-rail .nav .nav-apps summary::after { content: "▸"; margin-left: auto; color: #2355ba; }
+  .workbench-rail .nav .nav-apps[open] summary::after { content: "▾"; }
+  .workbench-rail .nav .nav-apps > div { position: static; min-width: 0; box-shadow: none; border: 0; }
+}

@@ -330,6 +330,17 @@ export function RegistryBarLink({ href, onOpen }) {
   const [, s] = useRegistry();
   return s.claims && !s.needsSignIn ? <a className="registry-bar-link" href={href} onClick={onOpen} aria-label={`Company registry (${s.claims.org})`} title={s.claims.org}>Company registry</a> : null;
 }
+/** Seal & send, flag on and signed in: who the next seal registers for (EXPERIENCE.md signing line 3). */
+export function RegistrySigningLine() {
+  const [, s] = useRegistry();
+  return s.claims && !s.needsSignIn ? <p className="registry-signing">Registering for <span className="wrap">{s.claims.org}</span> as <span className="wrap">{s.claims.sub}</span></p> : null;
+}
+/** After sealing, flag on: what a share link carries. Links are made from the row in "Sealed on this device". */
+export function RegistryShareNote() {
+  return <details className="report-details" onKeyDown={closeDisclosure}><summary>Share link <ChevronDown size={17} aria-hidden="true" /></summary>
+    <p className="field-hint">A share link opens the registry's record of this receipt, not the files. Your client still needs the files and the receipt message. Make one from Sealed on this device once it shows Registered.</p>
+  </details>;
+}
 export function RegistryPanel() {
   const [r, s] = useRegistry();
   const [draft, setDraft] = useState('');
