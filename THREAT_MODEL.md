@@ -86,6 +86,7 @@ file names, manifests, salts, per-file digests, GPS or notes.
 | Keep using an envelope after a pilot leaves | stopped | `POST /v1/epoch` invalidates every outstanding envelope |
 | Replay a registration to resurrect a withdrawn share or a deleted registration | no effect | a retry returns the original ack (or 410) and never creates a share |
 | Restore an old backup to bring back withdrawn shares | refused until tombstones are applied | `RESTORED_FROM` closes every route (503) until `apply_tombstones` writes its marker |
+| Retry a lost share, or re-send a lost registration, after a restore | **not prevented** | if the share and its idempotency record were both created after the backup, the same client retry returns 201 active with a fresh 30 days (past its original expiry, so an expired link works again); a lost registration re-sent gets a new `received_at`. Fix decided, not built: the security journal (spine AD-20) restores the original times |
 | Guess a share link | infeasible | 256-bit random token; only its SHA-256 is stored; unknown, withdrawn, expired and deleted links give the same 404 |
 | Read state during a store outage | refused (503) | every read of share, registration, key or restore state fails closed |
 | Run up the bill | **not prevented** | stage throttling bounds the rate; a budget only alerts and does not cap spend ([COST.md](docs/aws/COST.md)) |

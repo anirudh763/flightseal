@@ -1,6 +1,6 @@
 ---
 name: HashWing
-description: Calm, light evidence console for sealing drone flight files and letting an outside reviewer check them. Inherits the repo-root DESIGN.md and the final token layer of newweb/src/style.css; this file restates those tokens by name and adds only the registry-status components.
+description: Calm, light evidence console for sealing drone flight files and letting an outside reviewer check them. This file is the one canonical token map for the console. Its values are read from the final token layer of newweb/src/style.css (lines 889-899); the repo-root DESIGN.md keeps the product direction and points here for tokens.
 status: final
 updated: 2026-11-17
 sources:
@@ -87,7 +87,8 @@ components:
   button-secondary:
     background: '{colors.surface}'
     foreground: '{colors.ink}'
-    border: '{colors.line}'
+    border: '{colors.field-border}'
+    note: 'Changed 2026-11-17 from {colors.line}: #c3cedb on white is 1.59:1, below the 3:1 non-text contrast a button boundary needs; #71829a is 3.92:1.'
     radius: '{rounded.sm}'
     minHeight: '{spacing.target}'
   status-label-ok:
@@ -122,13 +123,32 @@ components:
     border: '{colors.line}'
     radius: '{rounded.lg}'
     note: 'Calm inline notice. Replaces banners and toasts for every state in EXPERIENCE.md.'
+  choice-buttons:
+    background: '{colors.surface}'
+    border: '{colors.field-border}'
+    selected-background: '{colors.action-tint}'
+    selected-border: '{colors.action}'
+    selected-border-width: 2px
+    border-width: 1px
+    selected-mark: 'check icon before the label'
+    forced-colors: 'selected uses Highlight / HighlightText'
+    radius: '{rounded.sm}'
+    minHeight: '{spacing.target}'
+    note: 'New (release layout). The Verify chooser: a native radio group in a fieldset with the legend "What were you sent?", labels styled as two choice buttons. The tint alone is 1.14:1 on white, so the selection is also shown by the check mark and the 2px border.'
+  compare-table:
+    border: '{colors.line}'
+    typography: '{typography.data}'
+    note: 'New. Full main-column width at 1440px; below the 768px rule it becomes one summary per file with a Details disclosure.'
+  counts-row:
+    typography: '{typography.data}'
+    note: 'New. Matches, differs, missing, extra counts in one line with status shapes; numbers tabular.'
 ---
 
 ## Brand & Style
 
 HashWing is an evidence tool for small drone inspection companies and the clients or insurers who receive their files. It has to feel calm and trustworthy: a quiet, light workspace where the one next step is obvious and nothing shouts. The owner's wording is "very user friendly, calm and premium; nothing hitting your face".
 
-"Premium" here means restraint, not decoration. It comes from generous spacing, plain words, aligned data in a monospace face and precise status wording. There are no gradients, hero art, celebration animations or dark-first themes. This file does not change the repo-root `DESIGN.md`. It inherits the workbench direction there (light neutral canvas, 220px rail, 48px command bar, hairline dividers, small corners, labelled Lucide icons) and adds only what the registry and offline states need.
+"Premium" here means restraint, not decoration. It comes from generous spacing, plain words, aligned data in a monospace face and precise status wording. There are no gradients, hero art, celebration animations or dark-first themes. This is the one token map: the repo-root `DESIGN.md` keeps the product direction and points here for token values, and `newweb/src/style.css` holds them (checked 2026-11-17: `:root` on line 889 for canvas, surface, ink, muted, line, field-border, action (`--forest`), action-tint (`--mint`) and the status pairs; line 892 rail `#eaf0f7`; line 895 action-hover `#194393`; line 899 nav-current `#173f92` on `#dce7fa`; lines 887-888 the bundled Space Grotesk and JetBrains Mono). It inherits the workbench direction there (light neutral canvas, 220px rail, 48px command bar, hairline dividers, small corners, labelled Lucide icons) and adds only what the registry and offline states need.
 
 ## Colors
 
@@ -142,9 +162,9 @@ Two groups: neutral colors that carry the interface, and status colors that carr
 | `{colors.ink}` / `{colors.muted}` | `--ink` / `--muted` | Body text and secondary text | Status |
 | `{colors.line}` / `{colors.field-border}` | `--line` / `--field-border` | Hairline dividers / input borders | Emphasis |
 | `{colors.action}` | `--forest` (legacy name; holds cobalt) | Primary buttons, links, focus ring, current nav | Success or "verified" |
-| `{colors.ok}` on `{colors.ok-bg}` | `--ok` / `--ok-bg` | A check that passed: "Manifest verified", "Matches", "Signed by a key you trust", "Registered" | Buttons, decoration |
-| `{colors.warn}` on `{colors.warn-bg}` | `--warn` / `--warn-bg` | Incomplete or not-yet-proven: "Bytes differ", "Not yet registered", "Needs attention", untrusted or replaced key | Errors that mean "don't rely on this" |
-| `{colors.bad}` on `{colors.bad-bg}` | `--bad` / `--bad-bg` | Check failed: "Manifest not verified", wrong key, compromised key | Network or offline states |
+| `{colors.ok}` on `{colors.ok-bg}` | `--ok` / `--ok-bg` | A check that passed: the "Verified" headline (complete files and a trusted key), "Matches", "Signed by a key you trust", "Registered at" after a Refresh | Buttons, decoration |
+| `{colors.warn}` on `{colors.warn-bg}` | `--warn` / `--warn-bg` | Incomplete or not-yet-proven: the "Files differ", "Incomplete", "Not in the list" and "Files match · signer not confirmed" headlines, "Bytes differ", "Missing", "Not in the list", "Not yet registered", "Last confirmed by this device", "Needs attention", untrusted or replaced key | Errors that mean "don't rely on this" |
+| `{colors.bad}` on `{colors.bad-bg}` | `--bad` / `--bad-bg` | Check failed: the "Not verified" and "Signed by a key marked compromised" headlines, wrong key, the "Marked compromised" trust line | Network or offline states |
 
 Rules:
 
@@ -185,7 +205,7 @@ Flat. Separation comes from `{colors.line}` hairlines and the `{colors.surface}`
 - `{rounded.lg}` (8px): panels, inline notices, dialogs.
 - `{rounded.full}`: status labels and the registry chip only.
 
-Each status has its own shape, so color is never the only signal. These shapes already exist in `.status-shape` and `.trust-line`: a circle means ok, a diamond means warn, a square means bad, and an outlined ring means neutral (new).
+Each status has its own shape, so color is never the only signal. These shapes already exist in `.status-shape` and `.trust-line`: a circle means ok, a diamond means warn, a square means bad, and an outlined ring means neutral (new). New statuses reuse them: Missing, Incomplete and Not in the list use the warn diamond; Files differ uses the warn diamond; Not verified uses the bad square.
 
 ## Components
 
@@ -203,6 +223,10 @@ New for the registry wiring:
   The chip text is always a word, never only an icon.
 - **Inline notice** (`{components.notice-inline}`). A one- or two-sentence notice placed directly under the thing it is about, with at most one action button (secondary style). Every empty, offline, error and next-step message in `EXPERIENCE.md` uses it. Notices don't animate in and don't auto-dismiss.
 - **Share link row.** It shows the link on one line in `{typography.data}`, with two buttons: "Copy link" (secondary) and "Withdraw link" (secondary text in `{colors.ink}`; the danger color is not used here because withdrawing can be undone by making a new link).
+- **Verify chooser** (`{components.choice-buttons}`, New, release layout, flag on only). A native radio group, "I have a HashWing link" and "I have files", styled as two equal choice buttons. The chosen one shows a check mark, a 2px action border and the action tint; colour is never the only signal. The step's single primary button sits under the fields that follow.
+- **Comparison table and per-file summary** (`{components.compare-table}`, `{components.counts-row}`, New). Columns: file, bytes, status (word and shape), SHA-256 (abbreviated with Copy). The counts row sits above it. Narrow widths use one summary block per file instead of a squeezed table.
+- **Jobs list** (New). Same table rules as the comparison. Pagination uses secondary Previous and Next buttons; search is a labelled text input.
+- **Registry line** (Change). "Last confirmed by this device {time}" in `{typography.hint}` with a secondary Refresh button. It is never green until a lookup in this session succeeds.
 - **Delete hosted record button.** A secondary button labelled "Delete hosted record". The confirm dialog's confirm button uses `{colors.bad}` fill. This is the only place the bad color fills a button.
 
 ## Do's and Don'ts

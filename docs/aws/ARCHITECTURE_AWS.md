@@ -189,6 +189,23 @@ The console runs on another origin (GitHub Pages), so the API answers CORS for a
   recipient's page can read it. On the deployed HTTP API, the API-wide CORS settings apply to this route too (API
   Gateway overrides integration CORS headers), so there it is limited to the allowlist.
 
+### PROPOSED routes (agreed contract, not built)
+
+Recorded 2026-11-17 before any code, from the release brief (ledger R36, R39, R48, R49, R54) and spine AD-9, AD-15, AD-19 and AD-20, and revised after the PR #35 security review. None of these exist in `app.py` or `infra/lib/stack.ts` yet. Each needs the matching `stack.ts` route and registry tests in the same PR.
+
+| Route | Who | Request | Response | Notes |
+|---|---|---|---|---|
+| `GET /v1/shares?limit&cursor` | any member of the org | none | `{shares: [{share_id, registration_id, state, created_at, expires_at}], next_cursor}` | One bounded query over the org-partition index items `ORG#<org> / SHARE#<created_at>#<hash>` (`created_at` as 12-digit zero-padded epoch seconds; a stub without it uses `withdrawn_at`), newest first. The index item holds the key, rid and a copy of the state; each row's state is read from its `SHARE#<hash>` item, which stays the source of truth. `share_id` is the stored `sha256(token)`; it cannot open a link, because the public route hashes what it is given. Expired is computed on read. Stub rows written by deletion or restore may lack `created_at` and `expires_at` and are listed as withdrawn. |
+| `GET /v1/registrations/{rid}/shares` | any member of the org | path rid (32 hex) | same row shape | The same index, filtered to one registration. It does not rely on `REG.share_hashes`, because a restore can re-create a registration with `share_hashes: []` while a withdrawn share stub still points at it. Another org's rid is the same 404 as an unknown one. |
+| `DELETE /v1/registrations/{rid}/shares/{share_id}` | any member of the org (same rule as today's withdraw) | path rid and `share_id` (64 hex) | `{withdrawn: true}` | Transaction conditions: `ORG#<caller org> / REG#<rid>` exists; the hash is in its `share_hashes` or has an index item under that rid; `SHARE.org` equals the caller's org and `SHARE.rid` equals rid. Otherwise the identical 404. The same withdraw items and tombstone as `DELETE /v1/shares/{token}`, so a reload or another admin can withdraw without the raw token. The token route stays. |
+| `GET /v1/registrations/{rid}` | any member of the org | path rid | `{registration_id, state, received_at, disposition, recovery_version}` | The signed-in lookup behind Refresh. Deleted: `disposition: "deleted"`, no `received_at`. |
+| `GET /v1/recovery` | any member | none | `{recovery_version}` | The function's `RESTORE_ID`, an opaque string (empty before any restore) that `registry.restore` generates and never reuses. Clients compare it for equality with what they saved, never for order. Nothing is stored in the table for it. Every ack also returns it. |
+| `POST /v1/shares` (change) | unchanged | `expires_days` 1 to 30 | unchanged | 400 above 30. The cap applies at creation; reads check the stored `expires_at`, so an existing longer link keeps its expiry. No registry is deployed, so no production link exists to migrate. The transaction gains the index item and the journal creation record: five items (SHARE, SIDEM, the REG update, the index item, the journal record); registration becomes four (REG, IDEM, QUOTA, the journal record). The cost audit counts both. |
+
+Proposed stored items (not built; added to "Stored" when built): the share index item above, and the security journal (spine AD-20): a second on-demand table holding a copy of every TOMB item and a creation record for each registration and share (org, id, original `received_at` or `created_at` and `expires_at`, fingerprint, head, count; never a token), written in the same transaction as the item it records, with PITR, deletion protection and RETAIN in production and `enrolled_by` scrubbed after 90 days like the KEY items. Restore applies the union of served-table and journal tombstones with the most revoked state per target (spine AD-20).
+
+Registration lists: a future registration-list UI must accept stub rows from deletion or restore that have no `count`, `head` or `key_fingerprint`.
+
 ## Withdrawal, deletion and backups
 
 - **Withdraw a share:** the share becomes `withdrawn` and a TOMB item is written in the same transaction. Its link
@@ -214,6 +231,12 @@ The console runs on another origin (GitHub Pages), so the API answers CORS for a
   **Known gap (not fixed):** a restore also drops every registration and share created after the backup. The
   browser outbox keeps its acknowledgement, so it may still show "Registered" for a proof the restored table no
   longer has. Nothing tells the browser, and the outbox does not resend a proof it already holds an ack for.
+
+  **Known gaps found in the PR #38 review (not fixed):** (A) a share created after the backup, whose share and
+  idempotency records were both lost, comes back on the client's retry (same token and idempotency key) as 201 active
+  with a fresh 30 days, past its original expiry, so a link that had expired works again. (B) A registration created
+  after the backup, when re-sent, gets a new `received_at` instead of the original. Both are fixed by the security
+  journal (spine AD-20), which brings back the original times.
 
 ## What TTL does not guarantee
 
