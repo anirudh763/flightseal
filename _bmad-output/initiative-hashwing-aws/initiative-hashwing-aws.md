@@ -159,10 +159,10 @@ Task packets, their order and the tests that change on purpose are in [plan-ui-b
 - The public company list is demo-only (PR #46).
 - The VoiceOver pass is the next required QA task. It covers sealing, cancellation, errors, verification results, downloads, sign-in and key administration. Automated scans do not close it.
 
-**Merged later on 2026-11-18 (review record, stated exactly):**
+**Merged later on 2026-11-18 (review record, stated exactly; the reviews were run as independent agents in the session and are not posted on GitHub):**
 - #46 demo-only company list (89ca943): independent security review at 6b6c97a; the guard follow-up (file-identity compare, example ids in tests) was checked by the advisor, not re-reviewed.
-- #47 VoiceOver script and owner decisions (c99f85f): independent review at 38a7c23; the wording and code-comment fixes after it were not re-reviewed.
-- #45 flaky-test change (de53216): an attempted fix, 7 of 7 CI passes; keep watching.
+- #47 VoiceOver script and owner decisions (c99f85f): independent review at 38a7c23; the wording, code-comment and test-message fixes after it were not re-reviewed.
+- #45 flaky-test change (de53216): an attempted fix; the wasm-console job passed 7 of 7 attempts; keep watching.
 - #48 download status (19062b9): UX/accessibility and reliability reviews cleared 6a4571f after one blocking fix; merged at a87923a, which only adds main and rebuilt to an identical bundle.
 - #49 Jobs page (72d46ef): UX/accessibility and reliability reviews cleared 04a9542 after two blocking fixes (Resume during a running seal; stored rows not checked on read).
 - Live checks after #48 and #49 passed on Pages: download status with no question; one question on Seal more files; Jobs search, Export (metadata and receipt message only), Resume ("HashWing didn't keep a copy of …"), Remove with Keep it focused; no request to any non-Pages origin; a 100-file list gets a job (a list holds at most 100 files and says so).
