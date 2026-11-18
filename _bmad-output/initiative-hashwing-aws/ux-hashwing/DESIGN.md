@@ -162,9 +162,9 @@ Two groups: neutral colors that carry the interface, and status colors that carr
 | `{colors.ink}` / `{colors.muted}` | `--ink` / `--muted` | Body text and secondary text | Status |
 | `{colors.line}` / `{colors.field-border}` | `--line` / `--field-border` | Hairline dividers / input borders | Emphasis |
 | `{colors.action}` | `--forest` (legacy name; holds cobalt) | Primary buttons, links, focus ring, current nav | Success or "verified" |
-| `{colors.ok}` on `{colors.ok-bg}` | `--ok` / `--ok-bg` | A check that passed: the "Verified" headline, "Matches", "Signed by a key you trust", "Registered at" after a Refresh | Buttons, decoration |
-| `{colors.warn}` on `{colors.warn-bg}` | `--warn` / `--warn-bg` | Incomplete or not-yet-proven: the "Files differ", "Incomplete" and "Not in the list" headlines, "Bytes differ", "Missing", "Not in the list", "Not yet registered", "Last confirmed by this device", "Needs attention", untrusted or replaced key | Errors that mean "don't rely on this" |
-| `{colors.bad}` on `{colors.bad-bg}` | `--bad` / `--bad-bg` | Check failed: the "Not verified" headline, wrong key, the "Marked compromised" trust line | Network or offline states |
+| `{colors.ok}` on `{colors.ok-bg}` | `--ok` / `--ok-bg` | A check that passed: the "Verified" headline (complete files and a trusted key), "Matches", "Signed by a key you trust", "Registered at" after a Refresh | Buttons, decoration |
+| `{colors.warn}` on `{colors.warn-bg}` | `--warn` / `--warn-bg` | Incomplete or not-yet-proven: the "Files differ", "Incomplete", "Not in the list" and "Files match · signer not confirmed" headlines, "Bytes differ", "Missing", "Not in the list", "Not yet registered", "Last confirmed by this device", "Needs attention", untrusted or replaced key | Errors that mean "don't rely on this" |
+| `{colors.bad}` on `{colors.bad-bg}` | `--bad` / `--bad-bg` | Check failed: the "Not verified" and "Signed by a key marked compromised" headlines, wrong key, the "Marked compromised" trust line | Network or offline states |
 
 Rules:
 

@@ -399,12 +399,15 @@ Send these to your client
   2 Send the receipt message                          (Copy message)
   Copying the message does not show that your client kept it.
   ▸ Share link (flag on): a link to the registry's record, not to the files
-  (Seal more files)                                  <- clears the result and the selection, back to the first step
+  (Seal more files)                                  <- clears the result and the selection, back to the first step;
+                                                        if the sealed file or list was not downloaded: confirm
+                                                        "You haven't downloaded {name}. Download it first?"
+                                                        [Download] (default focus) / (Discard it)
 Sealed on this device                                <- compact list, last 5, ‹All jobs› to Jobs
   flight-12.fseal   Sealed locally   17 Nov 15:41
 ```
 
-Here the step numbers are the order of a real task, not decoration.
+Here the step numbers are the order of a real task, not decoration. The "not downloaded" confirmation reuses today's `sealOutputAcknowledged` guard (`newweb/src/main.jsx:167`, used at `:213`).
 
 **Verify (`verify`)**
 
@@ -449,20 +452,22 @@ Both builds, files:
 
 ### Verify verdicts
 
-The headline comes from the files check. Signature, key trust and registry stay on their own lines and are never merged into the headline word. The first row that applies wins.
+The headline combines the files check with key trust (owner decision 2026-11-18): green "Verified" needs complete files and a trusted key. Signature, key trust and registry still each keep their own line under the headline. The first row that applies wins.
 
 | Headline | Style | When | One sentence | One next action |
 |---|---|---|---|---|
+| Signed by a key marked compromised | bad | Signature valid, and the signing key is marked compromised in your trusted list (whatever the files show) | "This key was reported as compromised. Don't rely on these files until the company confirms them." | "Ask the company for a new seal" |
 | Not verified | bad | The signature is invalid, the key is wrong, weak or malformed, or the list or receipt can't be read. Files are not compared | The existing `trustLine()` sentence for that case | The existing three-point next step |
 | Files differ | warn | Signature valid, and at least one file reads Bytes differ | `BYTES_DIFFER` (existing, verbatim) | "Ask for the original files" |
 | Incomplete | warn | Signature valid, no file differs, and at least one file is Missing, or the receipts do not cover every item | "{n} of {total} files were checked. A file that is missing can't be checked." (or "Receipts cover {k} of {total} items.") | "Add the missing originals" |
 | Not in the list | warn | Signature valid, every listed file matches, none missing, full coverage, and at least one chosen file is not in the list | "Every listed file matches. {n} other files you chose aren't in the list and were not checked." | "Remove files that aren't in the list" |
-| Verified | ok | Signature valid, every listed file matches, none missing, none not in the list, receipts cover every item | "Every file matches what was sealed." | "Download report" |
+| Files match · signer not confirmed | warn | Files complete (every listed file matches, none missing, none not in the list, receipts cover every item), and the key is not pinned, or is replaced, or is a one-time key | "The files match what was sealed, but you haven't confirmed who sealed them." | "Confirm the company's fingerprint on Trust" |
+| Verified | ok | Files complete, and the key is pinned in your trusted list and not compromised | "Every file matches what was sealed, signed by a company you trust." | "Download report" |
 
-- Key trust qualifies a verdict on its own line: trusted, "Signed by a key you have not confirmed" (no pin), replaced, or "Marked compromised" (bad style on that line). A Verified headline with a compromised or unconfirmed key keeps both lines; the report carries both.
+- The key trust line still shows on its own: trusted, "Signed by a key you have not confirmed" (no pin or a one-time key), replaced, or "Marked compromised". Rows Files differ, Incomplete and Not in the list keep their headline whatever the key; the key trust line qualifies them. Every one-time guest key reads "Files match · signer not confirmed" at best.
 - Small-file `.fseal` checks use the same headlines; they have one file, so only Not verified, Files differ and Verified apply.
-- Files are matched by relative path and name. A renamed byte-identical file reads Missing (old name) plus Not in the list (new name). Two chosen files with the same path stop the check with "Two chosen files have the same path: {path}. Choose one."
-- "Not in the list" is the one name for extra files, in rows and counts. It replaces today's "Not in manifest" label (`recipient-trust.mjs:101`; listed in "Tests that change on purpose").
+- Files are matched by relative path and name when the picker gives a relative path (a folder pick); with a plain file picker there is no path, so matching is by name. A renamed byte-identical file reads Missing (old name) plus Not in the list (new name). Two chosen files with the same path stop the check with "Two chosen files have the same path: {path}. Choose one." If the list holds two items with the same name in different folders and the files were chosen without paths, the check stops with "The list has two files named {name} in different folders. Choose the folder instead of single files so each can be matched."
+- "Not in the list" is the one name for extra files, in rows and counts. It replaces today's "Not in manifest" label at every site listed in "Tests that change on purpose", and its chip moves from neutral to warn. These headlines are UI and report wording only: `docs/verifier.js` verdicts and the `not-in-manifest` status key in `docs/manifest.mjs` are unchanged.
 
 **Jobs (`jobs`, New)**
 
@@ -478,10 +483,11 @@ Jobs                                        Saved in this browser only. Not a cl
 - **What a job is.** A local record of one sealing: optional job reference, package name, mode, item count and byte total, the receipt message, the registry row state (flag on), and the sealed time. Never file bytes, never the signing key.
 - **Status values and filter.** Sealed locally, Waiting for connection, Registering, Last confirmed by this device {date}, Needs attention, Registered, later deleted. Flag off shows Sealed locally only, and the filter is hidden. Filter options are those values plus All.
 - **Search.** Case-insensitive substring over job reference and package name, applied as you type, 25 rows per page. The page and search are in the URL (`#/jobs?q=…&page=2`) so Back and Forward step through them.
-- **Resume.** Opens Seal & send at the after-sealing step for that job: download (if the sealed file or list is still held in this browser), copy message, share link. If the package bytes are not held, it says "Choose {name} again to download it; HashWing didn't keep a copy." Large-file originals are never held.
+- **Resume.** Opens Seal & send at the after-sealing step for that job: download (only while the sealed file or list is still held in this tab's memory; it is never written to browser storage), copy message, share link. If the package bytes are not held, it says "Choose {name} again to download it; HashWing didn't keep a copy." Large-file originals are never held.
 - **Export.** Downloads `hashwing-job-{ref or date}.json` with the job's metadata and receipt message. Not the files.
 - **Remove.** A confirm dialog: "Remove this job from this browser? The sealed file and anything you sent are not affected." Buttons "Remove" and "Keep it" (default focus). A job with a pending registry proof says the proof stays in the export list until it registers or is exported.
 - **Retention.** "Kept until you remove it or clear this browser's data." Shown once under the heading.
+- **Owner.** Jobs belong to the local profile (or the guest) that sealed them. When a company registry sign-in is also active, the list is still the local profile's; rows sealed while signed in to the company carry a "{company}" label, and their registry status follows that sign-in. Signing out of the company keeps the rows and hides their registry status; logging out of the local profile hides the list (AC-57).
 - **Row detail (flag on).** Opening a row shows the registry detail that Seal & send's recent list shows: share links (make, copy in the creating tab only, withdraw) and, for admins, "Delete hosted record". This is where links for older items are managed.
 - **States.** Empty: "Nothing sealed in this browser yet." with ‹Seal files›. No match: "No jobs match "{q}"." with (Clear search). Export failed: "Couldn't save the export. Try again, or check that downloads are allowed." Storage unavailable: "This browser isn't keeping jobs (private window or storage blocked). Jobs you seal now will be gone when you close it."
 - **320 and 390px.** Each row becomes a summary: package name (wraps at separators), status word with shape, sealed time, then the three actions as full-width secondary buttons.
@@ -517,18 +523,18 @@ A closed disclosure under the four links: Records, Receipts, Samples, Video, Ben
 | `help` (Trust) | no pins, pins, replace-confirm, compromised, signed out, signed in, admin, identity unavailable | one per section (see Trust) | Mark compromised, Copy fingerprint, Sign out | none |
 | More tools routes | unchanged | unchanged | unchanged | unchanged |
 
-Every route keeps its hash URL, Back/Forward and heading focus. Inside a route, only the Jobs page and search, and the Verify choice (`#/verify?mode=link|files`), are in the URL; the after-sealing step is not, so Back from it leaves Seal & send. `#/help` stays the Trust route; no alias is added. A share link lands on `verify` with the token after `#` only.
+Every route keeps its hash URL, Back/Forward and heading focus. Inside a route, only the Jobs page and search, and the Verify choice (`#/verify?mode=link|files`, written with `history.replaceState` so arrowing through the choice adds no history entries), are in the URL; the after-sealing step is not, so Back from it leaves Seal & send. `#/help` stays the Trust route; no alias is added. A share link lands on `verify` with the token after `#` only.
 
 ### Focus and announcements
 
 | Event | Focus moves to | Polite live text |
 |---|---|---|
-| Verify choice changed | the first field of the chosen form | none (the radio change is announced natively) |
+| Verify choice changed (arrow keys or click) | stays on the radio (moving focus would break the group, WCAG 3.2.2); the chosen form follows next in tab order | none (the radio change is announced natively) |
 | "Check the files" from a link | the "Sealed file or list" field | "Link record kept for comparison" |
 | Seal finished | the "Send these to your client" heading | "Sealed 14 files" |
 | Seal cancelled | the Seal button | "Sealing cancelled. Your files are still chosen." |
-| Seal or check error | the error message (`role="alert"`, next to its field) | the error itself |
-| Check finished | the verdict headline | "Check finished: Incomplete, 1 missing" |
+| Seal or check error | the field in error, which names the message through `aria-describedby` (no `role="alert"` on top) | none; the message is read with the field |
+| Check finished | the verdict headline (`tabindex="-1"`), whose text is read on focus | none (no separate live text, so it is not read twice) |
 | Seal more files | the "What are you sealing?" heading | none |
 | Jobs page or search changed | the table caption | "Showing 26–50 of 61" or "3 jobs match" |
 | Job removed | the next row's Resume button, or the heading if none | "Job removed" |
@@ -563,6 +569,8 @@ These were chosen by the builder and are built, but the owner has not confirmed 
 ## Decided (2026-11-17)
 
 - **Key-management home.** Trusted companies and the signing-key controls live on the Trust page.
+- **Flag-off Verify (deliberate deviation from the brief, pending owner confirmation).** The brief asks Verify to open on "I have a link" / "I have files". The flag-off Pages build has nothing to open a share link with (`newweb/src/main.jsx:159`), so it opens straight on "I have files" (AC-65). If the owner wants the two-choice opening there too, the link choice could only say that this copy can't open share links.
+- **Verified needs a trusted key (owner decision 2026-11-18).** Green "Verified" needs complete files and a pinned, uncompromised key; otherwise "Files match · signer not confirmed" (warn) or "Signed by a key marked compromised" (bad). See "Verify verdicts".
 - **Owner decisions, 2026-11-17 (binding).** Registry sign-in lives on Trust. The registry stays off the public Pages build until a dedicated origin and production sign-in exist (a subpath of the same github.io origin is not origin isolation). "Sealed on this device" stays as a compact list below the sealing result, in every build, and a Jobs page is added. Share links default to 30 days with 7 days as the one alternative, and the server refuses more than 30 (AD-9). These supersede the matching builder defaults above.
 
 ## Open
@@ -640,9 +648,9 @@ These cover "Release layout, locked" above. Ledger IDs are in brackets.
 
 - **AC-51** `open` [R13] The landing route shows HashWing, one value line, "Seal files" (primary), "Verify files" and "Try a sample" (which opens Samples), and keeps the footer links. Nothing on it changes on a timer during 10 seconds, and it has no numbered step list.
 - **AC-52** `open` [R17] Seal & send shows the chosen files with a byte total in tabular mono, the mode, an optional job reference and one of the three signing lines (one-time key, loaded key with full fingerprint and Copy, or registering company and user). Going to Trust and back keeps the selection. Cancel during sealing keeps the selection and leaves one next action.
-- **AC-53** `open` [R18] After sealing, the first step is Download (primary until done), then Copy message (primary after that). Large-file mode lists the originals that travel separately (first five, then "Show all"). The share-link disclosure says it links to the registry's record, not the files. "Seal more files" clears the result and returns to the first step.
+- **AC-53** `open` [R18] After sealing, the first step is Download (primary until done), then Copy message (primary after that). "Seal more files" before a download asks "You haven't downloaded {name}. Download it first?" with Download focused. Large-file mode lists the originals that travel separately (first five, then "Show all"). The share-link disclosure says it links to the registry's record, not the files. "Seal more files" clears the result and returns to the first step.
 - **AC-54** `open` [R19] With the flag on, opening a share link lands on Verify with "I have a HashWing link" chosen and the link opened, and no file row is marked Matches until files are checked.
-- **AC-55** `open` [R21] The headline follows the "Verify verdicts" table for each of its rows, the counts equal the rows, and signature, key trust and registry stay on separate lines. At 1440px the comparison spans the main column. A renamed byte-identical file reads Missing plus Not in the list.
+- **AC-55** `open` [R21] The headline follows the "Verify verdicts" table for each of its rows (including a one-time key reading "Files match · signer not confirmed" and a compromised key reading "Signed by a key marked compromised"), the counts equal the rows, and signature, key trust and registry stay on separate lines. At 1440px the comparison spans the main column. A renamed byte-identical file reads Missing plus Not in the list.
 - **AC-56** `open` [R22] Jobs lists this browser's jobs 25 per page with search and a status filter (flag on), Resume, Export and Remove. Page and search are in the URL. Its heading area says jobs are saved in this browser only.
 - **AC-57** `open` [R23] After logout or a profile or company switch, Jobs shows none of the previous owner's rows, and signing back in as that owner shows them again. No copy calls this server-enforced isolation.
 - **AC-58** `open` [R22] Resuming a job whose package bytes are not held asks for the file again by name and never claims the bytes were saved. Remove asks first, with "Keep it" focused.
@@ -654,6 +662,6 @@ These cover "Release layout, locked" above. Ledger IDs are in brackets.
 - **AC-64** `open` [R48] When the registry's recovery version differs from the one saved with an ack, the ack reads "Last confirmed by this device" with "The registry was restored; refresh to check this record" until refreshed. A record missing after a restore offers re-registration and never reopens a deleted proof or withdrawn link.
 - **AC-65** `open` [R19] On a flag-off build, Verify opens on the files form with no link choice, and a URL with `share=` shows "This copy of HashWing can't open HashWing share links. Check the files instead."
 - **AC-66** `open` [R24] The workbench session strip and "Source and report actions" appear only on Verify and the More tools routes.
-- **AC-67** `open` [R67] Each event in "Focus and announcements" moves focus and announces the text given there. The chosen Verify option is shown by a check mark and border width as well as colour, also under forced colours.
+- **AC-67** `open` [R67] Each event in "Focus and announcements" handles focus and announcements as given there; in particular, changing the Verify choice with the arrow keys keeps focus on the radio and adds no history entry. The chosen Verify option is shown by a check mark and border width as well as colour, also under forced colours.
 
 Totals after this addition: 67 items; 25 built, 8 partly tested, 6 untested, 6 partial, 22 open.
