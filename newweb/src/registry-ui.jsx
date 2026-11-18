@@ -145,7 +145,7 @@ function createRegistry() {
     logout() { signOut(); names.clear(); set({ pending: [] }); },
     async sealed(receipt, name) {
       if (name) names.set(receipt, name);
-      if (state.outbox) return enqueueOn(state.outbox, receipt);
+      if (state.outbox && await enqueueOn(state.outbox, receipt)) return; // a failed enqueue (queue full) keeps it in memory below
       if (!state.pending.some((p) => p.receipt === receipt)) set({ pending: [...state.pending, { receipt, at: Date.now() }] });
     },
     async exportPending() {

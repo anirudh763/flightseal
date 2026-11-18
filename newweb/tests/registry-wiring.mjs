@@ -291,6 +291,14 @@ try {
     const body = await reviewer.locator('body').innerText();
     for (const s of ['Test sign-in', 'Company registry', 'Sealed on this device']) assert.ok(!body.includes(s), `reviewer sees ${s}`);
     await reviewer.locator('#log-input').waitFor(); // file checking stays available below
+    for (const width of [320, 768, 1440]) {
+      await reviewer.setViewportSize({ width, height: 900 });
+      const overflow = await reviewer.evaluate(() => document.documentElement.scrollWidth - innerWidth);
+      assert.ok(overflow <= 0, `share view@${width}: horizontal scroll ${overflow}px`);
+      await axe(reviewer, `share view@${width}`);
+      await reviewer.screenshot({ path: join(OUT, `share-view-${width}.png`), fullPage: true });
+    }
+    await reviewer.setViewportSize({ width: 1440, height: 900 });
     await reviewer.goto(shareUrl.split('?')[0].replace('/verify', '/help'));
     await reviewer.getByRole('navigation', { name: 'Primary navigation' }).getByRole('link', { name: 'Verify', exact: true }).click();
     await reviewer.locator('#log-input').waitFor();
@@ -412,7 +420,10 @@ try {
     await page.waitForFunction(() => ![...document.querySelectorAll('.registry-row .status-label')].some((c) => c.textContent === 'Waiting for connection'), null, { timeout: 30000 });
   });
 
-  await check('throttled registry (gateway 429s, no quota code, 2 requests/s, burst 5): 30 queued proofs all end Registered', async () => {
+  // Manual, local only (wall-clock token bucket; not a CI gate): REGISTRY_THROTTLE=1 node newweb/tests/registry-wiring.mjs.
+  // Record the measured run in docs/aws/COVERAGE.md.
+  if (process.env.REGISTRY_THROTTLE === '1') await check('throttled registry (gateway 429s, no quota code, 2 requests/s, burst 5): 30 queued proofs all end Registered', async () => {
+    const started = Date.now();
     // The devserver has no throttle, so a token bucket in front of it answers like API Gateway's stage throttle.
     let tokens = 5, last = Date.now(), throttled = 0;
     const take = () => { const t = Date.now(); tokens = Math.min(5, tokens + (t - last) / 500); last = t; if (tokens >= 1) { tokens -= 1; return true; } return false; };
@@ -439,7 +450,31 @@ try {
       assert.ok(throttled > 0, 'the gateway throttle actually refused some requests');
       const regs = (await dev('registrations?org=orgA')).registrations.length;
       assert.ok(regs >= 30, `registry holds ${regs} registrations`);
+      console.log(`throttle run: 30 proofs Registered in ${((Date.now() - started) / 1000).toFixed(1)} s; ${throttled} requests answered 429`);
     } finally { await page.unroute(isRegistry, gate); }
+  });
+
+  await check('sign out stops dispatch: a waiting row is not sent after sign-out, and is sent after signing back in', async () => {
+    const block = (route) => route.abort('internetdisconnected');
+    const isRegistry = (u) => u.href.startsWith(`${base}/v1/`);
+    await page.route(isRegistry, block);
+    let blocked = true;
+    try {
+      await importSeedA(page); // the reload check above dropped the tab-memory signing key
+      await sealSmall(page, 'flight-so.ulg');
+      await chipIs(page, 'flight-so.ulg', 'Waiting for connection');
+      const sends = (await registerLog('pilot-1')).length;
+      const requests = (await dev('log')).log.length;
+      await go(page, 'help');
+      await page.locator('#company-registry').getByRole('button', { name: 'Sign out' }).click();
+      await page.unroute(isRegistry, block); blocked = false;
+      await sleep(5000); // longer than the first backoff (1-2 s) and the sign-in recheck would allow
+      assert.equal((await registerLog('pilot-1')).length, sends, 'no registration after sign-out');
+      assert.equal((await dev('log')).log.length, requests, 'no registry request at all after sign-out');
+      await signIn(page, 'pilot-1', 'pilot');
+      await go(page, 'protect');
+      await chipIs(page, 'flight-so.ulg', 'Registered');
+    } finally { if (blocked) await page.unroute(isRegistry, block); }
   });
 
   await check('sign out, then sign in as an admin: the pilot\'s rows are hidden and never sent; delete uses a dialog with "Keep it" focused', async () => {
@@ -458,6 +493,8 @@ try {
     const dialog = row.locator('dialog');
     await dialog.getByRole('heading', { name: 'Delete the hosted record?' }).waitFor();
     assert.equal(await page.evaluate(() => document.activeElement?.textContent), 'Keep it');
+    await axe(page, 'delete dialog open');
+    await page.screenshot({ path: join(OUT, 'delete-dialog-1440.png') });
     await page.keyboard.press('Escape');
     await page.waitForFunction(() => !document.querySelector('.registry-row dialog[open]'));
     assert.equal(await page.evaluate(() => document.activeElement?.textContent), 'Delete hosted record', 'focus returns to the trigger');
