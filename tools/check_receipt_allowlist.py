@@ -74,8 +74,34 @@ with tempfile.TemporaryDirectory(prefix="fseal-secret-check-") as directory:
         fixture.unlink()
         report.unlink()
     assert len(templates) >= 2, 'Source and built console serializers must both be exercised'
+
+    # Registry wiring test: only the exact runtime expression over the public seed bytes 0..31 is allowed.
+    seed_expr = (marker + 'BEGIN PRIVATE KEY' + marker + "\\n${Buffer.concat([Buffer.from('302e020100300506032b657004220420', 'hex'), "
+                 "Buffer.from([...Array(32).keys()])]).toString('base64')}\\n" + marker + 'END PRIVATE KEY' + marker)
+    seed_line = 'const SEED_A_PEM = `' + seed_expr + '\\n`;\n'
+    wiring = target / 'newweb/tests/registry-wiring.mjs'
+    wiring.parent.mkdir(parents=True, exist_ok=True)
+    wiring.write_text(seed_line)
+    code, findings = scan()
+    assert code == 0 and not findings, 'The exact public-seed fixture expression should be allowed'
+    report.unlink()
+    for text, why in (
+        (seed_line + 'const literal = `' + private_pem.replace('\n', '\\n') + '`;\n', 'a valid literal private key in the same file'),
+        (seed_line.replace('Array(32).keys()', 'Array(32).fill(7)'), 'a changed fixture expression'),
+    ):
+        wiring.write_text(text)
+        code, findings = scan()
+        assert code == 1 and len(findings) == 1 and findings[0]['RuleID'] == 'private-key', f'{why} must still be detected'
+        report.unlink()
+    wiring.unlink()
+    elsewhere = target / 'newweb/tests/other.mjs'
+    elsewhere.write_text(seed_line)
+    code, findings = scan()
+    assert code == 1 and len(findings) == 1 and findings[0]['RuleID'] == 'private-key', 'The fixture exception must stay path-scoped'
+    elsewhere.unlink()
+    report.unlink()
     unrelated = target / 'unrelated.js'
     unrelated.write_text((root / 'newweb/src/signing-keys.mjs').read_text())
     code, findings = scan()
     assert code == 1 and len(findings) == 1 and findings[0]['RuleID'] == 'private-key', 'The template exception must stay path-scoped'
-print('Public receipts and exact serializers allowed; API-shaped values, valid literal private keys in both paths, and unrelated paths detected')
+print('Public receipts, exact serializers and the wiring test seed fixture allowed; API-shaped values, valid literal private keys in both paths, and unrelated paths detected')
