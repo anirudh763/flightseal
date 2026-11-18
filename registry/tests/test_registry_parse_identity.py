@@ -63,9 +63,9 @@ def test_deeply_nested_token_header_is_401_not_an_error():
 
 
 def test_cognito_adapter_reads_authorizer_claims_only():
-    claims = {"sub": "s", "custom:org_id": "orgA", "custom:role": "admin"}
+    claims = {"sub": "s", "custom:org_id": "orgA", "custom:role": "admin", "token_use": "id", "iss": "i", "aud": "c"}
     event = {"requestContext": {"authorizer": {"jwt": {"claims": claims}}}}
-    env = {"IDENTITY_ADAPTER": "cognito"}
+    env = {"IDENTITY_ADAPTER": "cognito", "COGNITO_ISSUER": "i", "COGNITO_CLIENT_ID": "c"}
     assert identify(event, {}, env, 0).role == "admin"
     assert identify({}, _headers(make_dev_token(SECRET, "u", "orgA", "admin", 99)), env, 0) is None
     assert identify({"requestContext": {"authorizer": {"jwt": {"claims": {**claims, "custom:role": "x"}}}}}, {}, env, 0) is None

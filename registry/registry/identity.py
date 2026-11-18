@@ -1,7 +1,9 @@
 """Who is calling. Organization identity comes only from a verified token, never from the request body.
 
 IDENTITY_ADAPTER selects the adapter:
-  cognito    claims already verified by the API Gateway JWT authorizer (requestContext.authorizer.jwt.claims)
+  cognito    claims already verified by the API Gateway JWT authorizer (requestContext.authorizer.jwt.claims);
+             accepted only for an ID token (token_use "id") whose iss is COGNITO_ISSUER and aud is COGNITO_CLIENT_ID.
+             Either variable unset: every request is 401, logged as a configuration error.
   dev-hs256  DEV ONLY, never production: an HS256 bearer token checked against DEV_TOKEN_SECRET (>= 32 bytes)
 Unset or unknown: every request is 401, logged as a configuration error.
 """
@@ -79,15 +81,31 @@ def _dev(headers, env, now):
     return _identity(claims.get("sub"), claims.get("org_id"), claims.get("role"))
 
 
-def _cognito(event):
+def _cognito(event, env, now):
+    issuer, client_id = env.get("COGNITO_ISSUER", ""), env.get("COGNITO_CLIENT_ID", "")
+    if not issuer or not client_id:
+        _config_error("COGNITO_ISSUER and COGNITO_CLIENT_ID must both be set for the cognito adapter")
+        return None
     claims = (((event.get("requestContext") or {}).get("authorizer") or {}).get("jwt") or {}).get("claims") or {}
+    if not isinstance(claims, dict):
+        return None
+    # An access token also passes the authorizer; only the ID token is for this API (AD-3).
+    if claims.get("token_use") != "id" or claims.get("iss") != issuer or claims.get("aud") != client_id:
+        return None
+    exp = claims.get("exp")  # the authorizer checks it; HTTP API passes claims as strings
+    if exp is not None:
+        if isinstance(exp, bool) or not (isinstance(exp, int) or (isinstance(exp, str) and re.fullmatch(r"[0-9]{1,12}", exp))):
+            return None
+        if int(exp) <= now:
+            return None
+    # Org and role only from the admin-set custom attributes (the app client cannot write them).
     return _identity(claims.get("sub"), claims.get("custom:org_id"), claims.get("custom:role"))
 
 
 def identify(event, headers, env, now):
     adapter = env.get("IDENTITY_ADAPTER", "")
     if adapter == "cognito":
-        return _cognito(event)
+        return _cognito(event, env, now)
     if adapter == "dev-hs256":
         return _dev(headers, env, now)
     _config_error(f"IDENTITY_ADAPTER {adapter!r} is not 'cognito' or 'dev-hs256'")
