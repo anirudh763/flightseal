@@ -285,7 +285,7 @@ try {
     assert.equal(await page.locator('.seal-outputs').count(), 0, 'the old output is cleared from the workspace');
     const before = downloads.length;
     await notice.getByRole('button', { name: 'Download unsaved work', exact: true }).click();
-    await notice.getByRole('button', { name: 'Yes, saved', exact: true }).click();
+    await notice.getByRole('button', { name: 'I saved it', exact: true }).click();
     await page.waitForFunction(() => !document.querySelector('.rescue-notice'));
     assert.equal(downloads.length, before + 1);
     assert.equal(downloads.at(-1).suggestedFilename(), 'hashwing-unsaved-work.zip');

@@ -67,13 +67,12 @@ try {
     await page.evaluate((s) => { if (location.hash.split('?')[0] !== `#/app/${s}`) location.hash = `/app/${s}`; }, screen);
     await page.waitForFunction((t) => document.querySelector('.commandbar h1')?.textContent === t, screen === 'verify' ? 'Verify' : 'Seal & send');
   };
-  // After a download the handoff asks "Did the download finish?" (a click is not proof); these tests saved it, so "Yes, saved".
-  // The receipt message was not kept in these flows, so the question then turns to it, and "Discard it" moves on.
+  // A download click is not proof, so Seal more files asks once whether it saved. The receipt message was not kept in
+  // these flows, so "I saved it" is not offered; "Discard it" moves on.
   const confirmedMore = async () => {
     await page.getByRole('button', { name: 'Seal more files' }).click();
-    assert.match(await page.locator('#seal-more-ask').innerText(), /^Did the download of .+ finish\?$/);
-    await page.locator('.confirm-box').getByRole('button', { name: 'Yes, saved' }).click();
-    await page.waitForFunction(() => document.getElementById('seal-more-ask')?.textContent === "You haven't kept the receipt message. Copy it first?");
+    assert.match(await page.locator('#seal-more-ask').innerText(), /^You started a download of .+\. Did it save\? The receipt message isn't saved yet\.$/);
+    assert.equal(await page.locator('.confirm-box').getByRole('button', { name: /I saved/ }).count(), 0);
     await page.locator('.confirm-box').getByRole('button', { name: 'Discard it' }).click();
     await page.waitForFunction(() => document.activeElement?.id === 'seal-what-title');
   };

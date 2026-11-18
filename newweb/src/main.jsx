@@ -279,7 +279,8 @@ function App() {
   unsavedRef.current = unsavedParts;
   const protectLogRef = useRef(null);
   protectLogRef.current = protectSealed?.log;
-  const markProtectSaved = (log, part) => setProtectSealed((current) => (current?.log === log ? { ...current, saved: { ...current.saved, [part]: true } } : current)); // only this exact result
+  // field 'requested' (a Download click) or 'saved' (the user said so, or the clipboard took the receipt); only this exact result
+  const markProtectSaved = (log, part, field = 'saved') => setProtectSealed((current) => (current?.log === log ? { ...current, [field]: { ...current[field], [part]: true } } : current));
   const downloadUnsaved = async () => {
     const listed = listUnsaved(unsavedRef.current());
     if (!listed.length) return;
@@ -305,14 +306,30 @@ function App() {
   const askFiles = unsavedAsk ? unsavedAsk.listed.flatMap((p) => p.files) : [];
   const askDone = unsavedAsk ? askFiles.filter((f) => unsavedAsk.done.has(f.name)).length : 0;
   const askComplete = unsavedAsk ? unsavedAsk.listed.some((p) => p.files.every((f) => unsavedAsk.done.has(f.name))) : false;
+  // Sealed results whose every unsaved part was downloaded from the handoff: the user can confirm them without a second download.
+  // Each names what "I saved it" would confirm: the file, plus its receipt when only the receipt's download was started.
+  const startedName = (r, name) => (r.saved?.receipt ? [name] : [name, `${name.replace(/(\.manifest)?\.fseal$/, '')}.receipt.txt`]);
+  const startedParts = [...(protectUnsaved && startedAll(protectSealed) ? [{ names: startedName(protectSealed, protectSealed.log.name), markSaved: () => { markProtectSaved(protectSealed.log, 'file'); markProtectSaved(protectSealed.log, 'receipt'); } }] : []),
+    ...(manifestUnsaved?.requested ? [{ ...manifestUnsaved, names: startedName(manifestOutput || {}, manifestUnsaved.name) }] : [])];
+  const startedNames = startedParts.flatMap((p) => p.names);
+  const savedLabel = (n) => (n > 2 ? 'I saved them' : n === 2 ? 'I saved both' : 'I saved it');
+  // After "I saved it" the control goes away: focus moves on to the action it was blocking (Log out, the sign-in form).
+  const focusNext = (event) => {
+    const root = event.currentTarget.closest('.profile-menu, #auth-main');
+    requestAnimationFrame(() => {
+      const next = root?.isConnected && (root.querySelector('.profile-logout:not([disabled]), #auth-email') || root.querySelector('button:not([disabled]), input:not([disabled])'));
+      (next || document.getElementById('main') || document.querySelector('main'))?.focus(); // the rescue notice goes away entirely: its page
+    });
+  };
   const unsavedControl = <div className="unsaved-download">
     {unsavedError && <><p className="receipt-error" role="alert">{unsavedError}</p>
       <div className="actions-row">{askFiles.map((file) => <button key={file.name} type="button" className="button secondary" onClick={() => downloadOneUnsaved(file)}>{file.name}</button>)}</div></>}
-    {askDone > 0 && askDone === askFiles.length ? <><p role="status">Did the download finish?</p>
-      <div className="actions-row"><button type="button" className="button primary" onClick={confirmUnsavedSaved}>Yes, saved</button><button type="button" className="button secondary" onClick={downloadUnsaved}>Download again</button></div></>
-      : askDone > 0 ? <><p role="status">{askDone} of {askFiles.length} files downloaded. Download the rest, then confirm.</p>
-        {askComplete && <div className="actions-row"><button type="button" className="button secondary" onClick={confirmUnsavedSaved}>These finished</button></div>}</>
-      : !unsavedError && <div className="actions-row"><button type="button" className="button primary" onClick={downloadUnsaved}><Download aria-hidden="true" size={16} />Download unsaved work</button></div>}
+    {askDone > 0 && askDone === askFiles.length ? <><p role="status">{unsavedError ? `Download started for ${askDone} of ${askFiles.length} files.` : 'Download started: hashwing-unsaved-work.zip. Check your Downloads folder.'} Did {askDone > 1 && unsavedError ? 'they' : 'it'} save?</p>
+      <div className="actions-row"><button type="button" className="button primary" onClick={(e) => { confirmUnsavedSaved(); focusNext(e); }}>{unsavedError ? savedLabel(askDone) : 'I saved it'}</button><button type="button" className="button secondary" onClick={downloadUnsaved}>Download again</button></div></>
+      : askDone > 0 ? <><p role="status">Download started for {askDone} of {askFiles.length} files. Download the rest.</p>
+        {askComplete && <div className="actions-row"><button type="button" className="button secondary" onClick={(e) => { confirmUnsavedSaved(); focusNext(e); }}>I saved these</button></div>}</>
+      : !unsavedError && <>{startedParts.length > 0 && <p role="status">You started a download of {startedNames.join(' and ')}. Did {startedNames.length > 1 ? 'they' : 'it'} save?</p>}
+        <div className="actions-row"><button type="button" className="button primary" onClick={downloadUnsaved}><Download aria-hidden="true" size={16} />Download unsaved work</button>{startedParts.length > 0 && <button type="button" className="button secondary" onClick={(e) => { startedParts.forEach((p) => p.markSaved()); focusNext(e); }}>{savedLabel(startedNames.length)}</button>}</div></>}
   </div>;
   const protectDone = protectMode === 'embedded' ? !!protectSealed : manifestSealed;
   useEffect(() => { // old receipts say "open #/app/protect and paste this whole message"
@@ -1771,8 +1788,9 @@ function App() {
           </>}
           {protectMode === 'embedded' && protectSealed && <Handoff headingRef={handoffRef} headingId="handoff-title"
             summary={`Sealed · 1 file${protectSealed.jobRef ? ` · ${protectSealed.jobRef}` : ''}`}
-            kind="file" fileName={protectSealed.log.name} unsaved={protectUnsaved} downloaded={!!protectSealed.saved?.file} receiptSaved={!!protectSealed.saved?.receipt}
-            onDownload={() => download(protectSealed.log.name, protectSealed.log, 'application/octet-stream')} onSaved={() => markProtectSaved(protectSealed.log, 'file')} onDownloadReceipt={() => download(`${protectSealed.name}.receipt.txt`, protectSealed.handover)} onReceiptSaved={() => markProtectSaved(protectSealed.log, 'receipt')}
+            kind="file" fileName={protectSealed.log.name} receiptName={`${protectSealed.name}.receipt.txt`} unsaved={protectUnsaved} downloaded={!!protectSealed.saved?.file} receiptSaved={!!protectSealed.saved?.receipt} requested={protectSealed.requested}
+            onDownload={() => { download(protectSealed.log.name, protectSealed.log, 'application/octet-stream'); markProtectSaved(protectSealed.log, 'file', 'requested'); }} onSaved={() => markProtectSaved(protectSealed.log, 'file')}
+            onDownloadReceipt={() => { download(`${protectSealed.name}.receipt.txt`, protectSealed.handover); markProtectSaved(protectSealed.log, 'receipt', 'requested'); }} onReceiptSaved={() => markProtectSaved(protectSealed.log, 'receipt')}
             handoverId="handover-text" handover={protectSealed.handover} onCopy={copyHandover} copyStatus={copyStatus}
             actions={<><a className="button secondary" href={`mailto:?subject=${encodeURIComponent(`HashWing receipt for ${protectSealed.name}`)}&body=${encodeURIComponent(protectSealed.handover)}`}><Mail aria-hidden="true" size={16} />Email it</a></>}
             details={<>{protectSealed.savedKey && <SenderFingerprint fingerprint={protectSealed.fingerprint} />}<details className="report-details handoff-about"><summary>What is this? <ChevronDown size={17} aria-hidden="true" /></summary><div className="manifest-options-body prose"><p>{protectSealed.savedKey ? 'Signed with the key loaded under Trust. Anyone holding that private key can sign other files, so keep its backup private.' : 'The signing key was made for this file only and was discarded, never stored or exported, so no further receipt can be made with it.'} Anyone can seal a different file with another key; that is why the receipt you send now is what counts later. Sealing shows the file has not changed since now; it cannot show what happened before you sealed it.</p></div></details></>}
@@ -2300,6 +2318,9 @@ const friendlyLimit = (cause) => cause instanceof RangeError && /exceeds 65536 b
   : / name /.test(cause.message) ? `${cause.message} Rename the file or turn off Include file names under More options, then press Seal again.`
   : `${cause.message} Shorten it under More options, then press Seal again.`;
 
+// Every part not yet saved had its download started (a click, not proof): the unsaved-work gate can then offer "I saved it".
+const startedAll = (r) => ['file', 'receipt'].every((k) => r.saved?.[k] || r.requested?.[k]);
+
 function ManifestSeal({ hidden, output, setOutput, carry, common, jobRef, signingKey, onActiveChange, onUnsaved, onSealed, onDone, onSealMore, shareNote }) {
   const [files, setFiles] = useState([]);
   const [includeNames, setIncludeNames] = useState(false);
@@ -2323,7 +2344,7 @@ function ManifestSeal({ hidden, output, setOutput, carry, common, jobRef, signin
   useEffect(() => () => onActiveChange(false), [onActiveChange]);
   useEffect(() => { // the sealed list and its receipt, until the list is downloaded; kept after this panel unmounts
     if (!output) return;
-    onUnsaved(!unsavedList ? null : { files: [{ name: output.log.name, blob: output.log }, { name: `${output.base}.receipt.txt`, bytes: new TextEncoder().encode(output.handover) }], markSaved: () => { // only this exact result, never a newer one
+    onUnsaved(!unsavedList ? null : { name: output.log.name, requested: startedAll(output), files: [{ name: output.log.name, blob: output.log }, { name: `${output.base}.receipt.txt`, bytes: new TextEncoder().encode(output.handover) }], markSaved: () => { // only this exact result, never a newer one
       setOutput((current) => (current?.log === output.log ? { ...current, saved: { file: true, receipt: true } } : current)); onUnsaved((current) => (current?.files?.[0]?.blob === output.log ? null : current)); } });
   }, [output, unsavedList, onUnsaved]); // eslint-disable-line react-hooks/exhaustive-deps
   const reset = () => { controllerRef.current?.abort(); setOutput(null); setMessage(''); setCopyStatus(''); setError(''); };
@@ -2380,7 +2401,7 @@ function ManifestSeal({ hidden, output, setOutput, carry, common, jobRef, signin
       else fail(cause?.message || 'Something went wrong. Press Seal the list again.');
     } finally { if (controllerRef.current === controller) { controllerRef.current = null; setPhase(''); setProgress(null); } }
   };
-  const markList = (log, part) => setOutput((current) => (current?.log === log ? { ...current, saved: { ...current.saved, [part]: true } } : current)); // only this exact result
+  const markList = (log, part, field = 'saved') => setOutput((current) => (current?.log === log ? { ...current, [field]: { ...current[field], [part]: true } } : current)); // only this exact result; field as in markProtectSaved
   const copy = async () => {
     const log = output.log;
     try { await navigator.clipboard.writeText(output.handover); markList(log, 'receipt'); setCopyStatus('Receipt message copied. Paste it into an email or chat to the person who will keep it.'); }
@@ -2403,8 +2424,9 @@ function ManifestSeal({ hidden, output, setOutput, carry, common, jobRef, signin
   const live = <p className="visually-hidden" role="status">{phase === 'hashing' ? (quarter > 0 ? `${quarter * 25}% read · ${sizes}` : '') : phase === 'sealing' ? 'Sealing…' : output ? message : ''}</p>;
   if (output) return <>{live}<Handoff headingRef={headingRef} headingId="manifest-handoff-title"
     summary={`Sealed · ${output.items} file${output.items === 1 ? '' : 's'} · ${exactBytes(output.total)}${output.jobRef ? ` · ${output.jobRef}` : ''}`}
-    kind="list" fileName={output.log.name} unsaved={unsavedList} downloaded={output.saved.file} receiptSaved={output.saved.receipt} originals={output.names}
-    onDownload={() => download(output.log.name, output.log, 'application/octet-stream')} onSaved={() => markList(output.log, 'file')} onDownloadReceipt={() => download(`${output.base}.receipt.txt`, output.handover)} onReceiptSaved={() => markList(output.log, 'receipt')}
+    kind="list" fileName={output.log.name} receiptName={`${output.base}.receipt.txt`} unsaved={unsavedList} downloaded={output.saved.file} receiptSaved={output.saved.receipt} requested={output.requested} originals={output.names}
+    onDownload={() => { download(output.log.name, output.log, 'application/octet-stream'); markList(output.log, 'file', 'requested'); }} onSaved={() => markList(output.log, 'file')}
+    onDownloadReceipt={() => { download(`${output.base}.receipt.txt`, output.handover); markList(output.log, 'receipt', 'requested'); }} onReceiptSaved={() => markList(output.log, 'receipt')}
     handoverId="manifest-handover-text" handover={output.handover} onCopy={copy} copyStatus={copyStatus}
     actions={<><button className="button secondary" type="button" onClick={() => download(`${output.base}.public-key.txt`, `${output.publicKey}\n`)}><Download aria-hidden="true" size={16} />Download public key</button></>}
     details={<>{output.savedKey && <SenderFingerprint fingerprint={output.fingerprint} />}</>} /* the grouped fingerprint, as for a small file; the raw key is in the message */
