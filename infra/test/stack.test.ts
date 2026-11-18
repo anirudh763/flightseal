@@ -57,6 +57,38 @@ test('DynamoDB: on demand, ttl, PITR off by default and on by context, destroyed
   });
 });
 
+test('prod keeps the data: PITR 35 days, deletion protection, Retain on table, user pool and log group', () => {
+  // pitr: false is what cdk.json passes; prod must override it.
+  const p = Template.fromStack(new RegistryStack(new App(), 'Prod', { stage: 'prod', pitr: false }));
+  const keep = { DeletionPolicy: 'Retain', UpdateReplacePolicy: 'Retain' };
+  p.hasResource('AWS::DynamoDB::Table', {
+    ...keep,
+    Properties: {
+      PointInTimeRecoverySpecification: { PointInTimeRecoveryEnabled: true, RecoveryPeriodInDays: 35 },
+      DeletionProtectionEnabled: true,
+      TimeToLiveSpecification: { AttributeName: 'ttl', Enabled: true },
+    },
+  });
+  p.hasResource('AWS::Cognito::UserPool', { ...keep, Properties: { DeletionProtection: 'ACTIVE' } });
+  p.hasResource('AWS::Logs::LogGroup', { ...keep, Properties: { RetentionInDays: 7 } });
+});
+
+test('dev (the default) stays disposable: no PITR window, no deletion protection, Delete policies', () => {
+  const dev = Template.fromStack(new RegistryStack(new App(), 'Test', { stage: 'dev' }));
+  assert.deepEqual(dev.toJSON(), json, 'stage dev synthesizes the same template as no stage');
+  const gone = { DeletionPolicy: 'Delete', UpdateReplacePolicy: 'Delete' };
+  t.hasResource('AWS::DynamoDB::Table', {
+    ...gone,
+    Properties: {
+      PointInTimeRecoverySpecification: { PointInTimeRecoveryEnabled: false, RecoveryPeriodInDays: Match.absent() },
+      DeletionProtectionEnabled: Match.absent(),
+    },
+  });
+  t.hasResource('AWS::Cognito::UserPool', { ...gone, Properties: { DeletionProtection: Match.absent() } });
+  t.hasResource('AWS::Logs::LogGroup', gone);
+  assert.throws(() => new RegistryStack(new App(), 'Bad', { stage: 'production' as any }), /not 'dev' or 'prod'/);
+});
+
 test('IAM: only item actions, only on the table ARN, never Resource "*"', () => {
   const policies = resources('AWS::IAM::Policy');
   assert.equal(policies.length, 1);

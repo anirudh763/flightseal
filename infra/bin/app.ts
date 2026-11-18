@@ -12,6 +12,8 @@ function corsContext(value: unknown): string[] | undefined {
 const app = new App();
 // Environment-agnostic on purpose: synth needs no credentials and performs no lookups. Deploy to us-east-1.
 new RegistryStack(app, 'HashWingRegistry', {
+  // -c stage=prod for production (not authorized yet, see docs/aws/RUNBOOK_AWS.md). Any other value is refused.
+  stage: app.node.tryGetContext('stage') ?? 'dev',
   pitr: app.node.tryGetContext('pitr') === true || app.node.tryGetContext('pitr') === 'true',
   restoredTableName: app.node.tryGetContext('restoredTableName'),
   restoredFrom: app.node.tryGetContext('restoredFrom'),

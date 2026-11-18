@@ -7,7 +7,12 @@ import {
 import { Construct } from 'constructs';
 
 export interface RegistryStackProps extends StackProps {
-  /** DynamoDB point-in-time recovery. Off by default: it is billed per GB-month (see docs/aws/COST.md). */
+  /**
+   * 'prod' keeps the data: PITR on with a 35-day window, deletion protection, and RETAIN on the table, user pool
+   * and log group. 'dev' (the default) is disposable. Choosing prod here does not authorize a deploy.
+   */
+  readonly stage?: 'dev' | 'prod';
+  /** DynamoDB point-in-time recovery in dev. Off by default: it is billed per GB-month (see docs/aws/COST.md). */
   readonly pitr?: boolean;
   /**
    * Serve a table restored from a backup (always a new table, outside this stack) instead of the stack's table.
@@ -52,14 +57,24 @@ export const STAGE_THROTTLE = { rate: 2, burst: 5 };
 export class RegistryStack extends Stack {
   constructor(scope: Construct, id: string, props: RegistryStackProps = {}) {
     super(scope, id, props);
+    if (props.stage !== undefined && props.stage !== 'dev' && props.stage !== 'prod') {
+      throw new Error(`stage: ${JSON.stringify(props.stage)} is not 'dev' or 'prod'`);
+    }
+    const prod = props.stage === 'prod';
+    const removalPolicy = prod ? RemovalPolicy.RETAIN : RemovalPolicy.DESTROY;
+    // undefined, not false, in dev: the dev template stays as it was before the switch existed.
+    const deletionProtection = prod || undefined;
 
     const table = new dynamodb.Table(this, 'Table', {
       partitionKey: { name: 'PK', type: dynamodb.AttributeType.STRING },
       sortKey: { name: 'SK', type: dynamodb.AttributeType.STRING },
       billingMode: dynamodb.BillingMode.PAY_PER_REQUEST,
       timeToLiveAttribute: 'ttl',
-      pointInTimeRecoverySpecification: { pointInTimeRecoveryEnabled: props.pitr ?? false },
-      removalPolicy: RemovalPolicy.DESTROY,
+      pointInTimeRecoverySpecification: prod
+        ? { pointInTimeRecoveryEnabled: true, recoveryPeriodInDays: 35 }
+        : { pointInTimeRecoveryEnabled: props.pitr ?? false },
+      deletionProtection,
+      removalPolicy,
     });
 
     if (!props.restoredTableName !== !props.restoredFrom || !props.restoredTableName !== !props.restoreId) {
@@ -74,7 +89,7 @@ export class RegistryStack extends Stack {
 
     const logGroup = new logs.LogGroup(this, 'FunctionLogs', {
       retention: logs.RetentionDays.ONE_WEEK,
-      removalPolicy: RemovalPolicy.DESTROY,
+      removalPolicy,
     });
 
     const fn = new lambda.Function(this, 'Function', {
@@ -99,7 +114,8 @@ export class RegistryStack extends Stack {
         org_id: new cognito.StringAttribute({ minLen: 1, maxLen: 64, mutable: false }),
         role: new cognito.StringAttribute({ minLen: 1, maxLen: 16, mutable: true }),
       },
-      removalPolicy: RemovalPolicy.DESTROY,
+      deletionProtection,
+      removalPolicy,
     });
     const client = userPool.addClient('WebClient', {
       authFlows: { userSrp: true },

@@ -15,6 +15,20 @@ npx cdk deploy HashWingRegistry \
   # add -c pitr=true to turn on point-in-time recovery (billed per GB-month)
 ```
 
+That deploys the disposable `dev` stage: PITR off unless `-c pitr=true`, and the table, user pool and log group are
+deleted with the stack. Production uses `-c stage=prod`:
+
+```sh
+npx cdk deploy HashWingRegistry -c stage=prod \
+  --parameters BudgetEmail=<you@example.com>
+```
+
+`stage=prod` turns on PITR with a 35-day recovery window, deletion protection on the table and the user pool, and
+RETAIN on the table, user pool and log group. **A production deploy is not authorized yet**: the switch exists so
+the settings are reviewed and tested, not as permission to deploy. Context is not remembered between runs, so
+every later `cdk deploy` of a production stack (a rollback, a restore below) must repeat `-c stage=prod`; without
+it the deploy turns protection off and sets the resources back to Delete.
+
 The outputs are `ApiUrl`, `TableName`, `UserPoolId` and `UserPoolClientId`.
 
 Demoting an admin: `custom:role` is read from the ID token as issued, so a demoted admin keeps admin rights until
@@ -99,6 +113,8 @@ After a first restore that is the restored table, not the stack's own table: tom
 only there. A source that is not the served table is refused, because its tombstones may be stale.
 
 1. Restore (PITR or an on-demand backup) to a new table, for example `HashWingRegistry-restored-2`.
+   After a restore, set PITR (35 days), deletion protection and TTL on the restored table before opening the gate;
+   the stack does not manage it.
 2. Pick a new random restore ID (for example `uuidgen`). Point the function at the new table and close every route
    until tombstones are applied:
 
