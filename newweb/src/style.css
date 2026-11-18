@@ -1228,3 +1228,7 @@ input[type=datetime-local] { width: 100%; max-width: 320px; min-width: 0; min-he
 .verify-advanced { margin: 0 0 16px; }
 .verify-files { display: grid; gap: 16px; min-width: 0; }
 .verify-files[hidden] { display: none; }
+/* DESIGN.md shapes on Verify: warn is a diamond, bad a square (the older global .status-shape draws them the other way). */
+.verdict-headline .status-shape.warn, .compare-wrap .status-shape.warn { clip-path: none; background: none; border: 2px solid currentColor; border-radius: 0; transform: rotate(45deg); width: 11px; height: 11px; }
+.verdict-headline .status-shape.bad, .compare-wrap .status-shape.bad { border-radius: 0; transform: none; }
+.compare-wrap .status-label .status-shape.warn { width: 8px; height: 8px; }
