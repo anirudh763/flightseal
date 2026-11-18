@@ -42,3 +42,13 @@ condition = "AND"
 paths = ['''^tests/fixtures/(ed25519-weak-keys\.json|make_ed25519_weak_keys\.py)$''']
 regexTarget = "line"
 regexes = ['''^\s*\{"key": "[0-9a-f]{64}", ("msg"|"small_order")''']
+
+# The registry wiring browser test builds its dev-fixture signing key at runtime from the public seed bytes 0..31
+# (the key the registry dev fixtures enroll). Allow only that exact expression in that one file; a literal key still fails.
+[[allowlists]]
+description = "Public dev-fixture Ed25519 seed (bytes 0..31) serialized at runtime in the registry wiring test; never literal key material"
+targetRules = ["private-key"]
+condition = "AND"
+paths = ['''^newweb/tests/registry-wiring\.mjs$''']
+regexTarget = "match"
+regexes = ['''^[-]{5}BEGIN PRIVATE KEY[-]{5}\\n\$\{Buffer\.concat\(\[Buffer\.from\('302e020100300506032b657004220420', 'hex'\), Buffer\.from\(\[\.\.\.Array\(32\)\.keys\(\)\]\)\]\)\.toString\('base64'\)\}\\n[-]{5}END PRIVATE KEY[-]{5}$''']
