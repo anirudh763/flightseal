@@ -143,7 +143,8 @@ backup" are explained in a "What is this?" disclosure.
 - **Browser**: `hashFile()` in `docs/wasm/client.mjs` starts one Web Worker per file
   (`docs/wasm/hash-worker.mjs`).
   - The worker reads 4 MiB `File.slice()` chunks, one read in flight, and copies each into one reused WebAssembly
-    heap buffer.
+    heap buffer. It then detaches the read (`ArrayBuffer.prototype.transfer(0)`), so Chrome frees those 4 MiB at once
+    instead of keeping old reads until the next garbage collection. Browsers without `transfer` skip this step.
   - It calls OpenSSL `EVP_DigestInit_ex/Update/Final_ex` through `fseal_sha256_begin/update/final` in
     `wasm/bridge.cpp`, rebuilt with `scripts/build_wasm.sh`. The Docker build worked, so the JavaScript SHA-256
     fallback was not needed.
@@ -157,12 +158,81 @@ backup" are explained in a "What is this?" disclosure.
 
 ## Measurements
 
-These numbers come from one local run on 2026-11-17 on an Apple Silicon Mac running macOS 26.5.2, with
-Google Chrome (Playwright `chrome` channel, headless) and the repository's Python venv.
+### Memory gate: 128 MiB extra while hashing (2026-11-17, passes after the fix)
 
-The test file is sparse: 2,152,726,535 bytes (2^31 + 5 MiB + 7), all zero apart from `0x5a` markers at 2^31−1,
-2^31 and the last byte. It was read through the page cache, so these are best-case local numbers, not
-disk-bound ones. Both digests matched `openssl dgst -sha256`.
+The target is at most 128 MiB of extra memory while one file larger than 2 GiB is hashed. It was not met before the
+fix (worst run +269.6 MiB) and is met after it (worst run +94.0 MiB).
+
+**Cause.** Each 4 MiB `File.slice().arrayBuffer()` read was a new `ArrayBuffer` that stayed alive until the worker's
+next garbage collection. The Wasm heap did not grow (33,554,432 bytes before and after), there are no `postMessage`
+copies of file bytes (progress messages carry a number) and only one read is in flight. The growth was all in the
+page's renderer process. **Fix**: one line in `docs/wasm/hash-worker.mjs` detaches each read right after it is copied
+into the Wasm heap. Digests are unchanged.
+
+**Machine.** MacBookPro18,3 (Apple M1 Pro, 16 GiB), macOS 26.5.2 (25F84), Google Chrome 158.0.8127.36 headless
+(Playwright 1.63.0, `executablePath` set to the installed Chrome). The machine was busy: about 80 other Chrome
+processes from other sessions were running and `memory_pressure` reported 43% free. Throughput is therefore lower and
+noisier than on an idle machine.
+
+**File.** Sparse, 2,152,726,535 bytes (2^31 + 5 MiB + 7), zero apart from `0x5a` at 2^31−1, 2^31 and the last byte,
+read through the page cache. SHA-256 `16ace5cf19c483ce9de45aed0e83b551dc7aef8738518521939b482152c9dc15`, the same from
+`openssl dgst -sha256` and from the browser in every run (the script reads it back from the sealed list).
+
+**Method** (`node newweb/tests/large-hash-memory.mjs 3`, after `npm --prefix newweb run build`; manual, local only):
+
+- It drives the built console. **Seal path**: Seal & send → Large files → the file → Include file names → Seal.
+  **Check path**: on the same page, the sealed list, the handover text and the public key → the same file → Check
+  files; the row must say Matches.
+- Baseline: the page is loaded and the SHA-256 worker is already created and idle. The page's next
+  `new Worker(hash-worker…)` gets that worker. Then 3 s of settling and one sample.
+- During hashing, `ps -o rss` for every process in the launched Chrome's tree is sampled every 100 ms. Each process's
+  delta is its own peak minus its own baseline.
+- **Gate value** = the sum of the per-process deltas. It is never lower than the delta of the summed tree at one
+  instant, so another process shrinking (memory compression on a busy machine) cannot hide growth. The same-instant
+  tree delta is shown as well.
+- A dedicated worker runs as a thread of the page's renderer, so Chrome has no separate worker process. The worker's
+  memory is inside the renderer row; the worker cannot be measured on its own with RSS.
+- The "idle worker" in the old code has not yet instantiated Wasm (it does that when the file arrives), so the 32 MiB
+  Wasm heap and module are inside the deltas below, both before and after.
+- Responsiveness: largest lateness of a 50 ms timer on the page's main thread while hashing.
+
+MiB = 2^20 bytes. "Renderer" is the page's renderer (the one that grew); "Other" is the network, storage and other
+renderer processes.
+
+| Run | Path | Code | Seconds | MiB/s | Renderer idle → peak (Δ) | GPU idle → peak (Δ) | Browser Δ | Other Δ | Same-instant tree Δ | **Gate value** | Timer lag |
+|---|---|---|---|---|---|---|---|---|---|---|---|
+| 1 | Seal | before | 13.42 | 153.0 | 154.1 → 380.4 (+226.3) | 79.2 → 84.5 (+5.4) | +2.2 | +0.1 | +118.0 | **234.0 fail** | 1 ms |
+| 1 | Check | before | 14.85 | 138.3 | 155.8 → 404.9 (+249.1) | 68.4 → 74.4 (+6.0) | +6.1 | +8.4 | +222.6 | **269.6 fail** | 2 ms |
+| 2 | Seal | before | 13.32 | 154.1 | 155.3 → 406.0 (+250.7) | 79.9 → 84.9 (+4.9) | +1.9 | +0.3 | +179.6 | **257.8 fail** | 22 ms |
+| 2 | Check | before | 14.80 | 138.7 | 166.8 → 363.9 (+197.1) | 57.2 → 62.8 (+5.6) | +2.2 | +14.9 | +181.7 | **219.8 fail** | 12 ms |
+| 3 | Seal | before | 15.00 | 136.8 | 161.0 → 369.8 (+208.8) | 79.2 → 84.5 (+5.3) | +2.5 | 0.0 | +65.9 | **216.6 fail** | 2 ms |
+| 3 | Check | before | 15.17 | 135.3 | 159.9 → 353.3 (+193.4) | 63.7 → 69.3 (+5.6) | +2.8 | +20.0 | +166.7 | **221.8 fail** | 24 ms |
+| 1 | Seal | after | 13.38 | 153.4 | 153.7 → 199.0 (+45.3) | 79.5 → 84.7 (+5.1) | +5.6 | +0.7 | +56.0 | **56.7 pass** | 23 ms |
+| 1 | Check | after | 17.35 | 118.3 | 176.0 → 231.5 (+55.5) | 71.5 → 76.6 (+5.1) | +24.4 | +9.0 | +60.4 | **94.0 pass** | 12 ms |
+| 2 | Seal | after | 12.85 | 159.8 | 152.2 → 193.2 (+41.1) | 78.1 → 83.5 (+5.4) | +4.4 | +0.4 | +41.3 | **51.3 pass** | 12 ms |
+| 2 | Check | after | 12.50 | 164.2 | 155.1 → 225.9 (+70.8) | 67.5 → 73.0 (+5.5) | +2.2 | +6.9 | +76.8 | **85.4 pass** | 1 ms |
+| 3 | Seal | after | 13.23 | 155.2 | 164.1 → 195.0 (+30.9) | 75.2 → 80.5 (+5.3) | +2.2 | +1.3 | +36.7 | **39.7 pass** | 9 ms |
+| 3 | Check | after | 15.25 | 134.6 | 176.4 → 236.1 (+59.7) | 66.4 → 71.8 (+5.4) | 0.0 | +17.2 | +61.0 | **82.3 pass** | 1 ms |
+| 4 | Seal | before, rerun after the "after" runs | 13.68 | 150.0 | 156.9 → 386.3 (+229.4) | 79.5 → 84.8 (+5.2) | +2.4 | +0.1 | +140.6 | **237.1 fail** | 8 ms |
+| 4 | Check | before, rerun after the "after" runs | 12.83 | 160.0 | 176.9 → 412.2 (+235.4) | 73.4 → 78.8 (+5.4) | +0.6 | +13.8 | +187.1 | **255.2 fail** | 10 ms |
+
+Worst gate value: before 269.6 MiB (fail), after 94.0 MiB (pass, 34 MiB under the target). Throughput moved within the run-to-run noise of this busy machine.
+The main thread stayed responsive (timer lag at most 24 ms). Cancel is unchanged: the worker is terminated, and
+`node --test tests/wasm/hash-browser.test.mjs` and `npm --prefix newweb run test:browser` ("Cancel stops hashing and
+the UI is usable again") pass.
+
+The older blank-page command (`FSEAL_LARGE_HASH=1 node --test tests/wasm/hash-browser.test.mjs`; launched browser's
+whole-tree RSS at one instant, baseline = `client.mjs` imported, no worker yet) after the fix, same machine, three runs:
+11.94 s / 172.0 MiB/s / +27.1 MiB; 13.10 s / 156.8 MiB/s / +14.4 MiB; 12.09 s / 169.8 MiB/s / +26.9 MiB. The Wasm heap
+was 33,554,432 bytes and parity with `openssl dgst -sha256` held in each run.
+
+### History: first run, before the fix (2026-11-17, gate not met)
+
+These numbers come from one local run on 2026-11-17 on an Apple Silicon Mac running macOS 26.5.2, with
+Google Chrome (Playwright `chrome` channel, headless) and the repository's Python venv. They predate the fix above.
+
+The test file was the same sparse file. It was read through the page cache, so these are best-case local numbers,
+not disk-bound ones. Both digests matched `openssl dgst -sha256`.
 
 | Path | Seconds | Throughput | Memory |
 |---|---|---|---|
@@ -173,11 +243,10 @@ A second run of the same two commands on the same machine gave: browser 12.12 s,
 600.8 → 760.3 MiB (+159.5 MiB), WebAssembly heap 33,554,432 bytes, page JS heap 2.3 MiB; CLI 1.60 s, 1,279.5 MiB/s,
 child peak RSS 22.1 MiB.
 
-The proposed target was at most 128 MiB of extra payload working memory. These runs do not show that it is met.
-The browser RSS delta was 140.3 and 159.5 MiB. It also counts things that are not payload memory: worker start-up,
-the Wasm module and its fixed 32 MiB heap, and Chrome's own caching. No per-component breakdown was measured.
+At the time these runs did not show the 128 MiB target was met: the browser RSS delta was 140.3 and 159.5 MiB, with
+no per-component breakdown. The breakdown above found the cause in the renderer.
 
-How the browser numbers were measured:
+How those browser numbers were measured:
 
 - RSS is the sum of `ps -o rss` over the launched Chrome process and its descendants (7 processes), sampled every
   250 ms.
