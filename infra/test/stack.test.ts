@@ -122,12 +122,13 @@ test('IAM: only item actions, only on the table ARN, never Resource "*"', () => 
   }
 });
 
-test('Cognito: Lite plan, no self sign-up, invitations expire in 3 days, org_id and role not writable by the app client', () => {
+test('Cognito: Lite plan, no self sign-up, case-insensitive sign-in, invitations expire in 3 days, org_id and role not writable by the app client', () => {
   t.hasResourceProperties('AWS::Cognito::UserPool', {
     UserPoolTier: 'LITE',
     AdminCreateUserConfig: { AllowAdminCreateUserOnly: true },
   });
   t.hasResourceProperties('AWS::Cognito::UserPool', {
+    UsernameConfiguration: { CaseSensitive: false },
     Policies: { PasswordPolicy: { TemporaryPasswordValidityDays: 3, MinimumLength: 8, RequireLowercase: true,
       RequireUppercase: true, RequireNumbers: true, RequireSymbols: true } },
   });

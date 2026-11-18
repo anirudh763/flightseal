@@ -163,6 +163,8 @@ export class RegistryStack extends Stack {
       featurePlan: cognito.FeaturePlan.LITE,
       selfSignUpEnabled: false,
       signInAliases: { email: true },
+      // A@x.com and a@x.com are one user, not two.
+      signInCaseSensitive: false,
       // Invitations (admin-created users' temporary passwords) expire after 3 days. The rest restates Cognito's
       // default policy: once Policies is written, an omitted Require* flag means false in CloudFormation.
       passwordPolicy: {
