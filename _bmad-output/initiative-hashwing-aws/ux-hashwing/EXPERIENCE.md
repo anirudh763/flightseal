@@ -452,7 +452,7 @@ Both builds, files:
 
 ### Verify verdicts
 
-The headline combines the files check with key trust (owner decision 2026-11-18): green "Verified" needs complete files and a trusted key. Signature, key trust and registry still each keep their own line under the headline. The first row that applies wins.
+The headline combines the files check with key trust (provisional, decided by the coordinator 2026-11-18, awaiting owner confirmation): green "Verified" needs complete files and a trusted key. Signature, key trust and registry still each keep their own line under the headline. The first row that applies wins.
 
 | Headline | Style | When | One sentence | One next action |
 |---|---|---|---|---|
@@ -570,7 +570,7 @@ These were chosen by the builder and are built, but the owner has not confirmed 
 
 - **Key-management home.** Trusted companies and the signing-key controls live on the Trust page.
 - **Flag-off Verify (deliberate deviation from the brief, pending owner confirmation).** The brief asks Verify to open on "I have a link" / "I have files". The flag-off Pages build has nothing to open a share link with (`newweb/src/main.jsx:159`), so it opens straight on "I have files" (AC-65). If the owner wants the two-choice opening there too, the link choice could only say that this copy can't open share links.
-- **Verified needs a trusted key (owner decision 2026-11-18).** Green "Verified" needs complete files and a pinned, uncompromised key; otherwise "Files match · signer not confirmed" (warn) or "Signed by a key marked compromised" (bad). See "Verify verdicts".
+- **Verified needs a trusted key (provisional, decided by the coordinator 2026-11-18, awaiting owner confirmation).** Green "Verified" needs complete files and a pinned, uncompromised key; otherwise "Files match · signer not confirmed" (warn) or "Signed by a key marked compromised" (bad). See "Verify verdicts".
 - **Owner decisions, 2026-11-17 (binding).** Registry sign-in lives on Trust. The registry stays off the public Pages build until a dedicated origin and production sign-in exist (a subpath of the same github.io origin is not origin isolation). "Sealed on this device" stays as a compact list below the sealing result, in every build, and a Jobs page is added. Share links default to 30 days with 7 days as the one alternative, and the server refuses more than 30 (AD-9). These supersede the matching builder defaults above.
 
 ## Open
