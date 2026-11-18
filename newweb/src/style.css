@@ -1025,6 +1025,8 @@ input[type=datetime-local] { width: 100%; max-width: 320px; min-width: 0; min-he
 .time-fields dd small, .detail-grid dd small { color: var(--muted); font-size: .76rem; }
 .confirm-box { display: grid; gap: 8px; margin: 8px 0; padding: 10px 12px; border-left: 3px solid var(--warn); background: var(--warn-bg); color: var(--ink); }
 .confirm-box p { margin: 0; overflow-wrap: anywhere; }
+.confirm-box .button.discard { background: transparent; border-color: var(--bad); color: var(--bad); }
+.download-status:empty { margin: 0; }
 .confirm-box .button, .trusted-companies .button, .trusted-key-controls .button { min-height: 44px; }
 .compare-result { display: grid; gap: 6px; justify-items: start; }
 .compare-result p { margin: 0; }
