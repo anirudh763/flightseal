@@ -96,6 +96,8 @@ test('a file changed on disk after selection rejects with a readable error', asy
   const path = join(dir, 'changing.bin'); await writeFile(path, randomBytes(12 * MiB));
   await withPage(async (page) => {
     await page.setInputFiles('#f', path);
+    // Wait until Chrome has recorded the 12 MiB size; truncating earlier lets it snapshot the 5 MiB file and hash it cleanly.
+    await page.waitForFunction((size) => document.getElementById('f').files[0]?.size === size, 12 * 1024 * 1024);
     await truncate(path, 5 * MiB);
     const r = await page.evaluate(async () => {
       const { hashFile } = await import('/wasm/client.mjs');
