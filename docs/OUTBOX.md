@@ -105,7 +105,7 @@ idempotency window. A malformed `token`, or a page without Web Crypto (not a sec
 ```sh
 node --test newweb/tests/outbox.test.mjs newweb/tests/registry-client.test.mjs   # 49 tests, stub fetch + memory store
 node --test newweb/tests/outbox-browser.mjs                                      # 8 tests, Chromium + dev server
-node newweb/tests/registry-wiring.mjs                                            # 17 checks, flag-off scan + flag-on console
+node newweb/tests/registry-wiring.mjs                                            # 19 checks, flag-off scan + flag-on console
 ```
 
 The browser tests start `registry/devserver/server.py` (DEV ONLY; it refuses to bind to anything but loopback),
