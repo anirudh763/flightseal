@@ -190,8 +190,9 @@ export function registrySealed(receipts, name) {
 // The "Registry acceptance" time row for a checked receipt message: this device's outbox row for one of its receipt
 // lines, matched on the stored receipt line. Only these strings reach the screen and the reports, never a row.
 const REGISTERED_BASIS = "the registry's clock; the registry's statement, not proof of the files";
-export function useRegistryTimeField(receipts) {
-  const [, s] = useRegistry();
+export function useRegistryTimeField(receipts) { return registryTimeField(useRegistry()[1], receipts); }
+/** The same row from a session snapshot (pure, for tests). */
+export function registryTimeField(s, receipts) {
   const lines = new Set(String(receipts || '').split('\n').map((line) => line.trim()).filter(Boolean));
   if (!lines.size) return null;
   const row = s.rows.find((r) => lines.has(r.receipt));

@@ -2326,7 +2326,7 @@ function ManifestCheck({ onActiveChange }) {
   const pinsVersion = usePinsVersion();
   const pinsRef = useRef(pinsVersion); pinsRef.current = pinsVersion;
   const reportFor = (trust, o, registry = null) => manifestReport({ sealedName: o.sealedName, trust, sources: SOURCES, keyFingerprint: o.fingerprint, head: o.head, sealedAt: o.sealedAt, items: o.comparison.items, extras: o.comparison.extras, locals: o.locals, registry });
-  const registryLine = __REGISTRY_URL__ ? useRegistryTimeField(outcome?.verified ? text : '') : null; // eslint-disable-line react-hooks/rules-of-hooks -- a build-time constant
+  const registryLine = __REGISTRY_URL__ ? useRegistryTimeField(outcome?.verified ? parseHandover(text).receipts : '') : null; // eslint-disable-line react-hooks/rules-of-hooks -- a build-time constant
   // The registry row follows this device's outbox live (queued, then Registered), so the report is rebuilt with it.
   const report = useMemo(() => (outcome?.verified && registryLine ? reportFor(outcome.trust, outcome, registryLine) : outcome?.report), [outcome, registryLine?.value, registryLine?.basis]); // eslint-disable-line react-hooks/exhaustive-deps
   // A pin may change (here, in Settings or in another tab) while files hash or after the result shows. Each result
