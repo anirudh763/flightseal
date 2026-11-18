@@ -1,0 +1,4 @@
+{
+  "_note": "Demo fixture only. Example ids, not customers. The production allow-list lives outside this repository (tools/registry_onboard.py --orgs).",
+  "orgs": ["example-company-a", "example-company-b"]
+}
