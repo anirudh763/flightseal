@@ -2183,6 +2183,7 @@ function ManifestSeal({ hidden, carry, common, jobRef, signingKey, onActiveChang
   const [error, setError] = useState('');
   const controllerRef = useRef(null);
   const headingRef = useRef(null);
+  const carriedRef = useRef(false);
   useEffect(() => () => controllerRef.current?.abort(), []);
   useEffect(() => { onActiveChange(!!phase || (!!output && !output.saved)); }, [phase, output, onActiveChange]);
   useEffect(() => { onDone(!!output); if (output) headingRef.current?.focus(); }, [output?.log]); // eslint-disable-line react-hooks/exhaustive-deps -- seal finished: the handoff heading
@@ -2196,8 +2197,9 @@ function ManifestSeal({ hidden, carry, common, jobRef, signingKey, onActiveChang
   const reset = () => { controllerRef.current?.abort(); setOutput(null); setMessage(''); setCopyStatus(''); setError(''); };
   useEffect(() => { // a file too large for Small file arrives already chosen, ready for "Seal the list"
     if (!carry || output || phase) return;
-    choose([carry.file]); requestAnimationFrame(() => document.getElementById('manifest-seal')?.focus());
+    choose([carry.file]); carriedRef.current = true;
   }, [carry]); // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => { if (carriedRef.current && files.length) { carriedRef.current = false; document.getElementById('manifest-seal')?.focus(); } }, [files]); // enabled now
   const choose = (list) => {
     reset(); setNotes({}); setEdited({}); setDerived({}); setLandingLocal(''); // a landing time belongs to one batch
     const picked = [...(list || [])];
