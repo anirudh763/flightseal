@@ -51,7 +51,7 @@ async function clickNav(page, name) {
   await link.click();
 }
 async function frontDoorAuth(page, mode) {
-  await page.locator('.landing-footer').getByRole('link', { name: 'Log in to a local profile' }).click();
+  await page.locator('footer').getByRole('link', { name: 'Use a local profile' }).click();
   if (mode === 'signup') await page.locator('#auth-main').getByRole('link', { name: 'Create account' }).click();
 }
 async function logout(page) {
@@ -91,7 +91,7 @@ try {
     assert.equal(await main.locator('.button.primary').count(), 1, 'one primary action');
     assert.equal(await page.locator('ol, [aria-roledescription=carousel], .preview-stage').count(), 0, 'no numbered steps or preview carousel');
     assert.equal(await page.getByRole('link', { name: 'Pricing' }).count(), 0);
-    for (const name of ['Privacy', 'Terms of Use', 'Security & Offline Data', 'Source', 'Log in to a local profile']) assert.equal(await page.getByRole('contentinfo').getByRole('link', { name, exact: true }).count(), 1, `footer keeps ${name}`);
+    for (const name of ['Privacy', 'Terms of Use', 'Security & Offline Data', 'Source', 'Use a local profile']) assert.equal(await page.getByRole('contentinfo').getByRole('link', { name, exact: true }).count(), 1, `footer keeps ${name}`);
     const before = await page.locator('body').innerHTML();
     await page.waitForTimeout(10000);
     assert.equal(await page.locator('body').innerHTML(), before, 'nothing on the front door changes on a timer');

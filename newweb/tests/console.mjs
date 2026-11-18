@@ -810,6 +810,8 @@ try {
     const panel = bar.locator('.profile-menu-panel');
     assert.match(await panel.innerText(), /Profiles live in this browser\. They are not company accounts\./);
     for (const name of ['Use a local profile', 'Create a local profile']) assert.equal(await panel.getByRole('button', { name, exact: true }).isVisible(), true, `menu offers ${name}`);
+    assert.equal(await panel.locator('button').first().innerText(), 'Use a local profile', 'profile entries come before the backup form');
+    assert.equal(await panel.getByRole('button', { name: 'Download encrypted backup' }).count(), 0, 'no export button without an open profile');
     assert.equal(await bar.getByText(/Company registry|Sign in to the company/).count(), 0, 'no company sign-in in the bar');
     await page.keyboard.press('Escape');
     assert.equal(await page.locator('.profile-menu').getAttribute('open'), null, 'Escape closes the profile menu');
@@ -930,7 +932,7 @@ try {
     assert.match(restorePage.url(), /sample=intact/, 'saved included-sample view is restored without copying source files');
     await restorePage.locator('.profile-menu > summary').click();
     await restorePage.getByRole('button', { name: 'Log out' }).click();
-    await restorePage.locator('.landing-footer').getByRole('link', { name: 'Log in to a local profile' }).click(); // logout lands on the front door
+    await restorePage.locator('footer').getByRole('link', { name: 'Use a local profile' }).click(); // logout lands on the front door
     await restorePage.locator('#auth-email').fill(email); await restorePage.locator('#auth-password').fill(password);
     await restorePage.getByRole('button', { name: 'Log in' }).click();
     await restorePage.waitForFunction(() => document.querySelector('.profile-menu > summary')?.textContent.includes('backup-'));

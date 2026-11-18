@@ -768,7 +768,8 @@ try {
       // AC-61, flag on: the command bar names the signed-in company as a link to Trust; sign-in itself stays on Trust.
       const barLink = d.locator('.commandbar .registry-bar-link');
       await barLink.waitFor();
-      assert.match(await barLink.innerText(), / registry$/);
+      assert.equal(await barLink.innerText(), 'Company registry');
+      assert.match(await barLink.getAttribute('aria-label'), /^Company registry \(.+\)$/, 'the org id stays in the accessible name');
       assert.equal(await d.locator('.commandbar .registry-signin, .commandbar #company-registry').count(), 0, 'no company sign-in controls in the bar');
     } finally { await c.close(); }
   });

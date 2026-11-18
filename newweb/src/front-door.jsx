@@ -25,7 +25,7 @@ export function FrontDoor({ notice, sampleHref, installKind, onInstall, onFeedba
       </section>
     </main>
     <FooterLinks onFeedback={onFeedback} onInstall={onInstall}>
-      <div className="landing-footer"><nav aria-label="Footer links"><a href="#/login">Log in to a local profile</a><a href="https://github.com/anirudh763/flightseal" target="_blank" rel="noreferrer">Source</a></nav></div>
+      <a href="#/login">Use a local profile</a><a href="https://github.com/anirudh763/flightseal" target="_blank" rel="noreferrer">Source</a>
     </FooterLinks>
     <InstallGuide open={installOpen} onClose={onInstallClose} ios={installKind === 'ios'} />
     <FeedbackDialog open={feedbackOpen} onClose={onFeedbackClose} route={route} />

@@ -1107,11 +1107,12 @@ input[type=datetime-local] { width: 100%; max-width: 320px; min-width: 0; min-he
 .system-handoff a { display: inline-flex; align-items: center; min-height: 44px; color: var(--forest); }
 /* AC-13: shell targets at least 44px. */
 .clear-session, .error-alert .button, .trust-footer nav a, .trust-footer nav button { min-height: 44px; }
-.help-layout .prose a { display: inline-flex; align-items: center; min-height: 44px; }
+.help-layout .prose a.standalone-link { display: inline-flex; align-items: center; min-height: 44px; }
 .registry-bar-link { display: inline-flex; align-items: center; min-height: 44px; padding: 0 8px; color: var(--forest); font-size: 13px; font-weight: 600; }
 .app-shell:not(.canonical-page) .trust-footer { padding-left: 16px; padding-right: 16px; }
 @media (max-width: 768px) { .app-shell:not(.canonical-page) .trust-footer { padding-left: 10px; padding-right: 10px; } }
 /* The command bar holds only the title and the profile menu, so it stays one row at every width. */
 .app-shell:not(.canonical-page) .topbar.commandbar { flex-wrap: nowrap; }
 .app-shell:not(.canonical-page) .command-actions { display: flex; width: auto; justify-content: flex-end; }
-.registry-bar-link { max-width: 40vw; overflow-wrap: anywhere; }
+.registry-bar-link { display: inline-block; max-width: 40vw; line-height: 44px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+@media (forced-colors: active) { .nav a[aria-current=page] { border-left: 4px solid Highlight; font-weight: 700; } }
