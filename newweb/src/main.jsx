@@ -1832,7 +1832,9 @@ function usePinsVersion() {
   return version;
 }
 const PICKABLE_SOURCES = Object.entries(SOURCES).filter(([key]) => key !== 'not-recorded');
-const readActivePins = () => { try { return listTrustedKeys().filter((pin) => pin.publicKey); } catch { return []; } };
+// A key marked compromised under any name is never offered for use, even if another name still pins it.
+const compromisedFingerprints = (history) => new Set(history.filter((entry) => entry.status === 'compromised').map((entry) => entry.fingerprint));
+const readActivePins = () => { try { const burned = compromisedFingerprints(listTrustedHistory()); return listTrustedKeys().filter((pin) => pin.publicKey && !burned.has(pin.fingerprint)); } catch { return []; } };
 function TrustLine({ trust }) {
   return <p className={`trust-line ${TRUST_KIND[trust.status] || 'warn'}`}><span className="status-shape" aria-hidden="true" />{trustLine(trust, SOURCES)}</p>;
 }
@@ -1910,6 +1912,7 @@ function TrustedCompanies() {
     } catch (cause) { setError(cause?.message || 'Could not change this company.'); }
   };
   const active = entries.filter((entry) => entry.status === 'active');
+  const burned = compromisedFingerprints(entries);
   return <section className="trusted-companies" aria-label="Trusted companies">
     <form className="trusted-company-form" noValidate onSubmit={(event) => { event.preventDefault(); add(); }}>
       <label className="field-label" htmlFor="tc-name">Company name</label>
@@ -1929,12 +1932,13 @@ function TrustedCompanies() {
       <strong className="wrap">{entry.name}</strong>
       <code className="fingerprint">{formatFingerprint(entry.fingerprint)}</code>
       <span className="field-hint">Added from {SOURCES[entry.source] || entry.source}{entry.addedAt ? ` on ${entry.addedAt.slice(0, 10)}` : ''}</span>
+      {burned.has(entry.fingerprint) && <span className="field-hint receipt-error">This key was marked as compromised under another name. Proofs signed with it show a warning.</span>}
       <div className="actions-row">
-        <button className="button secondary" type="button" aria-label={`Mark as compromised: ${entry.name}`} onClick={() => setPending({ kind: 'compromise', entry, text: `Mark ${entry.name}'s key as compromised? Proofs signed with it will show a warning.` })}>Mark as compromised</button>
+        {!burned.has(entry.fingerprint) && <button className="button secondary" type="button" aria-label={`Mark as compromised: ${entry.name}`} onClick={() => setPending({ kind: 'compromise', entry, text: `Mark ${entry.name}'s key as compromised? Proofs signed with it will show a warning.` })}>Mark as compromised</button>}
         <button className="text-action" type="button" aria-label={`Remove: ${entry.name}`} onClick={() => setPending({ kind: 'remove', entry, text: `Remove ${entry.name} from this browser? A key you marked as compromised stays recorded as compromised.` })}>Remove</button>
       </div>
     </li>)}</ul> : <p className="field-hint">No trusted companies yet.</p>}
-    {entries.length > 0 && <details className="report-details"><summary>Key history <ChevronDown size={17} aria-hidden="true" /></summary><ul className="company-history">{entries.map((entry, index) => <li key={index}><strong className="wrap">{entry.name}</strong> <code className="fingerprint">{formatFingerprint(entry.fingerprint)}</code> <span>{historyStatus(entry)} · from {SOURCES[entry.source] || entry.source}</span>{!active.some((item) => item.name.toLowerCase() === entry.name.toLowerCase()) && entries.some((item) => item.status !== 'compromised' && item.name.toLowerCase() === entry.name.toLowerCase()) && entries.findIndex((item) => item.name.toLowerCase() === entry.name.toLowerCase()) === index && <button className="text-action" type="button" aria-label={`Remove: ${entry.name}`} onClick={() => setPending({ kind: 'remove', entry, text: `Remove ${entry.name} from this browser? A key you marked as compromised stays recorded as compromised.` })}>Remove</button>}</li>)}</ul></details>}
+    {entries.length > 0 && <details className="report-details"><summary>Key history <ChevronDown size={17} aria-hidden="true" /></summary><ul className="company-history">{entries.map((entry, index) => <li key={index}><strong className="wrap">{entry.name}</strong> <code className="fingerprint">{formatFingerprint(entry.fingerprint)}</code> <span>{entry.status === 'active' && burned.has(entry.fingerprint) ? 'Marked compromised under another name' : historyStatus(entry)} · from {SOURCES[entry.source] || entry.source}</span>{!active.some((item) => item.name.toLowerCase() === entry.name.toLowerCase()) && entries.some((item) => item.status !== 'compromised' && item.name.toLowerCase() === entry.name.toLowerCase()) && entries.findIndex((item) => item.name.toLowerCase() === entry.name.toLowerCase()) === index && <button className="text-action" type="button" aria-label={`Remove: ${entry.name}`} onClick={() => setPending({ kind: 'remove', entry, text: `Remove ${entry.name} from this browser? A key you marked as compromised stays recorded as compromised.` })}>Remove</button>}</li>)}</ul></details>}
     <details className="report-details"><summary>What is this? <ChevronDown size={17} aria-hidden="true" /></summary><div className="prose"><p>A trusted company is a name and key fingerprint you got from that company through a channel you already know: its website, a contract or invoice, or a phone call with someone you know there.</p><p>A proof says "Signed by a key you trust" only when its key matches an active entry here. A key that arrives inside a receipt message is never trusted just because it is there. This list stays in this browser.</p></div></details>
   </section>;
 }

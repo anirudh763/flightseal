@@ -22,7 +22,9 @@ mkdirSync(OUT, { recursive: true });
 const require = createRequire(join(ROOT, 'package.json'));
 const { chromium } = require('playwright');
 const AXE = readFileSync(require.resolve('axe-core/axe.min.js'), 'utf8');
-const FORBIDDEN = ['Company registry', 'Test sign-in', 'Sealed on this device', 'hashwing-outbox', '/v1/envelopes', '/v1/shares', 'registry-test-secret', 'dev-hs256'];
+const FORBIDDEN = ['Company registry', 'Test sign-in', 'Sealed on this device', 'hashwing-outbox', '/v1/envelopes', '/v1/shares', 'registry-test-secret', 'dev-hs256',
+  'REGISTRY_URL', 'execute-api', 'amazonaws.com', '__dev/token'];
+const JWT = /eyJ[\w-]+\.eyJ[\w-]+\./; // any signed token (a pasted dev token is an HS256 JWT)
 const LINK_DEAD = "This link doesn't open. It may have been withdrawn or expired, or it was copied incompletely. Ask the sender for a new link.";
 const SEED_A_PEM = `-----BEGIN PRIVATE KEY-----\n${Buffer.concat([Buffer.from('302e020100300506032b657004220420', 'hex'), Buffer.from([...Array(32).keys()])]).toString('base64')}\n-----END PRIVATE KEY-----\n`;
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -113,12 +115,18 @@ function serveFlagOn() {
 }
 
 try {
-  await check('flag-off bundle (docs/console) carries no registry strings', async () => {
+  await check('flag-off bundle (docs/console) carries no registry strings, URL, dev token or HS256 secret: the build and the committed files', async () => {
     const hits = [];
-    for (const file of walk(join(DOCS, 'console'))) {
-      const text = readFileSync(file, 'latin1');
-      for (const s of FORBIDDEN) if (text.includes(s)) hits.push(`${file}: ${s}`);
-    }
+    const scan = (label, text) => {
+      for (const s of FORBIDDEN) if (text.includes(s)) hits.push(`${label}: ${s}`);
+      if (JWT.test(text)) hits.push(`${label}: a JWT`);
+    };
+    for (const file of walk(join(DOCS, 'console'))) scan(file, readFileSync(file, 'latin1'));
+    // What GitHub Pages serves is the committed tree, which can differ from a fresh build.
+    const git = (...args) => spawnSync('git', args, { cwd: DOCS, maxBuffer: 1 << 28, encoding: 'latin1' });
+    const files = git('ls-tree', '-r', '--name-only', 'HEAD', 'console').stdout.split('\n').filter(Boolean);
+    assert.ok(files.length > 10, `committed docs/console files: ${files.length}`);
+    for (const file of files) scan(`HEAD:docs/${file}`, git('show', `HEAD:docs/${file}`).stdout);
     assert.deepEqual(hits, []);
   });
 

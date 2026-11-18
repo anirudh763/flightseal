@@ -235,6 +235,15 @@ try {
     assert.equal(await settings.locator('.confirm-box').innerText().then((t) => t.split('\n')[0]), 'Remove Temp Co from this browser? A key you marked as compromised stays recorded as compromised.');
     await settings.locator('.confirm-box').getByRole('button', { name: 'Remove company' }).click();
     assert.equal(await settings.locator('.trusted-companies [role=status]').innerText(), 'Removed Temp Co.');
+    // The same key pinned under two names: marking one compromised shows the other as compromised too.
+    await addCompany('Twin A', '12'.repeat(32), 'other');
+    await addCompany('Twin B', '12'.repeat(32), 'other');
+    await settings.getByRole('button', { name: 'Mark as compromised: Twin A' }).click();
+    await settings.locator('.confirm-box').getByRole('button', { name: 'Mark as compromised' }).click();
+    const twin = settings.locator('.company-list li', { hasText: 'Twin B' });
+    assert.match(await twin.innerText(), /This key was marked as compromised under another name/);
+    assert.equal(await twin.getByRole('button', { name: 'Mark as compromised: Twin B' }).count(), 0);
+    assert.match(await settings.locator('.company-history').innerText(), /Twin B[\s\S]*Marked compromised under another name/);
     await settings.locator('.trusted-companies details > summary', { hasText: 'What is this?' }).click();
     await layout(settings, 'trusted companies');
   });
