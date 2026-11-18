@@ -1015,6 +1015,8 @@ try {
     await page.goto(checkUrl); await page.reload();
     await page.waitForFunction(() => document.querySelector('.commandbar h1')?.textContent === 'Verify');
     assert.equal(await page.locator('.verify-chooser').count(), 0, 'flag off: Verify opens straight on the files form (AC-65)');
+    const visiblePrimaries = () => page.locator('main .button.primary').evaluateAll((els) => els.filter((el) => el.checkVisibility()).map((el) => el.textContent.trim()));
+    assert.deepEqual(await visiblePrimaries(), ['Check files'], 'Verify shows one main action (AC-06)');
     await page.locator('#check-file').setInputFiles(sealedPath);
     await page.locator('#check-text').fill(handover.split('\n').flatMap((line) => line.match(/.{1,72}/g) || ['']).map((line) => `> ${line}`).join('\n'));
     assert.equal(await page.locator('#check-originals').count(), 0, 'a sealed file holds its own bytes: no Originals field');
@@ -1062,14 +1064,33 @@ try {
     await pinPage.getByLabel('phone call with a known contact', { exact: true }).check();
     await pinPage.getByRole('button', { name: 'Add company' }).click();
     await pinPage.waitForFunction(() => document.querySelector('.company-list')?.textContent.includes('Pilot Co'));
+    await pinPage.locator('#tc-name').fill('Other Co');
+    await pinPage.locator('#tc-fingerprint').fill('cd'.repeat(32));
+    await pinPage.getByLabel('phone call with a known contact', { exact: true }).check();
+    await pinPage.getByRole('button', { name: 'Add company' }).click();
+    await pinPage.waitForFunction(() => document.querySelector('.company-list')?.textContent.includes('Other Co'));
     await pinPage.close();
     await page.getByRole('button', { name: 'Check files' }).click();
     await waitResult(page, 'Intact');
     await page.waitForSelector('.restored', { timeout: 30000 });
     await page.waitForFunction(() => document.querySelector('#verdict-heading')?.textContent === 'Verified', null, { timeout: 30000 });
     assert.match(await page.locator('.verdict.ok').innerText(), /Every file matches what was sealed, signed by a company you trust\./);
+    assert.deepEqual(await visiblePrimaries(), ['Check files'], 'one main action with a result showing (AC-06)');
     const trusted = 'Signed by a key you trust: Pilot Co (added from phone call with a known contact)';
     await page.waitForFunction((text) => document.querySelector('.result-panel .trust-line')?.textContent === text, trusted);
+    // Trusted company select: companies added on Trust (fingerprint only) are listed; the chosen one must be the signer.
+    const checkVerdict = async (company, headline) => {
+      await page.locator('#check-company').selectOption(company);
+      await page.getByRole('button', { name: 'Check files' }).click();
+      await page.waitForFunction((h) => document.querySelector('#verdict-heading')?.textContent === h, headline, { timeout: 30000 });
+    };
+    assert.deepEqual(await page.locator('#check-company option').allInnerTexts(), ['Not chosen: look the key up in my list', 'Pilot Co', 'Other Co']);
+    await checkVerdict('Pilot Co', 'Verified');
+    await checkVerdict('Other Co', 'Not verified');
+    assert.match(await page.locator('.verdict.bad').innerText(), /Not made with Other Co's key/);
+    assert.equal(await page.locator('.restored').count(), 0, 'no original offered for the wrong company');
+    await checkVerdict('', 'Verified');
+    await page.waitForSelector('.restored', { timeout: 30000 });
     await compare(copyPath, 'Bytes differ');
     await page.waitForFunction(() => document.querySelector('#verdict-heading')?.textContent === 'Files differ'); // your copy differs
     const [textReport] = await Promise.all([page.waitForEvent('download'), page.getByRole('button', { name: 'Download text report' }).click()]);
