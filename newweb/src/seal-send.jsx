@@ -67,12 +67,15 @@ export function Handoff({ headingRef, headingId, summary, kind, fileName, unsave
   const moreRef = useRef(null);
   const copyRef = useRef(null);
   useEffect(() => { if (asking) askRef.current?.focus(); }, [asking, started, downloaded]);
-  useEffect(() => { if (asking && !unsaved) { setAsking(false); requestAnimationFrame(() => moreRef.current?.focus()); } }, [asking, unsaved]); // kept now: nothing left to ask
+  useEffect(() => { if (asking && !unsaved) setAsking(false); }, [asking, unsaved]); // kept now: nothing left to ask
+  const wasAsking = useRef(false);
+  useEffect(() => { if (wasAsking.current && !asking) moreRef.current?.focus(); wasAsking.current = asking; }, [asking]); // a closed question hands focus back to Seal more files
   const list = kind === 'list';
   const downloadNow = () => { onDownload(); setStarted(true); };
   const downloadReceipt = () => { onDownloadReceipt(); setReceiptStarted(true); };
-  const keep = () => { setAsking(false); requestAnimationFrame(() => moreRef.current?.focus()); };
+  const keep = () => setAsking(false);
   const discard = () => { setAsking(false); onSealMore(); };
+  const keepButton = <button type="button" className="button secondary" onClick={keep}>Keep it</button>;
   // "Yes, saved" from the question: if the receipt is kept too, go on; otherwise the question turns to the receipt.
   const savedThenMore = () => { onSaved(); if (receiptSaved) { setAsking(false); onSealMore(); } };
   const confirmNeeded = started && !downloaded;
@@ -106,13 +109,13 @@ export function Handoff({ headingRef, headingId, summary, kind, fileName, unsave
     {asking ? <div className="confirm-box" onKeyDown={(e) => { if (e.key === 'Escape') { e.preventDefault(); keep(); } }}>
       {downloaded ? <>
         <p id="seal-more-ask">You haven't kept the receipt message. Copy it first?</p>
-        <div className="actions-row"><button ref={askRef} type="button" className="button primary" aria-describedby="seal-more-ask" onClick={onCopy}><Copy aria-hidden="true" size={16} />Copy message</button><button type="button" className="button secondary" onClick={discard}>Discard it</button></div>
+        <div className="actions-row"><button ref={askRef} type="button" className="button primary" aria-describedby="seal-more-ask" onClick={onCopy}><Copy aria-hidden="true" size={16} />Copy message</button>{receiptStarted && <button type="button" className="button secondary" onClick={onReceiptSaved}>Yes, receipt saved</button>}{keepButton}<button type="button" className="button secondary" onClick={discard}>Discard it</button></div>
       </> : started ? <>
         <p id="seal-more-ask">Did the download of {fileName} finish?</p>
-        <div className="actions-row"><button ref={askRef} type="button" className="button primary" aria-describedby="seal-more-ask" onClick={savedThenMore}>Yes, saved</button><button type="button" className="button secondary" onClick={downloadNow}><Download aria-hidden="true" size={16} />Download again</button><button type="button" className="button secondary" onClick={discard}>Discard it</button></div>
+        <div className="actions-row"><button ref={askRef} type="button" className="button primary" aria-describedby="seal-more-ask" onClick={savedThenMore}>Yes, saved</button><button type="button" className="button secondary" onClick={downloadNow}><Download aria-hidden="true" size={16} />Download again</button>{keepButton}<button type="button" className="button secondary" onClick={discard}>Discard it</button></div>
       </> : <>
         <p id="seal-more-ask">You haven't downloaded {fileName}. Download it first?</p>
-        <div className="actions-row"><button ref={askRef} type="button" className="button primary" aria-describedby="seal-more-ask" onClick={downloadNow}><Download aria-hidden="true" size={16} />Download</button><button type="button" className="button secondary" onClick={discard}>Discard it</button></div>
+        <div className="actions-row"><button ref={askRef} type="button" className="button primary" aria-describedby="seal-more-ask" onClick={downloadNow}><Download aria-hidden="true" size={16} />Download</button>{keepButton}<button type="button" className="button secondary" onClick={discard}>Discard it</button></div>
       </>}
     </div> : <div className="actions-row"><button ref={moreRef} type="button" className="button secondary" onClick={() => (unsaved ? setAsking(true) : onSealMore())}>Seal more files</button></div>}
   </div>;

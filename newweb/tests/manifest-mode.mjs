@@ -445,7 +445,8 @@ try {
     const message = await page.locator('#manifest-handover-text').inputValue();
     assert.doesNotMatch(message, /item 1|reported-landing/, 'notes stay in the sealed file, not the message');
     const key = /Public key: ([0-9a-f]{64})/.exec(message)[1];
-    assert.equal(await page.locator('.handover .fingerprint').innerText(), grouped(fingerprintOf(key)));
+    assert.equal(await page.locator('.handover .fingerprint').count(), 0, 'a one-time key has no fingerprint to hand out');
+    assert.match(grouped(fingerprintOf(key)), /^([0-9a-f]{4} ){15}[0-9a-f]{4}$/);
     const [download] = await Promise.all([page.waitForEvent('download'), page.getByRole('button', { name: 'Download sealed list' }).click()]);
     const sealed2 = join(EVIDENCE, 'derived.manifest.fseal'); await download.saveAs(sealed2);
     const localDir = join(dir, 'recipient'); mkdirSync(localDir, { recursive: true });
