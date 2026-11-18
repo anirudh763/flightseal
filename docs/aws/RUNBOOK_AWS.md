@@ -45,15 +45,54 @@ removal with `aws cognito-idp admin-user-global-sign-out --user-pool-id <pool> -
 the refresh token so no new token with the old role can be obtained. Tokens already issued stay valid until they
 expire; nothing in this design revokes them sooner.
 
-Create users as an administrator; there is no self sign-up. `custom:org_id` (immutable) and `custom:role`
-(`admin` or `pilot`) are set here, never by the app:
+The Lambda's cognito adapter also needs `COGNITO_ISSUER` (`https://cognito-idp.us-east-1.amazonaws.com/<UserPoolId>`)
+and `COGNITO_CLIENT_ID` (`<UserPoolClientId>`). Without both, every signed-in request is 503
+`identity_unavailable` and the log says `identity config`. The stack sets both from its own user pool and app client
+(`infra/lib/stack.ts`), with a synth assertion. A bad or wrong token is 401.
 
-```sh
-aws cognito-idp admin-create-user --user-pool-id <UserPoolId> --username <email> \
-  --user-attributes Name=email,Value=<email> Name=custom:org_id,Value=<org> Name=custom:role,Value=admin
-```
+## Onboard a company
 
-Clients sign in with SRP and send the **ID token** as `Authorization: Bearer <id token>`.
+There is no self sign-up. `custom:org_id` (immutable) and `custom:role` (`admin` or `pilot`) are set by an
+operator with `tools/registry_onboard.py`, never by the app or the invitee. Not yet run against real Cognito.
+
+1. Add the company's org id (1 to 64 letters, digits, `_` or `-`) to `tools/registry_orgs.json` and commit it. The script
+   refuses any org not listed there, and names the closest listed id when it looks like a typo.
+2. Check the request, then create the first admin. `--role admin` must be typed together with `--first-admin`;
+   without `--role` the role is `pilot`:
+
+   ```sh
+   python3 tools/registry_onboard.py invite --pool-id <UserPoolId> --org <org> --email <email> --role admin --first-admin --dry-run
+   python3 tools/registry_onboard.py invite --pool-id <UserPoolId> --org <org> --email <email> --role admin --first-admin
+   ```
+
+   A later admin uses `--confirm-additional-admin` instead. The script cannot see whether the company already has
+   an admin; the flag is the operator's acknowledgement.
+3. Invite each pilot the same way without `--role`.
+
+Before creating anyone the script checks that the pool allows admin-created users only and that its
+`TemporaryPasswordValidityDays` is between 1 and 7 (change the limit with `--max-temp-days`). The pool setting
+itself is set by the infra stack (`infra/lib/stack.ts`: 3 days). Cognito makes the temporary password and emails it;
+the script never sees or prints one. The email is lowercased, so `A@x.com` and `a@x.com` are one user. A user
+who already exists is refused and left unchanged. The script needs `boto3` and the owner's
+credentials only for a real run; `--dry-run` calls nothing.
+
+Clients sign in with SRP and send the **ID token** as `Authorization: Bearer <id token>`. The registry accepts only
+an ID token (`token_use` `id`) issued by this pool for this app client; an access token is 401. After the first
+admin signs in, check both (never run yet): `GET /v1/keys` with their ID token is 200, with their access token 401.
+
+### How pilots sign (provisional)
+
+PROVISIONAL (spine AD-4 Option A) until the owner chooses between Option A and Option B (per-pilot keys approved by
+an admin, which would change this section and the key rules).
+
+- A company has one signing computer and one active key. An admin enrolls that key from the signing computer
+  (the steps below). Its private key never leaves that computer.
+- An invitation only creates a sign-in. It never carries a company private key, and every registry POST route
+  refuses a private-key field (`test_no_route_accepts_private_key_material`).
+- A pilot without the signing computer either hands the files to the signing computer to seal there, or seals with
+  a one-time key. A one-time key is not the company's: the registry refuses its receipts (`key_not_enrolled`) and
+  the person checking the file is told the signature is valid but the key is not in their trusted list, so the
+  signer is not confirmed.
 
 First steps for a company: an admin calls `GET /v1/keys/challenge`, signs the returned `message` with the
 sealer's Ed25519 key, and posts `{public_key, nonce, signature}` to `POST /v1/keys`.
