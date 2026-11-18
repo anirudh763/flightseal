@@ -67,7 +67,14 @@ try {
     await page.evaluate((s) => { if (location.hash.split('?')[0] !== `#/app/${s}`) location.hash = `/app/${s}`; }, screen);
     await page.waitForFunction((t) => document.querySelector('.commandbar h1')?.textContent === t, screen === 'verify' ? 'Verify' : 'Seal & send');
   };
-  const sealMore = async () => { await goTo('protect'); await page.getByRole('button', { name: 'Seal more files' }).click(); await page.locator('#seal-what-title').waitFor(); };
+  // After a download the handoff asks "Did the download finish?" (a click is not proof); these tests saved it, so "Yes, saved".
+  const confirmedMore = async () => {
+    await page.getByRole('button', { name: 'Seal more files' }).click();
+    assert.match(await page.locator('#seal-more-ask').innerText(), /^Did the download of .+ finish\?$/);
+    await page.locator('.confirm-box').getByRole('button', { name: 'Yes, saved' }).click();
+    await page.waitForFunction(() => document.activeElement?.id === 'seal-what-title');
+  };
+  const sealMore = async () => { await goTo('protect'); await confirmedMore(); };
 
 
   await check('Small file (embedded) is the default and keeps its controls', async () => {
@@ -179,7 +186,7 @@ try {
   await check('Cancel stops hashing and the UI is usable again', async () => {
     const big = join(dir, 'big.bin'); const fd = openSync(big, 'w'); ftruncateSync(fd, 2 ** 31); closeSync(fd);
     await page.evaluate(() => { location.hash = '/app/protect'; });
-    await page.getByRole('button', { name: 'Seal more files' }).click(); // the list was downloaded, so no question
+    await confirmedMore(); // the list was downloaded
     await page.locator('#manifest-files').setInputFiles(big);
     await page.getByRole('button', { name: 'Seal the list', exact: true }).click();
     await page.waitForSelector('#manifest-seal-progress-0');
@@ -392,7 +399,7 @@ try {
     await page.getByRole('button', { name: 'Check this file' }).click();
     await page.locator('.error-alert').filter({ hasText: WEAK.error }).waitFor({ timeout: 30000 });
     assert.doesNotMatch(await page.locator('main').innerText(), trusted);
-    await sealMore(); // the sealed file was downloaded, so no question
+    await sealMore(); // the sealed file was downloaded
     await page.getByLabel('Large files: fingerprint only, files stay where they are').check();
   });
 

@@ -728,6 +728,8 @@ try {
       assert.equal(await reloadWarns(a), true, 'a fresh seal warns before reload');
       await Promise.all([a.waitForEvent('download'), a.getByRole('button', { name: 'Download receipt' }).click()]);
       await Promise.all([a.waitForEvent('download'), a.getByRole('button', { name: 'Download sealed file' }).click()]);
+      assert.equal(await reloadWarns(a), true, 'a Download click is not proof the save finished');
+      await a.locator('.handoff-confirm').getByRole('button', { name: 'Yes, saved' }).click();
       assert.equal(await reloadWarns(a), false, 'the unsent proof is saved on this device, so nothing is left to lose');
       await a.reload();
       await a.locator('#page-protect').waitFor();
