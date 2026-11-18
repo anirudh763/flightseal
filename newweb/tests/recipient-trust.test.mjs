@@ -150,7 +150,7 @@ test('verdict: every row of the table, in order, with its exact words and one ne
   assert.equal(verdict({ signed: true, trust: TRUSTED, items: [m('match')], coverage: { covered: 5, total: 8 } }).sentence, 'Receipts cover 5 of 8 items.');
   const extra = verdict({ signed: true, trust: TRUSTED, items: [m('match')], extras: [m('not-in-manifest'), m('not-in-manifest')] });
   assert.deepEqual([extra.headline, extra.kind, extra.sentence, extra.next.text], [NOT_IN_LIST, 'warn', "Every listed file matches. 2 other files you chose aren't in the list and were not checked.", "Remove files that aren't in the list"]);
-  assert.equal(VERIFIED_NEEDS_TRUSTED_KEY, true, 'owner decision 1 is provisional: strict');
+  assert.equal(VERIFIED_NEEDS_TRUSTED_KEY, true, 'owner decision 1 (2026-11-18): strict');
   for (const status of ['untrusted', 'replaced', undefined]) {
     const r = verdict({ signed: true, trust: status && { status }, items: [m('match')], coverage: { covered: 1, total: 1 } });
     assert.deepEqual([r.headline, r.kind, r.sentence, r.next.text], ['Files match · signer not confirmed', 'warn', "The files match what was sealed, but you haven't confirmed who sealed them.", "Confirm the company's fingerprint on Trust"]);
