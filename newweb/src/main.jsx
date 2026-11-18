@@ -1905,7 +1905,7 @@ function TrustedCompanies() {
     setPending(null); setMessage(''); setError('');
     try {
       if (kind === 'compromise') { markCompromised(entry.name, entry.fingerprint); setMessage(`${entry.name}'s key is marked as compromised.`); }
-      else { removeTrustedKey(entry.name); setMessage(`Removed ${entry.name} and its key history.`); }
+      else if (removeTrustedKey(entry.name)) setMessage(`Removed ${entry.name}.`); // false: only compromised records remain
       setEntries(read());
     } catch (cause) { setError(cause?.message || 'Could not change this company.'); }
   };
@@ -1931,10 +1931,10 @@ function TrustedCompanies() {
       <span className="field-hint">Added from {SOURCES[entry.source] || entry.source}{entry.addedAt ? ` on ${entry.addedAt.slice(0, 10)}` : ''}</span>
       <div className="actions-row">
         <button className="button secondary" type="button" aria-label={`Mark as compromised: ${entry.name}`} onClick={() => setPending({ kind: 'compromise', entry, text: `Mark ${entry.name}'s key as compromised? Proofs signed with it will show a warning.` })}>Mark as compromised</button>
-        <button className="text-action" type="button" aria-label={`Remove: ${entry.name}`} onClick={() => setPending({ kind: 'remove', entry, text: `Remove ${entry.name} and its key history from this browser?` })}>Remove</button>
+        <button className="text-action" type="button" aria-label={`Remove: ${entry.name}`} onClick={() => setPending({ kind: 'remove', entry, text: `Remove ${entry.name} from this browser? A key you marked as compromised stays recorded as compromised.` })}>Remove</button>
       </div>
     </li>)}</ul> : <p className="field-hint">No trusted companies yet.</p>}
-    {entries.length > 0 && <details className="report-details"><summary>Key history <ChevronDown size={17} aria-hidden="true" /></summary><ul className="company-history">{entries.map((entry, index) => <li key={index}><strong className="wrap">{entry.name}</strong> <code className="fingerprint">{formatFingerprint(entry.fingerprint)}</code> <span>{historyStatus(entry)} · from {SOURCES[entry.source] || entry.source}</span>{!active.some((item) => item.name.toLowerCase() === entry.name.toLowerCase()) && entries.findIndex((item) => item.name.toLowerCase() === entry.name.toLowerCase()) === index && <button className="text-action" type="button" aria-label={`Remove: ${entry.name}`} onClick={() => setPending({ kind: 'remove', entry, text: `Remove ${entry.name} and its key history from this browser?` })}>Remove</button>}</li>)}</ul></details>}
+    {entries.length > 0 && <details className="report-details"><summary>Key history <ChevronDown size={17} aria-hidden="true" /></summary><ul className="company-history">{entries.map((entry, index) => <li key={index}><strong className="wrap">{entry.name}</strong> <code className="fingerprint">{formatFingerprint(entry.fingerprint)}</code> <span>{historyStatus(entry)} · from {SOURCES[entry.source] || entry.source}</span>{!active.some((item) => item.name.toLowerCase() === entry.name.toLowerCase()) && entries.some((item) => item.status !== 'compromised' && item.name.toLowerCase() === entry.name.toLowerCase()) && entries.findIndex((item) => item.name.toLowerCase() === entry.name.toLowerCase()) === index && <button className="text-action" type="button" aria-label={`Remove: ${entry.name}`} onClick={() => setPending({ kind: 'remove', entry, text: `Remove ${entry.name} from this browser? A key you marked as compromised stays recorded as compromised.` })}>Remove</button>}</li>)}</ul></details>}
     <details className="report-details"><summary>What is this? <ChevronDown size={17} aria-hidden="true" /></summary><div className="prose"><p>A trusted company is a name and key fingerprint you got from that company through a channel you already know: its website, a contract or invoice, or a phone call with someone you know there.</p><p>A proof says "Signed by a key you trust" only when its key matches an active entry here. A key that arrives inside a receipt message is never trusted just because it is there. This list stays in this browser.</p></div></details>
   </section>;
 }
@@ -2233,6 +2233,7 @@ function ManifestSeal({ signingKey, onActiveChange, onSealed }) {
         if (cause?.name === 'AbortError') throw cause;
         throw new Error(`Sealing failed (${cause?.message || 'unknown error'}). Press Seal again; if it keeps failing, reload the page.`);
       }
+      if (check.reason === WEAK_KEY_MESSAGE) throw new Error(WEAK_KEY_MESSAGE); // pressing Seal again would not help
       if (!check.verified || check.manifest.items.length !== items.length) throw new Error(`The sealed result did not pass its own check, so it was discarded (${check.reason || 'item count differs'}). Press Seal again.`);
       const base = `hashwing-${stamp()}`;
       const fingerprint = await fingerprintHex(sealed.publicKey);
@@ -2344,7 +2345,7 @@ function ManifestCheck({ onActiveChange }) {
         if (trust?.status === 'weak') { if (revision === revisionRef.current) setOutcome({ verified: false, reason: WEAK_KEY_MESSAGE }); return; }
         if (trust?.status === 'trusted') { useKey = stated.publicKey; pinned = trust.entry; }
       }
-      const verified = await verifySealedManifest(sealed, text, useKey).catch((cause) => { if (cause?.message === WEAK_KEY_MESSAGE) return { verified: false, reason: WEAK_KEY_MESSAGE }; throw cause; });
+      const verified = await verifySealedManifest(sealed, text, useKey); // a weak key returns { verified: false, reason: WEAK_KEY_MESSAGE }
       if (revision !== revisionRef.current) return;
       if (!verified.verified) { setOutcome({ verified: false, reason: verified.reason }); return; }
       const fingerprint = await fingerprintHex(verified.publicKey);

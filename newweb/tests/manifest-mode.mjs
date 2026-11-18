@@ -226,6 +226,15 @@ try {
     const history = await settings.locator('.company-history').innerText();
     assert.match(history, /Acme Survey[\s\S]*Replaced on \d{4}-\d{2}-\d{2}/);
     assert.match(history, /Old Co[\s\S]*Marked compromised on \d{4}-\d{2}-\d{2}/);
+    // Removing a company keeps its compromised record, so that key can't come back and Remove is hidden for it.
+    assert.equal(await settings.getByRole('button', { name: 'Remove: Old Co' }).count(), 0, 'no Remove for a name with only compromised records');
+    await addCompany('Old Co', 'cd'.repeat(32), 'other');
+    assert.equal(await settings.getByRole('alert').innerText(), 'This key was marked as compromised, so it can’t be added again. Ask the company for a new key.');
+    await addCompany('Temp Co', 'ef'.repeat(32), 'other');
+    await settings.locator('.company-list').getByRole('button', { name: 'Remove: Temp Co' }).click();
+    assert.equal(await settings.locator('.confirm-box').innerText().then((t) => t.split('\n')[0]), 'Remove Temp Co from this browser? A key you marked as compromised stays recorded as compromised.');
+    await settings.locator('.confirm-box').getByRole('button', { name: 'Remove company' }).click();
+    assert.equal(await settings.locator('.trusted-companies [role=status]').innerText(), 'Removed Temp Co.');
     await settings.locator('.trusted-companies details > summary', { hasText: 'What is this?' }).click();
     await layout(settings, 'trusted companies');
   });
