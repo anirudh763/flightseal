@@ -117,9 +117,11 @@ const plural = (n, one, many) => `${n} ${n === 1 ? one : many}`;
  * out against the key used; reason: why not, when it didn't. items/extras: pairFiles output (status keys);
  * coverage: { covered, total } receipt coverage or null. next.action: 'trust' | 'originals' | 'report' | null.
  */
-export function verdict({ signed, reason = '', trust, items = [], extras = [], coverage = null }) {
+/** company: { name, matches } when the recipient chose a trusted company; a signer that isn't it is Not verified, after compromised. */
+export function verdict({ signed, reason = '', trust, items = [], extras = [], coverage = null, company = null }) {
   const status = trust?.status || 'untrusted';
   if (signed && status === 'compromised') return { key: 'compromised', headline: 'Signed by a key marked compromised', kind: 'bad', sentence: "This key was reported as compromised. Don't rely on these files until the company confirms them.", next: { text: 'Ask the company for a new seal', action: null } };
+  if (company && !company.matches) return { key: 'not-verified', headline: 'Not verified', kind: 'bad', sentence: `Not signed by ${company.name}'s key. Don't rely on this proof.`, next: { text: NOT_VERIFIED_NEXT, action: null } };
   const keyFailed = ['wrong-key', 'invalid-signature', 'weak'].includes(status);
   if (!signed || keyFailed) return { key: 'not-verified', headline: 'Not verified', kind: 'bad', sentence: keyFailed ? trustLine({ status }) : reason, next: { text: NOT_VERIFIED_NEXT, action: null } };
   const count = (s) => items.filter((item) => item.status === s).length;

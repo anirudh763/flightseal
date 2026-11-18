@@ -178,3 +178,12 @@ test('manifest report: extras read "Not in the list" and the report carries the 
   assert.ok(!r.text.includes('Not in manifest'));
   assert.equal(JSON.parse(r.json).verdict.headline, 'Not in the list');
 });
+
+test('verdict: a compromised signer outranks a chosen company that did not sign; otherwise the mismatch is Not verified', () => {
+  const ok = [{ status: 'match' }];
+  const other = { name: 'Other Co', matches: false };
+  assert.equal(verdict({ signed: true, trust: { status: 'compromised' }, items: ok, company: other }).key, 'compromised');
+  const v = verdict({ signed: true, trust: { status: 'trusted' }, items: ok, company: other });
+  assert.deepEqual([v.key, v.headline, v.sentence], ['not-verified', 'Not verified', "Not signed by Other Co's key. Don't rely on this proof."]);
+  assert.equal(verdict({ signed: true, trust: { status: 'trusted' }, items: ok, company: { name: 'Pilot Co', matches: true } }).key, 'verified');
+});

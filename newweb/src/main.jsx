@@ -1137,7 +1137,7 @@ function App() {
   // is checked against the signer's fingerprint and never silently dropped (see companyFingerprint).
   const checkAnchorKey = (stated) => checkKey.trim().toLowerCase() || stated;
   const companyFingerprint = () => checkCompany ? (readCompanies().find((pin) => pin.name === checkCompany)?.fingerprint || 'missing') : '';
-  const [companyMismatch, setCompanyMismatch] = useState(null); // the inputs a "not the company you chose" verdict was for
+  const [companyMismatch, setCompanyMismatch] = useState(null); // { for: result, name }: the chosen company did not sign this result
   // A check error is read with its field (focus table): the field gets focus and names the message.
   const failCheck = (field, message) => { setCheckError({ field, message }); requestAnimationFrame(() => document.getElementById(field)?.focus()); };
   const runProtectCheck = async () => {
@@ -1150,12 +1150,10 @@ function App() {
     // message (then the result can't be green: the signer isn't confirmed).
     const anchor = checkAnchorKey(publicKey);
     const expected = companyFingerprint();
-    if (expected) {
-      const signer = await fingerprintHex(anchor).catch(() => '');
-      if (signer !== expected) { setCompanyMismatch({ file: checkFile, text: checkText, key: checkKey, company: checkCompany, at: Date.now() }); return; }
-    }
+    const mismatch = expected && (await fingerprintHex(anchor).catch(() => '')) !== expected;
     const verified = await runVerify(checkFile, receipts, anchor, checkFile.name, null, (message) => failCheck('check-file', message));
     if (!verified) return;
+    if (mismatch) { setCompanyMismatch({ for: verified, name: checkCompany }); setProtectTimes({ for: verified, sealedAt: parseSealedLine(checkText), landing: parseLandingLine(checkText) }); setProtectResult(verified); return; } // never offers the original for another company's key
     const op = runRef.current;
     setProtectTimes({ for: verified, sealedAt: parseSealedLine(checkText), landing: parseLandingLine(checkText) });
     setProtectResult(verified);
@@ -1405,10 +1403,12 @@ function App() {
     ...(copyCompare?.for === result ? [{ key: 'copy', name: `Your copy: ${copyCompare.name}`, status: copyCompare.matches ? 'match' : 'bytes-differ', bytes: copyCompare.bytes, sha256: copyCompare.sha256 }] : []),
   ] : [];
   // Shown once the trust lookup and the rebuild of the original have finished, so the headline never changes under focus.
-  const smallReady = protectView && resultTimes && (!smallSigned || keyTrust?.for === result) && (!smallSigned || !smallCovered || restored != null);
-  const smallVerdict = smallReady ? verdict({ signed: smallSigned, reason: result.native.description || result.indexed.description || "The sealed file doesn't match the receipt message.", trust: keyTrust?.for === result ? keyTrust : null, items: smallRows, coverage: { covered: result.receiptCoverage.covered, total: result.native.records } }) : null;
+  const smallMismatch = protectView && companyMismatch?.for === result ? companyMismatch.name : '';
+  const smallReady = protectView && resultTimes && (!smallSigned || keyTrust?.for === result) && (!smallSigned || !smallCovered || restored != null || smallMismatch);
+  const smallVerdict = smallReady ? verdict({ company: smallMismatch ? { name: smallMismatch, matches: false } : null, signed: smallSigned, reason: result.native.description || result.indexed.description || "The sealed file doesn't match the receipt message.", trust: keyTrust?.for === result ? keyTrust : null, items: smallRows, coverage: { covered: result.receiptCoverage.covered, total: result.native.records } }) : null;
   const smallLines = smallVerdict ? [
     ['Signature', smallChecks.length && smallChecks.every((check) => check === 'ok') ? 'Valid' : 'Not valid'],
+    ...(smallMismatch ? [['Trusted company', `Not signed by ${smallMismatch}'s key`]] : []),
     ...(keyTrust?.for === result ? [['Key trust', <TrustLine trust={keyTrust} />]] : []),
     ['Files', <span className="mono-values">{countsLine(smallRows, [])}</span>],
     ['Receipt coverage', smallCovered ? 'All items covered' : `Receipts cover ${fmtBig(result.receiptCoverage.covered)} of ${fmtBig(result.native.records)} records`],
@@ -1789,7 +1789,6 @@ function App() {
             {checkOptions}
             <button className="button primary" type="button" disabled={!checkFile || !checkText.trim() || !!busy} aria-describedby={checkWhy ? 'check-why' : undefined} onClick={runProtectCheck}>Check files</button>
             {checkWhy && <p id="check-why" className="field-hint">{checkWhy}</p>}
-            {companyMismatch && companyMismatch.file === checkFile && companyMismatch.text === checkText && companyMismatch.key === checkKey && companyMismatch.company === checkCompany && <VerdictBlock result={verdict({ signed: true, trust: { status: 'wrong-key' } })} focusKey={companyMismatch.at} lines={[['Signature', `Not made with ${checkCompany}'s key`], ['Key trust', <TrustLine trust={{ status: 'wrong-key' }} />]]} />}
             {smallVerdict && <VerdictBlock result={smallVerdict} focusKey={result} trustHref={workspaceHref('help')} onTrust={toTrust} onReport={() => download('hashwing-verification-report.txt', `Result: ${smallVerdict.headline}. ${smallVerdict.sentence}\n${reportText}`)} lines={smallLines}>
               <TimeFields fields={resultTimes} />
               {smallRows.length > 0 && <CompareTable rows={smallRows} label="File compared with the receipt" />}
@@ -2449,7 +2448,11 @@ function ManifestCheck({ sealed, text, anchor, keyConflict, company, companyFing
       if (revision !== revisionRef.current) return;
       if (!verified.verified) { setOutcome({ verified: false, reason: verified.reason, run: revision }); return; }
       const fingerprint = await fingerprintHex(verified.publicKey);
-      if (companyFingerprint && fingerprint !== companyFingerprint) { setOutcome({ verified: false, trustStatus: 'wrong-key', company, run: revision }); return; } // never falls back to another key
+      if (companyFingerprint && fingerprint !== companyFingerprint) { // never falls back to another key; a compromised signer still reads compromised
+        const trust = await trustForKey(verified.publicKey).catch(() => ({ status: 'untrusted' }));
+        if (revision === revisionRef.current) setOutcome({ verified: false, mismatch: company, trust, run: revision });
+        return;
+      }
       const hashed = await hashAll(locals, controller.signal, setProgress);
       if (revision !== revisionRef.current) return;
       let comparison;
@@ -2466,7 +2469,7 @@ function ManifestCheck({ sealed, text, anchor, keyConflict, company, companyFing
     } finally { if (controllerRef.current === controller) { controllerRef.current = null; setRunning(false); setProgress(null); } }
   };
   const comparison = outcome?.verified ? outcome.comparison : null;
-  const result = outcome && (outcome.verified ? verdict({ signed: true, trust: outcome.trust, items: comparison.items, extras: comparison.extras }) : (outcome.trustStatus ? verdict({ signed: true, trust: { status: outcome.trustStatus } }) : verdict({ signed: false, reason: outcome.reason })));
+  const result = outcome && (outcome.verified ? verdict({ signed: true, trust: outcome.trust, items: comparison.items, extras: comparison.extras }) : (outcome.mismatch ? verdict({ signed: true, trust: outcome.trust, company: { name: outcome.mismatch, matches: false } }) : verdict({ signed: false, reason: outcome.reason })));
   const downloadText = () => download(`${outcome.base}.check-report.txt`, report.text);
   const showLanding = comparison && new Set(comparison.items.map((entry) => parseNote(entry.note).landing || '')).size > 1;
   const rows = comparison ? [
@@ -2491,7 +2494,7 @@ function ManifestCheck({ sealed, text, anchor, keyConflict, company, companyFing
     {!text.trim() && <p id="check-why" className="field-hint">Paste the receipt message</p>}
     {message && <p className="field-hint" role="status">{message}</p>}
     {result && <div className="manifest-outcome"><VerdictBlock result={result} focusKey={outcome.run} trustHref={trustHref} onTrust={onTrust} onReport={outcome.verified ? downloadText : null}
-      lines={outcome.trustStatus ? [['Signature', `Not made with ${outcome.company}'s key`], ['Key trust', <TrustLine trust={{ status: outcome.trustStatus }} />]] : outcome.verified ? [['Signature', 'Valid'], ['Key trust', <TrustLine trust={outcome.trust} />], ['Files', <span className="mono-values">{countsLine(comparison.items, comparison.extras)}</span>], ['Receipt coverage', 'All items covered'], ...(registryLine ? [['Registry', registryLine.value]] : [])] : [['Signature', 'Not valid']]}>
+      lines={outcome.mismatch ? [['Signature', 'Valid'], ['Trusted company', `Not signed by ${outcome.mismatch}'s key`], ['Key trust', <TrustLine trust={outcome.trust} />]] : outcome.verified ? [['Signature', 'Valid'], ['Key trust', <TrustLine trust={outcome.trust} />], ['Files', <span className="mono-values">{countsLine(comparison.items, comparison.extras)}</span>], ['Receipt coverage', 'All items covered'], ...(registryLine ? [['Registry', registryLine.value]] : [])] : [['Signature', 'Not valid']]}>
       {outcome.verified && <>
         <TimeFields fields={report.fields} />
         <CompareTable rows={rows} label="Files compared with the list" />

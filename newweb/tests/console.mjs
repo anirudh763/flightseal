@@ -1076,6 +1076,8 @@ try {
     await page.waitForFunction(() => document.querySelector('#verdict-heading')?.textContent === 'Verified', null, { timeout: 30000 });
     assert.match(await page.locator('.verdict.ok').innerText(), /Every file matches what was sealed, signed by a company you trust\./);
     assert.deepEqual(await visiblePrimaries(), ['Check files'], 'one main action with a result showing (AC-06)');
+    const [verdictReport] = await Promise.all([page.waitForEvent('download'), page.locator('.verdict').getByRole('button', { name: 'Download report' }).click()]);
+    assert.ok(readFileSync(await verdictReport.path(), 'utf8').startsWith('Result: Verified. Every file matches what was sealed, signed by a company you trust.\n'), 'the small-file report starts with its Result line');
     const trusted = 'Signed by a key you trust: Pilot Co (added from phone call with a known contact)';
     await page.waitForFunction((text) => document.querySelector('.result-panel .trust-line')?.textContent === text, trusted);
     // Trusted company select: companies added on Trust (fingerprint only) are listed; the chosen one must be the signer.
@@ -1087,7 +1089,7 @@ try {
     assert.deepEqual(await page.locator('#check-company option').allInnerTexts(), ['Not chosen: look the key up in my list', 'Pilot Co', 'Other Co']);
     await checkVerdict('Pilot Co', 'Verified');
     await checkVerdict('Other Co', 'Not verified');
-    assert.match(await page.locator('.verdict.bad').innerText(), /Not made with Other Co's key/);
+    assert.match(await page.locator('.verdict.bad').innerText(), /Not signed by Other Co's key/);
     assert.equal(await page.locator('.restored').count(), 0, 'no original offered for the wrong company');
     await checkVerdict('', 'Verified');
     await page.waitForSelector('.restored', { timeout: 30000 });
@@ -1110,6 +1112,18 @@ try {
       await page.screenshot({ path: join(evidence, `checked-${width}.png`), fullPage: true });
     }
     await page.setViewportSize({ width: 1440, height: 900 });
+
+    // The signer's key is later marked compromised: choosing a different company never hides that (compromised outranks the mismatch).
+    const burnPage = await page.context().newPage();
+    await burnPage.goto(`${url}#/app/settings`);
+    await burnPage.locator('.trusted-companies-details > summary').click();
+    await burnPage.getByRole('button', { name: 'Mark as compromised: Pilot Co' }).click();
+    await burnPage.locator('.confirm-box').getByRole('button', { name: 'Mark as compromised' }).click();
+    await burnPage.close();
+    await page.locator('#check-company option[value="Pilot Co"]').waitFor({ state: 'detached' }); // a compromised company is not offered
+    await checkVerdict('Other Co', 'Signed by a key marked compromised');
+    assert.match(await page.locator('.verdict.bad').innerText(), /Trusted company\s+Not signed by Other Co's key/);
+    await page.locator('#check-company').selectOption('');
 
     // One changed byte inside a sealed chunk: Tampered, and no original is offered.
     const sealedBytes = readFileSync(sealedPath);

@@ -319,6 +319,13 @@ try {
     await runCheck('');
     assert.equal(await page.locator('#verdict-heading').innerText(), 'Signed by a key marked compromised');
     assert.match(await page.locator('.manifest-outcome').innerText(), /This key was reported as compromised\. Don't rely on these files until the company confirms them\.[\s\S]*Next step: Ask the company for a new seal/);
+    // A different company chosen never hides a compromised signer: compromised outranks the company mismatch.
+    await addCompany('Bystander Co', 'ef'.repeat(32), 'contract or invoice');
+    await page.locator('#check-company option[value="Bystander Co"]').waitFor({ state: 'attached' });
+    await page.locator('#check-company').selectOption('Bystander Co');
+    await runCheck('');
+    assert.equal(await page.locator('#verdict-heading').innerText(), 'Signed by a key marked compromised', 'list: compromised + another company');
+    await page.locator('#check-company').selectOption('');
     await runCheck(publicKey);
     assert.equal(await trustText(), "Signed by a key you marked as compromised: Acme Survey. Don't rely on this proof without checking with the company.");
     await runCheck('ab'.repeat(32));
