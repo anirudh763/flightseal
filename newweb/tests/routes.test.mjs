@@ -48,6 +48,14 @@ test('canonical workspaces are distinct and verification remains a real workbenc
   assert.equal(productHref('verify',{sample:'intact'}),'/workbench?sample=intact&tool=verify');
 });
 
+test('Jobs keeps its search and page in the URL, and only those', () => {
+  assert.equal(parseRouteHash('#/app/jobs?q=J-10&page=2').screen, 'jobs');
+  assert.equal(parseRouteHash('#/jobs').screen, 'jobs');
+  assert.equal(routeHash('jobs', { q: 'roof north', page: 2 }), '#/app/jobs?q=roof+north&page=2');
+  assert.equal(routeHash('jobs', { q: '', page: 1 }), '#/app/jobs');
+  assert.equal(routeHash('verify', { q: 'x', page: 3 }), '#/app/verify', 'other routes ignore q and page');
+});
+
 test('receipt deep links retain their selected public receipt position',()=>{
  assert.equal(routeHash('receipts',{sample:'rewritten',receipt:2}),'#/app/receipts?sample=rewritten&receipt=2');
  assert.equal(safeReturnRoute('#/app/receipts?sample=intact&receipt=2'),'#/app/receipts?sample=intact&receipt=2');

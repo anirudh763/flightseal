@@ -7,7 +7,7 @@ for (const [suffix, hash] of [
   ['?sample=truncated&record=12', '#/records?sample=truncated&record=12'],
   ['#/records/742?sample=intact', '#/records?sample=intact&record=742'],
   ['#/receipts/2?sample=rewritten', '#/receipts?sample=rewritten&receipt=2'],
-  ['#/verify', '#/verify'], ['#/telemetry', '#/telemetry'],
+  ['#/verify', '#/verify'], ['#/jobs', '#/jobs'], ['#/telemetry', '#/telemetry'],
   ['?sample=private-filename&token=secret#/records/../../../evil', '#/records'],
 ]) test(`canonical redirect preserves only known navigation: ${suffix || 'root'}`, () => {
   const result = canonicalConsoleURL(new URL(`https://example.com/flightseal/${suffix}`));

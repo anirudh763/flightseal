@@ -1239,3 +1239,37 @@ input[type=datetime-local] { width: 100%; max-width: 320px; min-width: 0; min-he
 .verdict-downloads { width: 100%; }
 .verdict-downloads > summary { justify-content: flex-start; width: fit-content; border: 1px solid var(--line); border-radius: 8px; padding: 0 14px; background: var(--surface); }
 .verdict-downloads > .actions-row { padding-top: 8px; }
+/* Jobs and the compact "Sealed on this device" list (jobs.jsx) */
+.jobs-intro p { margin: 0; }
+.jobs-intro { display: grid; gap: 4px; }
+.jobs-notice { margin: 0; padding: 10px 13px; border-left: 2px solid var(--line); background: var(--canvas); color: var(--ink); font-size: .84rem; }
+.jobs-empty { display: grid; gap: 8px; justify-items: start; padding: 16px 0; }
+.jobs-empty p { margin: 0; }
+.jobs-search { display: grid; gap: 4px; max-width: 32rem; }
+.jobs-search input { min-height: 44px; }
+table.jobs-table { min-width: 0; width: 100%; table-layout: auto; }
+.jobs-table caption { padding: 8px 0; text-align: left; color: var(--muted); font-variant-numeric: tabular-nums; }
+.jobs-table th, .jobs-table td { padding: 8px; text-align: left; vertical-align: middle; border-bottom: 1px solid var(--line); }
+.jobs-when { font-variant-numeric: tabular-nums; white-space: nowrap; }
+.jobs-name { min-width: 0; overflow-wrap: anywhere; }
+.jobs-actions { display: flex; flex-wrap: wrap; gap: 6px; }
+.jobs-actions .button, .jobs-pages .button { min-height: 44px; }
+.jobs-status { display: inline-flex; align-items: center; gap: 4px; white-space: nowrap; }
+.jobs-recent-rows { display: grid; margin: 0; padding: 0; list-style: none; border-top: 1px solid var(--line); }
+.jobs-recent-rows > li { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 12px; min-height: 44px; padding: 8px 4px; border-bottom: 1px solid var(--line); }
+.jobs-recent-rows .jobs-name { flex: 1 1 12rem; font-weight: 600; }
+.jobs-recent-rows .jobs-when { color: var(--muted); font-size: .8rem; }
+.jobs-all { margin: 10px 0 0; }
+.jobs-all a, .jobs-empty a { display: inline-flex; align-items: center; min-height: 44px; }
+/* 390px and below: each row becomes a summary (package, status, time), then full-width secondary actions. */
+@media (max-width: 600px) {
+  .jobs-table thead { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0, 0, 0, 0); }
+  .jobs-table, .jobs-table tbody, .jobs-table tr, .jobs-table td { display: block; }
+  .jobs-table caption { display: block; }
+  .jobs-table tr { padding: 10px 0; border-bottom: 1px solid var(--line); }
+  .jobs-table td { padding: 2px 0; border: 0; }
+  .jobs-table .jobs-name { font-weight: 600; }
+  .jobs-actions { display: grid; gap: 6px; margin-top: 8px; }
+  .jobs-actions .button, .jobs-pages .button { width: 100%; }
+}
+@media (forced-colors: active) { .jobs-status { border: 1px solid CanvasText; } }
