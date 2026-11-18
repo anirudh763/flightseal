@@ -68,7 +68,7 @@ export function Handoff({ headingRef, headingId, summary, kind, fileName, receip
   const fileRequested = !!requested?.file && !downloaded;
   const receiptRequested = !!requested?.receipt && !receiptSaved;
   useEffect(() => { if (asking) askRef.current?.focus(); }, [asking, fileRequested, receiptRequested, downloaded]);
-  useEffect(() => { if (asking && !unsaved) setAsking(false); }, [asking, unsaved]); // kept now: nothing left to ask
+  useEffect(() => { if (asking && !unsaved) { setAsking(false); onKeep?.(); } }, [asking, unsaved]); // kept now: nothing left to ask (and a waiting Resume is dropped, not run later)
   useEffect(() => { if (ask && unsaved) setAsking(true); }, [ask]); // eslint-disable-line react-hooks/exhaustive-deps -- Jobs' Resume would replace this result: the same one question first
   const wasAsking = useRef(false);
   useEffect(() => { if (wasAsking.current && !asking) moreRef.current?.focus(); wasAsking.current = asking; }, [asking]); // a closed question hands focus back to Seal more files
