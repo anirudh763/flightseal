@@ -245,7 +245,7 @@ class App:
 
     def _replay(self, pk, idem):
         reg = self.t.get(pk, "REG#" + idem["rid"])
-        if reg is None:
+        if reg is None or "count" not in reg:  # gone, or a restored deleted stub with nothing to acknowledge
             raise HttpError(410, "registration_deleted")
         return 200, self._ack(reg, idem["received_at"])  # the original ack, with the current disposition
 
@@ -334,8 +334,10 @@ class App:
         items, last = self.t.query(f"ORG#{ident.org_id}", "REG#", int(limit), "REG#" + cursor if cursor else None)
         out = []
         for reg in items:
-            row = {"registration_id": reg["SK"][4:], "count": reg["count"], "head": reg["head"],
-                   "key_fingerprint": reg["fp"], "disposition": reg["state"]}
+            row = {"registration_id": reg["SK"][4:], "disposition": reg["state"]}
+            for name, field in (("count", "count"), ("head", "head"), ("key_fingerprint", "fp")):
+                if field in reg:  # a restored deleted stub has only its id and state
+                    row[name] = reg[field]
             if "received_at" in reg:
                 row["received_at"] = _iso(reg["received_at"])
             out.append(row)

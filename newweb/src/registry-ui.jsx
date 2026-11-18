@@ -4,7 +4,8 @@ import React, { useEffect, useRef, useState, useSyncExternalStore } from 'react'
 import { ChevronDown, Cloud, HardDrive, Link2 } from 'lucide-react';
 import { createRegistryClient, tokenOwner } from './registry-client.mjs';
 import { attentionMessage, openOutbox, stateLabel } from './outbox.mjs';
-import { formatFingerprint } from './trusted-keys.mjs';
+import { openPendingStore } from './pending-store.mjs';
+import { fingerprintHex, formatFingerprint } from './trusted-keys.mjs';
 
 const TOKEN_KEY = 'hashwing-registry-token';
 const SHARE_TOKEN = /^[A-Za-z0-9_-]{43}$/;
@@ -16,7 +17,7 @@ const LIST_ERROR = "Couldn't open this device's saved list. Your sealed files ar
 // The UX spec's "Registry errors" table: the message and the single action for each needs_attention reason.
 const UNREADABLE = "The registry couldn't accept this receipt. Export it and contact your admin.";
 const REASONS = {
-  key_not_enrolled: ["This signing key isn't enrolled for your company yet. Ask your admin to enroll it on the Trust page, then try again.", 'retry'],
+  key_not_enrolled: ["This signing key isn't enrolled for your company yet. Ask your company's registry admin to enroll this key's fingerprint, then try again.", 'retry'],
   key_not_active: ["This signing key was replaced or marked compromised, so the registry won't accept new receipts from it. Seal again with your company's current key.", 'trust'],
   envelope_expired: ['This saved request was waiting too long and has expired. Try again to send it with a fresh request; the proof itself is unchanged.', 'retry'],
   epoch_mismatch: ['Your company reset its registry requests since this was saved. Try again to send it with a fresh request.', 'retry'],
@@ -48,8 +49,24 @@ function claimsOf(jwt) {
   } catch { return null; }
 }
 const isLoopback = (url) => { try { return ['localhost', '127.0.0.1', '[::1]'].includes(new URL(url).hostname); } catch { return false; } }; // as vite.config.js
-const storage = { get() { try { return sessionStorage.getItem(TOKEN_KEY) || ''; } catch { return ''; } },
-  set(v) { try { if (v) sessionStorage.setItem(TOKEN_KEY, v); else sessionStorage.removeItem(TOKEN_KEY); } catch { /* tab memory only */ } } };
+const storage = { get() { try { return { token: sessionStorage.getItem(TOKEN_KEY) || '', at: Number(sessionStorage.getItem(`${TOKEN_KEY}-at`)) || 0 }; } catch { return { token: '', at: 0 }; } },
+  set(v, at = Date.now()) { try { if (v) { sessionStorage.setItem(TOKEN_KEY, v); sessionStorage.setItem(`${TOKEN_KEY}-at`, String(at)); } else { sessionStorage.removeItem(TOKEN_KEY); sessionStorage.removeItem(`${TOKEN_KEY}-at`); } } catch { /* tab memory only */ } } };
+// When each owner last signed out (keyed by a hash of the owner, never a token), so a tab that missed the message
+// (frozen, discarded, restored, or without BroadcastChannel) does not sign back in with an older saved token.
+const SIGNOUTS = 'hashwing-registry-signouts';
+const ownerKey = async (owner) => [...new Uint8Array(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(owner)))].slice(0, 16).map((b) => b.toString(16).padStart(2, '0')).join('');
+const readSignouts = () => { try { const v = JSON.parse(localStorage.getItem(SIGNOUTS) || '{}'); return v && typeof v === 'object' ? v : {}; } catch { return {}; } };
+async function markSignedOut(owner, at) {
+  try {
+    const key = await ownerKey(owner);
+    const all = { ...readSignouts(), [key]: at };
+    const keep = Object.entries(all).sort((x, y) => y[1] - x[1]).slice(0, 50); // bounded
+    localStorage.setItem(SIGNOUTS, JSON.stringify(Object.fromEntries(keep)));
+  } catch { /* no shared storage: BroadcastChannel still reaches the open tabs */ }
+}
+async function signedOutSince(owner, since) {
+  try { return Number(readSignouts()[await ownerKey(owner)]) > since; } catch { return false; }
+}
 function saveFile(name, text) {
   const url = URL.createObjectURL(new Blob([text], { type: 'application/json' }));
   const a = document.createElement('a');
@@ -71,22 +88,30 @@ function createRegistry() {
   const listeners = new Set();
   const names = new Map(); // receipt -> display name; memory only, never persisted
   let token = ''; // the only copy outside sessionStorage
+  let signedInAt = 0; // when this tab's current sign-in began; older sign-out messages and markers do not apply to it
   let gen = 0, seq = 0, unsubscribe = null;
-  let user = 0; // bumped by logout(): proofs saved for the user who left are never put back for the next one
+  let scopeGen = 0, store = null; // the pending store of the current local scope (profile or guest)
   let lastOwner = null; // the owner the display names belong to
-  let state = { token: '', claims: null, owner: null, outbox: null, rows: [], listed: false, pending: [], needsSignIn: false,
-    online: navigator.onLine !== false, memory: false, listError: '', enqueueError: '' };
+  let state = { token: '', claims: null, owner: null, outbox: null, rows: [], listed: false, scope: null, pending: [], pendingStorage: null,
+    needsSignIn: false, online: navigator.onLine !== false, memory: false, listError: '', enqueueError: '' };
   const set = (patch) => { state = { ...state, ...patch }; for (const fn of listeners) fn(); };
   const client = createRegistryClient({ baseUrl: __REGISTRY_URL__, getToken: async () => token });
   addEventListener('online', () => set({ online: true }));
   addEventListener('offline', () => set({ online: false }));
   // Other tabs of this browser (a duplicated tab copies sessionStorage, token included) drop their registry sign-in
-  // with this one. The message names the owner, never a token.
+  // with this one. The message names the owner and when, never a token. An app logout is not sent here: the app's own
+  // logout message names the local profile, and only that profile's tabs call registryLogout().
   const channel = typeof BroadcastChannel === 'function' ? new BroadcastChannel('hashwing-registry') : null;
   channel?.addEventListener('message', ({ data }) => {
-    if (data?.type === 'logout') logoutHere();
-    else if (data?.type === 'signout' && typeof data.owner === 'string' && data.owner === state.owner) signOutHere();
+    if (data?.type === 'signout' && typeof data.owner === 'string' && data.owner === state.owner && !(Number(data.at) < signedInAt)) signOutHere();
   });
+  // A tab that was frozen, discarded or has no BroadcastChannel checks the shared sign-out marker when it wakes.
+  const wake = () => { if (state.owner) signedOutSince(state.owner, signedInAt).then((yes) => { if (yes && state.owner) signOutHere(); }); };
+  addEventListener('pageshow', wake); addEventListener('focus', wake);
+  globalThis.document?.addEventListener?.('visibilitychange', () => { if (document.visibilityState === 'visible') wake(); });
+  globalThis.document?.addEventListener?.('resume', wake);
+  const mayName = (p, owner) => !p.owner || p.owner === owner; // a held proof's file name is never shown to another owner
+  const unsaved = (p) => !p.exported && (state.pendingStorage !== 'indexeddb' || p.memoryOnly);
 
   async function refresh(ob) {
     const n = ++seq;
@@ -95,6 +120,11 @@ function createRegistry() {
       if (n !== seq || state.outbox !== ob) return; // a newer refresh, a close or an owner change won
       const st = ob.status();
       set({ rows, listed: true, needsSignIn: st.needsSignIn, memory: st.storage === 'memory' || st.exportOffered, listError: '' });
+      // A pending proof this outbox already holds (an assign or flush cut short by a reload) is not pending any more.
+      const queued = new Set(rows.map((row) => row.receipt));
+      for (const p of state.pending.filter((q) => queued.has(q.receipt))) await dropPending(p.receipt);
+      // A proof kept because this owner's queue was full is retried whenever the queue changes.
+      if (state.outbox === ob && state.pending.some((p) => p.owner === state.owner)) flushOwned(ob, state.owner);
     } catch { if (state.outbox === ob) set({ listError: LIST_ERROR }); }
   }
   async function enqueueOn(ob, receipt) {
@@ -106,44 +136,83 @@ function createRegistry() {
     try { return await state.outbox.importProofs(text); }
     catch (err) { return { ok: false, reason: err instanceof RangeError ? 'full' : 'failed' }; }
   }
+  // ---- pending proofs: saved per local scope, removed only once the owner's outbox holds them
+  async function keepPending(row) {
+    if (state.pending.some((p) => p.receipt === row.receipt)) return;
+    set({ pending: [...state.pending, row] });
+    if (!store) return; // the scope is still opening: setScope saves it
+    const g = scopeGen;
+    try { await store.put({ receipt: row.receipt, owner: row.owner, at: row.at }); }
+    catch (err) {
+      if (g !== scopeGen) return;
+      set({ pending: state.pending.map((p) => (p.receipt === row.receipt ? { ...p, memoryOnly: true } : p)),
+        enqueueError: err instanceof RangeError ? FULL : "Couldn't save this proof on this device. Export pending proofs, then try again." });
+    }
+  }
+  async function dropPending(receipt) {
+    set({ pending: state.pending.filter((p) => p.receipt !== receipt) });
+    try { await store?.remove(receipt); } catch { /* still in the outbox, which is what counts; a later flush finds it already queued */ }
+  }
+  let flushing = null;
+  async function flushOwned(ob, owner) { // only proofs sealed under this same owner go to its outbox by themselves
+    if (flushing === ob) return; // one flush per outbox at a time; the next queue change retries
+    flushing = ob;
+    try {
+      for (const p of state.pending.filter((q) => q.owner === owner)) {
+        if (state.outbox !== ob) return;
+        if (!(await enqueueOn(ob, p.receipt))) return; // kept; the list shows why
+        if (state.outbox === ob) await dropPending(p.receipt);
+      }
+    } finally { if (flushing === ob) flushing = null; }
+  }
+  async function setScope(scope) {
+    if ((scope || null) === state.scope) return;
+    const g = ++scopeGen;
+    store?.close(); store = null;
+    names.clear();
+    set({ scope: scope || null, pending: [], pendingStorage: null });
+    if (!scope) return;
+    const st = await openPendingStore(scope);
+    if (g !== scopeGen) { st.close(); return; }
+    let saved = [];
+    try { saved = await st.list(); } catch { saved = []; }
+    if (g !== scopeGen) { st.close(); return; }
+    store = st;
+    const early = state.pending.filter((p) => !saved.some((q) => q.receipt === p.receipt)); // sealed while the store opened
+    set({ pending: [...saved, ...early], pendingStorage: st.storage });
+    for (const p of early) { try { await st.put({ receipt: p.receipt, owner: p.owner, at: p.at }); } catch { if (g === scopeGen) set({ pending: state.pending.map((q) => (q.receipt === p.receipt ? { ...q, memoryOnly: true } : q)) }); } }
+    if (state.outbox && g === scopeGen) await flushOwned(state.outbox, state.owner);
+  }
   function closeOutbox() {
     gen += 1; seq += 1;
     unsubscribe?.(); unsubscribe = null;
     state.outbox?.close();
     set({ outbox: null, rows: [], listed: false, needsSignIn: false, memory: false, listError: '', enqueueError: '' });
   }
-  async function signIn(raw) {
+  async function signIn(raw, at = Date.now()) {
     const tok = String(raw || '').trim();
     const owner = tokenOwner(tok), claims = claimsOf(tok);
     if (!owner || !claims) return false;
     if (owner === state.owner && state.outbox) { // a fresh token for the same owner: keep the outbox, send now
-      token = tok; storage.set(tok); set({ token: tok, claims });
+      token = tok; storage.set(tok, at); signedInAt = at; set({ token: tok, claims });
       state.outbox.retryNow();
       return true;
     }
     closeOutbox();
-    if (lastOwner && lastOwner !== owner) { // another owner: forget the last one's file names, except this tab's unsent seals
-      for (const receipt of names.keys()) if (!state.pending.some((p) => p.receipt === receipt)) names.delete(receipt);
+    if (lastOwner && lastOwner !== owner) { // another owner: forget the last one's file names, except unsent seals it may see
+      for (const receipt of names.keys()) if (!state.pending.some((p) => p.receipt === receipt && mayName(p, owner))) names.delete(receipt);
     }
     lastOwner = owner;
-    token = tok; storage.set(tok);
+    token = tok; storage.set(tok, at); signedInAt = at;
     set({ token: tok, claims, owner });
-    const g = gen, u = user;
+    const g = gen;
     let ob;
     try { ob = await openOutbox({ ownerId: owner, client, getToken: async () => token }); }
     catch { if (g === gen) set({ listError: LIST_ERROR }); return true; }
     if (g !== gen) { ob.close(); return true; } // the owner changed while it opened: never use it
     unsubscribe = ob.subscribe(() => refresh(ob));
-    const pending = state.pending;
-    set({ outbox: ob, pending: [] });
-    for (let i = 0; i < pending.length; i++) {
-      if (await enqueueOn(ob, pending[i].receipt)) continue;
-      if (u !== user) break; // logged out meanwhile: those proofs left with that user
-      // never drop an unsent proof: this one and every later one go back to the in-memory list
-      const back = pending.slice(i).filter((p) => !state.pending.some((q) => q.receipt === p.receipt));
-      set({ pending: [...back, ...state.pending] });
-      break;
-    }
+    set({ outbox: ob });
+    await flushOwned(ob, owner);
     if (state.outbox === ob) await refresh(ob);
     return true;
   }
@@ -152,40 +221,82 @@ function createRegistry() {
     token = ''; storage.set('');
     set({ token: '', claims: null, owner: null });
   }
-  function logoutHere() { user += 1; signOutHere(); names.clear(); set({ pending: [] }); }
+  // App logout: credentials go and dispatch stops; saved pending proofs stay in that profile's store (AD-17).
+  function logoutHere() { signOutHere(); names.clear(); }
+  function markExported(receipts) { // exported proofs stay listed and saved; they no longer count as unsaved work
+    const done = new Set(receipts);
+    if (state.pending.some((p) => !p.exported && done.has(p.receipt))) set({ pending: state.pending.map((p) => (done.has(p.receipt) ? { ...p, exported: true } : p)) });
+  }
 
   const saved = storage.get();
-  if (saved) signIn(saved).then((ok) => { if (!ok) storage.set(''); });
+  if (saved.token) { // a reload, a restored or a duplicated tab: unless that owner signed out since this sign-in began
+    const owner = tokenOwner(saved.token);
+    (owner ? signedOutSince(owner, saved.at) : Promise.resolve(true))
+      .then((gone) => (gone ? false : signIn(saved.token, saved.at))).then((ok) => { if (!ok) storage.set(''); });
+  }
 
   return {
     client, names,
     subscribe(fn) { listeners.add(fn); return () => listeners.delete(fn); },
     snapshot: () => state,
-    signIn, importProofs,
-    signOut() { const owner = state.owner; signOutHere(); if (owner) channel?.postMessage({ type: 'signout', owner }); },
-    logout() { logoutHere(); channel?.postMessage({ type: 'logout' }); },
-    async sealed(receipt, name) {
-      const u = user;
-      if (name) names.set(receipt, name);
-      if (state.outbox && await enqueueOn(state.outbox, receipt)) return; // a failed enqueue (queue full) keeps it in memory below
-      if (u !== user) return; // logged out meanwhile
-      if (!state.pending.some((p) => p.receipt === receipt)) set({ pending: [...state.pending, { receipt, at: Date.now() }] });
+    signIn, importProofs, setScope,
+    signOut() {
+      const owner = state.owner, at = Date.now();
+      signOutHere();
+      if (owner) { channel?.postMessage({ type: 'signout', owner, at }); markSignedOut(owner, at); }
+    },
+    logout: logoutHere, // this tab only (AD-17); the app's profile logout message reaches that profile's other tabs
+    sealStart: () => ({ owner: state.owner, g: scopeGen }),
+    async sealed(receipt, name, start = { owner: state.owner, g: scopeGen }) {
+      // The registry owner signed in when sealing began (null: unassigned), so a sign-in during a long seal never adopts it.
+      const { owner, g } = start;
+      if (g !== scopeGen) return; // the local profile changed meanwhile: the app keeps the sealed files for that user
+      if (name && (!owner || owner === state.owner)) names.set(receipt, name);
+      if (owner && owner === state.owner && state.outbox && await enqueueOn(state.outbox, receipt)) return; // a failed enqueue (queue full) keeps it below
+      if (g !== scopeGen) return; // the local profile changed meanwhile: the app keeps the sealed files for that user
+      await keepPending({ receipt, owner, at: Date.now() });
+    },
+    /** Send an unassigned proof under the current sign-in, on the user's explicit request. The registry still checks
+     * that its key is enrolled for this company and that the user is a member. */
+    async assign(receipt) {
+      const ob = state.outbox, owner = state.owner;
+      const row = state.pending.find((p) => p.receipt === receipt && !p.owner);
+      if (!ob || !row) return false;
+      // Bind it to this owner first, so a reload between saving and sending can never offer it to another company.
+      const bound = { receipt, owner, at: row.at };
+      set({ pending: state.pending.map((p) => (p.receipt === receipt ? { ...p, owner } : p)) });
+      try { await store?.put(bound); } catch { /* the in-memory row is bound; the outbox below is what counts */ }
+      if (!(await enqueueOn(ob, receipt))) return false; // kept under this owner; retried when the queue changes
+      if (state.outbox === ob) await dropPending(receipt);
+      return true;
     },
     async exportPending() {
       const queued = state.outbox ? await state.outbox.exportPending() : { ok: false };
       const receipts = [...new Set([...(queued.ok ? JSON.parse(queued.text).receipts : []), ...state.pending.map((p) => p.receipt)])];
       if (!receipts.length) return { ok: false, reason: 'needs_previous_export' };
-      return { ok: true, count: receipts.length,
-        text: JSON.stringify({ format: 'hashwing-outbox-export', version: 1, receipts }, null, 2) + '\n' };
+      markExported(receipts);
+      return { ok: true, count: receipts.length, text: exportText(receipts) };
     },
+    /** Unsent proofs that only this tab's memory holds (no IndexedDB, or a failed save), as an export file. */
+    unsentExport() {
+      const receipts = state.pending.filter(unsaved).map((p) => p.receipt);
+      return receipts.length ? { count: receipts.length, text: exportText(receipts), markSaved: () => markExported(receipts) } : null;
+    },
+    unsavedCount: () => state.pending.filter(unsaved).length,
   };
 }
 const useRegistry = () => { const r = getRegistry(); return [r, useSyncExternalStore(r.subscribe, r.snapshot)]; };
+const exportText = (receipts) => JSON.stringify({ format: 'hashwing-outbox-export', version: 1, receipts }, null, 2) + '\n';
+/** How many unsent proofs this tab holds in memory only (lost on reload unless exported). */
+export function useRegistryUnsent() { const [r] = useRegistry(); return r.unsavedCount(); }
+/** main.jsx tells the registry which local scope (a profile, or the shared guest scope) owns the pending proofs. */
+export function registryScope(scope) { getRegistry().setScope(scope).catch(() => {}); }
 
 // Called by main.jsx after a seal passed its own check. Only the receipt line goes to the outbox.
-export function registrySealed(receipts, name) {
+export function registrySealStart() { return getRegistry().sealStart(); }
+export function registrySealed(receipts, name, start) {
   const receipt = String(receipts || '').split('\n').map((line) => line.trim()).filter(Boolean).pop();
-  if (receipt) getRegistry().sealed(receipt, name).catch(() => {}); // a seal never waits on or fails because of the registry
+  if (receipt) getRegistry().sealed(receipt, name, start || undefined).catch(() => {}); // a seal never waits on or fails because of the registry
 }
 // The "Registry acceptance" time row for a checked receipt message: this device's outbox row for one of its receipt
 // lines, matched on the stored receipt line. Only these strings reach the screen and the reports, never a row.
@@ -214,6 +325,22 @@ export function registryLogout() {
 
 // ------------------------------------------------------------------ Trust: Company registry
 
+/** Command bar, flag on: "{company} registry" while signed in. Sign-in and sign-out stay on Trust. */
+export function RegistryBarLink({ href, onOpen }) {
+  const [, s] = useRegistry();
+  return s.claims && !s.needsSignIn ? <a className="registry-bar-link" href={href} onClick={onOpen} aria-label={`Company registry (${s.claims.org})`} title={s.claims.org}>Company registry</a> : null;
+}
+/** Seal & send, flag on and signed in: who the next seal registers for (EXPERIENCE.md signing line 3). */
+export function RegistrySigningLine() {
+  const [, s] = useRegistry();
+  return s.claims && !s.needsSignIn ? <p className="registry-signing">Registering for <span className="wrap">{s.claims.org}</span> as <span className="wrap">{s.claims.sub}</span></p> : null;
+}
+/** After sealing, flag on: what a share link carries. Links are made from the row in "Sealed on this device". */
+export function RegistryShareNote() {
+  return <details className="report-details" onKeyDown={closeDisclosure}><summary>Share link <ChevronDown size={17} aria-hidden="true" /></summary>
+    <p className="field-hint">A share link opens the registry's record of this receipt, not the files. Your client still needs the files and the receipt message. Make one from Sealed on this device once it shows Registered.</p>
+  </details>;
+}
 export function RegistryPanel() {
   const [r, s] = useRegistry();
   const [draft, setDraft] = useState('');
@@ -263,7 +390,7 @@ export function SealedOnDevice({ onSignIn }) {
   useEffect(() => { setAnnounce(''); seen.current = null; }, [s.owner]); // a new owner never hears the last one's file names
   // Offline, the outbox leaves a new row in sealed_local (it doesn't try to send); to the user it is waiting for the connection.
   const shown = s.online ? s.rows : s.rows.map((row) => (row.state === 'sealed_local' ? { ...row, state: 'waiting_for_connection', label: stateLabel('waiting_for_connection') } : row));
-  const rows = [...shown, ...s.pending.map((p) => ({ id: `pending:${p.receipt}`, receipt: p.receipt, state: 'sealed_local', label: 'Sealed locally', created_at: p.at, pending: true }))];
+  const rows = [...shown, ...s.pending.map((p) => ({ id: `pending:${p.receipt}`, receipt: p.receipt, state: 'sealed_local', label: 'Sealed locally', created_at: p.at, pending: true, held: !!(s.owner && p.owner && p.owner !== s.owner), unassigned: !p.owner }))];
   const nameOf = (row) => r.names.get(row.receipt) || 'Sealed item';
   const chipKey = rows.map((row) => `${row.id}=${chipOf(row)[0]}`).join('|');
   useEffect(() => {
@@ -300,12 +427,12 @@ export function SealedOnDevice({ onSignIn }) {
   return <section className="panel registry-list" aria-labelledby="sealed-on-device-title"><div className="panel-head"><HardDrive aria-hidden="true" size={18} /><h2 id="sealed-on-device-title">Sealed on this device</h2></div><div className="panel-body">
     {!s.online && <p className="registry-notice">You're offline. Sealing and checking still work. Registrations will send when you reconnect.</p>}
     {(s.needsSignIn || !s.claims) && rows.some((row) => row.state !== 'registered') && <div className="registry-notice"><p>{SIGN_IN}</p><button type="button" className="button secondary" onClick={onSignIn}>Sign in</button></div>}
-    {s.memory && !exported && <div className="registry-notice"><p>{MEMORY}</p><button type="button" className="button secondary" onClick={exportProofs}>Export pending proofs</button></div>}
+    {(s.memory || (s.pendingStorage === 'memory' && s.pending.length > 0)) && !exported && <div className="registry-notice"><p>{MEMORY}</p><button type="button" className="button secondary" onClick={exportProofs}>Export pending proofs</button></div>}
     {s.listError && <p className="registry-notice" role="alert">{s.listError}</p>}
     {s.enqueueError && <p className="registry-notice" role="alert">{s.enqueueError}</p>}
     {rows.length ? <>
       <p className="registry-summary">{registered} registered · {waiting} not yet registered</p>
-      <ul className="registry-rows">{rows.map((row) => <li key={row.id}><RegistryRow row={row} name={nameOf(row)} registry={r} admin={s.claims?.role === 'admin'} outbox={s.outbox} onSignIn={onSignIn} onExport={exportProofs} /></li>)}</ul>
+      <ul className="registry-rows">{rows.map((row) => <li key={row.id}><RegistryRow row={row} name={nameOf(row)} registry={r} org={s.claims?.org || ''} signedIn={!!s.owner} admin={s.claims?.role === 'admin'} outbox={s.outbox} onSignIn={onSignIn} onExport={exportProofs} /></li>)}</ul>
     </> : <p className="field-hint">Nothing sealed on this device yet.</p>}
     <p className="visually-hidden registry-announce" role="status">{announce}</p>
     <details className="report-details registry-more" onKeyDown={closeDisclosure}><summary>More options <ChevronDown size={17} aria-hidden="true" /></summary>
@@ -316,12 +443,20 @@ export function SealedOnDevice({ onSignIn }) {
   </div></section>;
 }
 
-function RegistryRow({ row, name, registry, admin, outbox, onSignIn, onExport }) {
+function RegistryRow({ row, name, registry, org, signedIn, admin, outbox, onSignIn, onExport }) {
   const [chip, kind] = chipOf(row);
   const when = new Date(row.created_at).toLocaleString();
   const retry = () => outbox?.retryNow(row.id);
   let body;
-  if (row.state === 'sealed_local') {
+  if (row.unassigned) { // never sent by itself: the user chooses the company, and the registry re-checks key and membership
+    body = outbox ? <><p>Sealed while signed out, so it isn't assigned to a company yet.</p>
+      <div className="actions-row"><button type="button" className="button secondary" onClick={() => registry.assign(row.receipt)}>{org ? `Assign to ${org}` : 'Assign to this company'}</button></div></>
+      : signedIn ? <p>Sealed while signed out, so it isn't assigned to a company yet. It can be assigned once this device's list opens; export it to keep a copy.</p>
+      : <p>Sealed while signed out, so it isn't assigned to a company yet. Sign in to the company registry to assign it, or export it.</p>;
+  } else if (row.held) {
+    body = <><p>This was sealed under another registry sign-in, so it won't be sent under yours. Export it, or sign in as that account to send it.</p>
+      <div className="actions-row"><button type="button" className="button secondary" onClick={onExport}>Export pending proofs</button></div></>;
+  } else if (row.state === 'sealed_local') {
     body = <p>Sealed on this device. Not sent to the registry yet.</p>;
   } else if (row.state === 'waiting_for_connection') {
     const busy = row.reason === 'unavailable' || row.reason === 'http_503';
@@ -338,6 +473,7 @@ function RegistryRow({ row, name, registry, admin, outbox, onSignIn, onExport })
   } else {
     const [text, action] = REASONS[row.reason] ?? REFUSED;
     body = <><p>{attentionMessage(row) ?? text}</p>
+      {row.reason === 'key_not_enrolled' && <KeyFingerprint receipt={row.receipt} />}
       {action === 'retry' && <div className="actions-row"><button type="button" className="button secondary" onClick={retry}>Try again</button></div>}
       {action === 'export' && <div className="actions-row"><button type="button" className="button secondary" onClick={onExport}>Export pending proofs</button></div>}
       {action === 'trust' && <div className="actions-row"><button type="button" className="button secondary" onClick={onSignIn}>Open Trust</button></div>}
@@ -349,6 +485,18 @@ function RegistryRow({ row, name, registry, admin, outbox, onSignIn, onExport })
     <summary><span className="registry-name wrap">{name}</span><span className="registry-when">sealed {when}</span><span className={`status-label ${kind}`}>{chip}</span></summary>
     <div className="registry-detail">{body}</div>
   </details>;
+}
+
+// The registry's key_fingerprint is SHA-256 of the receipt's raw public key (registry/registry/receipt.py fingerprint).
+function KeyFingerprint({ receipt }) {
+  const [fp, setFp] = useState('');
+  useEffect(() => {
+    let live = true;
+    const key = / key=([0-9a-f]{64}) /.exec(receipt || '')?.[1];
+    if (key) fingerprintHex(key).then((v) => { if (live) setFp(v); }, () => {});
+    return () => { live = false; };
+  }, [receipt]);
+  return fp ? <dl className="detail-grid registry-fingerprint"><dt>Key fingerprint</dt><dd><code className="wrap fingerprint">{formatFingerprint(fp)}</code></dd></dl> : null;
 }
 
 function shareError(res) {
