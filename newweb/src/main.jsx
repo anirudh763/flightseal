@@ -1432,7 +1432,10 @@ function App() {
   // Shown once the trust lookup and the rebuild of the original have finished, so the headline never changes under focus.
   const smallMismatch = protectView && companyMismatch?.for === result ? companyMismatch.name : '';
   const smallReady = protectView && resultTimes && (!smallSigned || keyTrust?.for === result) && (!smallSigned || !smallCovered || restored != null || smallMismatch);
-  const smallVerdict = smallReady ? verdict({ company: smallMismatch ? { name: smallMismatch, matches: false } : null, signed: smallSigned, reason: result.native.description || result.indexed.description || "The sealed file doesn't match the receipt message.", trust: keyTrust?.for === result ? keyTrust : null, items: smallRows, coverage: { covered: result.receiptCoverage.covered, total: result.native.records } }) : null;
+  // A failing check's sentence comes from the failure only: the chain's description is used when the chain itself
+  // failed, never when it passed (it would read "intact" under "Not verified", e.g. a receipt made for other bytes).
+  const smallReason = (protectView && [result.native.status !== 'intact' && result.native.description, result.indexed.problem && result.indexed.description].find(Boolean)) || "The sealed file doesn't match the receipt message.";
+  const smallVerdict = smallReady ? verdict({ company: smallMismatch ? { name: smallMismatch, matches: false } : null, signed: smallSigned, reason: smallReason, trust: keyTrust?.for === result ? keyTrust : null, items: smallRows, coverage: { covered: result.receiptCoverage.covered, total: result.native.records } }) : null;
   const smallLines = smallVerdict ? [
     ['Signature', smallChecks.length && smallChecks.every((check) => check === 'ok') ? 'Valid' : 'Not valid'],
     ...(smallMismatch ? [['Trusted company', `Not signed by ${smallMismatch}'s key`]] : []),

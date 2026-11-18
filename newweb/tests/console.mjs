@@ -1175,6 +1175,9 @@ try {
     await page.getByRole('button', { name: 'Check files' }).click();
     await page.waitForFunction(() => document.querySelector('#verdict-heading')?.textContent === 'Not verified', null, { timeout: 30000 });
     assert.equal(await page.locator('.restored').count(), 0);
+    // The re-sealed file's own chain is intact, but the receipt was made for other bytes: the sentence never says "intact".
+    assert.equal(await page.locator('.verdict-sentence').innerText(), "The sealed file doesn't match the receipt message.");
+    assert.equal((await assertOneHeadline('Not verified')).text.split('\n')[0], "Result: Not verified. The sealed file doesn't match the receipt message.");
 
     // No receipt pasted: refused with a reason rather than a weaker check, read with its field (focus table).
     await page.locator('#check-text').fill('no receipt here');
