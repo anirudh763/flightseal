@@ -57,8 +57,8 @@ export function SigningLine({ signingKey, trustHref, onTrust, registryLine }) {
  * (the save can be cancelled or blocked, #42), so "requested" never counts as saved: `downloaded` and `receiptSaved`
  * turn true only through "I saved it" (`onSaved`, `onReceiptSaved`), or for the receipt once the clipboard took it.
  * A Download click asks nothing: it shows a short status and Copy message becomes the one primary action. The only
- * question comes when "Seal more files" would discard a part that is not saved (`unsaved`, the same predicate the
- * parent's unsaved-work gate uses, never a copy of it).
+ * question comes, once, when "Seal more files" would discard a part that is not saved (`unsaved`, the same predicate
+ * the parent's unsaved-work gate uses, never a copy of it): Download (default focus), I saved it, Keep it, Discard it.
  */
 export function Handoff({ headingRef, headingId, summary, kind, fileName, receiptName, unsaved, downloaded, receiptSaved, requested, onDownload, onSaved, onDownloadReceipt, onReceiptSaved, originals, handoverId, handover, onCopy, copyStatus, actions, shareNote, details, onSealMore }) {
   const [asking, setAsking] = useState(false);
@@ -76,14 +76,10 @@ export function Handoff({ headingRef, headingId, summary, kind, fileName, receip
   const discard = () => { setAsking(false); onSealMore(); };
   const keepButton = <button type="button" className="button secondary" onClick={keep}>Keep it</button>;
   const discardButton = <button type="button" className="button secondary" onClick={discard}>Discard it</button>;
-  // "I saved it" confirms the parts whose download was started; if nothing else is unsaved, Seal more files goes on.
-  const savedThenMore = () => {
-    if (fileRequested) onSaved();
-    if (receiptRequested) onReceiptSaved();
-    const left = (!downloaded && !fileRequested) || (!receiptSaved && !receiptRequested);
-    if (!left) { setAsking(false); onSealMore(); }
-  };
-  const savedButton = <button ref={askRef} type="button" className="button primary" aria-describedby="seal-more-ask" onClick={savedThenMore}>I saved it</button>;
+  // One question names everything still unsaved. "I saved it" is the user's word for all of it, so Seal more files goes on.
+  const savedThenMore = () => { if (!downloaded) onSaved(); if (!receiptSaved) onReceiptSaved(); setAsking(false); onSealMore(); };
+  const askText = [downloaded ? '' : fileRequested ? `You started a download of ${fileName}. Did it save?` : `You haven't downloaded ${fileName}. Download it first?`,
+    receiptSaved ? '' : downloaded ? "You haven't kept the receipt message." : "The receipt message isn't saved yet."].filter(Boolean).join(' ');
   const shown = showAll ? originals : originals?.slice(0, 5);
   return <div className="handover handoff">
     <p className="seal-summary">{summary}</p>
@@ -112,19 +108,11 @@ export function Handoff({ headingRef, headingId, summary, kind, fileName, receip
     {details}
     {shareNote}
     {asking ? <div className="confirm-box" onKeyDown={(e) => { if (e.key === 'Escape') { e.preventDefault(); keep(); } }}>
-      {!downloaded ? (fileRequested ? <>
-        <p id="seal-more-ask">You started a download of {fileName}. Did it save?</p>
-        <div className="actions-row">{savedButton}<button type="button" className="button secondary" onClick={onDownload}><Download aria-hidden="true" size={16} />Download again</button>{keepButton}{discardButton}</div>
-      </> : <>
-        <p id="seal-more-ask">You haven't downloaded {fileName}. Download it first?</p>
-        <div className="actions-row"><button ref={askRef} type="button" className="button primary" aria-describedby="seal-more-ask" onClick={onDownload}><Download aria-hidden="true" size={16} />Download</button>{keepButton}{discardButton}</div>
-      </>) : receiptRequested ? <>
-        <p id="seal-more-ask">You started a download of {receiptName}. Did it save?</p>
-        <div className="actions-row">{savedButton}<button type="button" className="button secondary" onClick={onCopy}><Copy aria-hidden="true" size={16} />Copy message</button>{keepButton}{discardButton}</div>
-      </> : <>
-        <p id="seal-more-ask">You haven't kept the receipt message. Copy it first?</p>
-        <div className="actions-row"><button ref={askRef} type="button" className="button primary" aria-describedby="seal-more-ask" onClick={onCopy}><Copy aria-hidden="true" size={16} />Copy message</button>{keepButton}{discardButton}</div>
-      </>}
+      <p id="seal-more-ask">{askText}</p>
+      <div className="actions-row">{!downloaded
+        ? <button ref={askRef} type="button" className="button primary" aria-describedby="seal-more-ask" onClick={onDownload}><Download aria-hidden="true" size={16} />{fileRequested ? 'Download again' : 'Download'}</button>
+        : <button ref={askRef} type="button" className="button primary" aria-describedby="seal-more-ask" onClick={onCopy}><Copy aria-hidden="true" size={16} />Copy message</button>}
+        <button type="button" className="button secondary" onClick={savedThenMore}>I saved it</button>{keepButton}{discardButton}</div>
     </div> : <div className="actions-row"><button ref={moreRef} type="button" className="button secondary" onClick={() => (unsaved ? setAsking(true) : onSealMore())}>Seal more files</button></div>}
   </div>;
 }

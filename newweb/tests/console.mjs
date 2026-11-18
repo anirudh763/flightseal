@@ -1297,10 +1297,12 @@ try {
     await page.getByRole('button', { name: 'Seal this file' }).click();
     await page.waitForSelector('#handover-text', { timeout: 60000 });
     await page.getByRole('button', { name: 'Seal more files' }).click();
-    assert.equal(await page.locator('#seal-more-ask').innerText(), "You haven't downloaded n3.bin.fseal. Download it first?");
+    // One question names everything unsaved: the file, and the receipt message (a one-time key cannot make another).
+    assert.equal(await page.locator('#seal-more-ask').innerText(), "You haven't downloaded n3.bin.fseal. Download it first? The receipt message isn't saved yet.");
     assert.equal(await page.evaluate(() => document.activeElement?.textContent), 'Download', 'Download has focus');
     assert.deepEqual(await page.locator('.confirm-box .button.primary').allInnerTexts(), ['Download']);
     assert.deepEqual(await panel.locator('.button.primary').allInnerTexts(), ['Download'], 'one primary on screen: the question\'s, not also the step\'s');
+    assert.deepEqual(await page.locator('.confirm-box button').allInnerTexts(), ['Download', 'I saved it', 'Keep it', 'Discard it']);
     await page.keyboard.press('Escape');
     await page.waitForFunction(() => !document.getElementById('seal-more-ask') && document.activeElement?.textContent === 'Seal more files');
     assert.equal(await page.locator('#handover-text').count(), 1, 'Escape kept the result');
@@ -1308,27 +1310,22 @@ try {
     const [n3] = await Promise.all([page.waitForEvent('download'), page.keyboard.press('Enter')]);
     assert.equal(n3.suggestedFilename(), 'n3.bin.fseal');
     // A click is not proof the save finished ("requested", not saved): the same question now asks whether it saved.
-    await page.waitForFunction(() => document.getElementById('seal-more-ask')?.textContent === 'You started a download of n3.bin.fseal. Did it save?' && document.activeElement?.textContent === 'I saved it');
-    assert.deepEqual(await panel.locator('.button.primary').allInnerTexts(), ['I saved it'], 'one primary while the question is open');
-    // The file is kept, but the receipt message is not (a one-time key cannot make another): the question turns to it.
-    await page.keyboard.press('Enter'); // "I saved it"
-    await page.waitForFunction(() => document.getElementById('seal-more-ask')?.textContent === "You haven't kept the receipt message. Copy it first?" && document.activeElement?.textContent === 'Copy message');
-    assert.deepEqual(await page.locator('.confirm-box .button.primary').allInnerTexts(), ['Copy message']);
-    assert.equal(await panel.locator('.button.primary').count(), 1, 'one primary on screen: the question\'s Copy message only');
-    assert.equal(await page.locator('.confirm-box').getByRole('button', { name: 'I saved it' }).count(), 0, 'no receipt download yet, so nothing to confirm');
+    // Focus stays on Download (now "Download again"), so a second Enter never discards or confirms anything.
+    await page.waitForFunction(() => document.getElementById('seal-more-ask')?.textContent === "You started a download of n3.bin.fseal. Did it save? The receipt message isn't saved yet." && document.activeElement?.textContent === 'Download again');
+    assert.deepEqual(await panel.locator('.button.primary').allInnerTexts(), ['Download again'], 'one primary while the question is open');
     await page.locator('.confirm-box').getByRole('button', { name: 'Keep it' }).click(); // visible "Keep it" = Escape
     await page.waitForFunction(() => !document.getElementById('seal-more-ask') && document.activeElement?.textContent === 'Seal more files');
     await page.getByRole('button', { name: 'Seal more files' }).click();
     await page.keyboard.press('Escape'); // and Escape does the same
     await page.waitForFunction(() => !document.getElementById('seal-more-ask') && document.activeElement?.textContent === 'Seal more files');
-    assert.equal(await page.evaluate(() => { const e = new Event('beforeunload', { cancelable: true }); window.dispatchEvent(e); return e.defaultPrevented; }), true, 'an unkept receipt still warns before reload');
+    assert.equal(await page.evaluate(() => { const e = new Event('beforeunload', { cancelable: true }); window.dispatchEvent(e); return e.defaultPrevented; }), true, 'a requested download and an unkept receipt still warn before reload');
     // Download receipt is a click too: a status, no question, and it still counts as not saved.
     await Promise.all([page.waitForEvent('download'), page.getByRole('button', { name: 'Download receipt' }).click()]);
-    assert.equal(await page.locator('.handoff .download-status').innerText(), 'Download started: n3.bin.receipt.txt. Check your Downloads folder.');
+    assert.equal(await page.locator('.handoff .download-status').last().innerText(), 'Download started: n3.bin.receipt.txt. Check your Downloads folder.');
     assert.equal(await page.locator('#seal-more-ask').count(), 0, 'no question after the receipt download');
     await page.getByRole('button', { name: 'Seal more files' }).click();
-    assert.equal(await page.locator('#seal-more-ask').innerText(), 'You started a download of n3.bin.receipt.txt. Did it save?', 'a receipt download click alone does not count');
-    // m1: with the clipboard denied, a started receipt download can be confirmed right in the question, which then goes on.
+    assert.equal(await page.locator('#seal-more-ask').innerText(), "You started a download of n3.bin.fseal. Did it save? The receipt message isn't saved yet.", 'a receipt download click alone does not count');
+    // m1: with the clipboard denied, the user's "I saved it" covers both and Seal more files goes on.
     await page.locator('.confirm-box').getByRole('button', { name: 'I saved it' }).click();
     await page.waitForFunction(() => document.activeElement?.id === 'seal-what-title');
     assert.equal(await panel.locator('.seal-file-list').count(), 0, 'the selection is cleared');
@@ -1348,13 +1345,21 @@ try {
     await page.getByText('Copied. Paste it into an email or message to the person who will keep it.').waitFor();
     await page.getByRole('button', { name: 'Seal more files' }).click(); // the copied receipt is kept; the file is only requested
     assert.equal(await page.locator('#seal-more-ask').innerText(), 'You started a download of kept.bin.fseal. Did it save?', 'asked once, about the file only');
-    await page.locator('.confirm-box').getByRole('button', { name: 'I saved it' }).click();
-    await page.waitForFunction(() => document.activeElement?.id === 'seal-what-title'); // nothing else to ask: it goes on
+    await page.keyboard.press('Escape');
+    // The sign-in gate takes "I saved it" for a download started here; then nothing is unsaved and nothing is asked.
+    await page.goto(`${url}#/login`);
+    await page.getByText('You started a download of kept.bin.fseal. Did it save?').waitFor();
+    await page.locator('.auth-output-warning').getByRole('button', { name: 'I saved it' }).click();
+    await page.waitForFunction(() => !document.querySelector('.auth-output-warning'));
+    await page.goto(`${url}#/app/protect`); await page.waitForSelector('#handover-text');
+    assert.equal(await page.locator('.handoff .download-status').count(), 0, 'confirmed: no "Download started" status left');
+    await page.getByRole('button', { name: 'Seal more files' }).click(); // file confirmed, receipt copied: no question
+    await page.waitForFunction(() => document.activeElement?.id === 'seal-what-title');
     await page.locator('#protect-file').setInputFiles({ name: 'kept2.bin', mimeType: 'application/octet-stream', buffer: Buffer.from(`kept2 ${Date.now()}`) });
     await page.getByRole('button', { name: 'Seal this file' }).click();
     await page.waitForSelector('#handover-text', { timeout: 60000 });
     await page.getByRole('button', { name: 'Seal more files' }).click();
-    assert.equal(await page.locator('#seal-more-ask').innerText(), "You haven't downloaded kept2.bin.fseal. Download it first?");
+    assert.equal(await page.locator('#seal-more-ask').innerText(), "You haven't downloaded kept2.bin.fseal. Download it first? The receipt message isn't saved yet.");
     await page.locator('.confirm-box').getByRole('button', { name: 'Discard it' }).click(); // Discard it clears
     await page.waitForFunction(() => document.activeElement?.id === 'seal-what-title');
     assert.equal(await page.locator('#handover-text').count(), 0);
@@ -1375,8 +1380,7 @@ try {
     await page.evaluate(() => window.__releaseCopy());
     await page.waitForTimeout(300);
     await page.getByRole('button', { name: 'Seal more files' }).click();
-    await page.locator('.confirm-box').getByRole('button', { name: 'I saved it' }).click(); // the file; the question turns to the receipt
-    assert.equal(await page.locator('#seal-more-ask').innerText(), "You haven't kept the receipt message. Copy it first?", "A's late copy did not mark C's receipt kept");
+    assert.equal(await page.locator('#seal-more-ask').innerText(), "You started a download of copy-c.bin.fseal. Did it save? The receipt message isn't saved yet.", "A's late copy did not mark C's receipt kept");
     await page.getByRole('button', { name: 'Discard it' }).click();
     await page.waitForFunction(() => document.activeElement?.id === 'seal-what-title');
 
@@ -1394,7 +1398,7 @@ try {
     await cancelledDownload.cancel();
     await page.getByText('Download started: cancelled.bin.fseal. Check your Downloads folder.').waitFor();
     await page.getByRole('button', { name: 'Seal more files' }).click();
-    assert.equal(await page.locator('#seal-more-ask').innerText(), 'You started a download of cancelled.bin.fseal. Did it save?', 'an unconfirmed download still asks');
+    assert.equal(await page.locator('#seal-more-ask').innerText(), "You started a download of cancelled.bin.fseal. Did it save? The receipt message isn't saved yet.", 'an unconfirmed download still asks');
     await page.keyboard.press('Escape');
     assert.equal(await page.evaluate(() => { const e = new Event('beforeunload', { cancelable: true }); window.dispatchEvent(e); return e.defaultPrevented; }), true, 'a requested download still warns before reload');
     await page.goto(`${url}#/login`);
@@ -1448,20 +1452,18 @@ try {
     await page.waitForSelector('#manifest-handover-text', { timeout: 10000 }).catch(() => assert.fail('M2: the unsaved list lost its handoff after #/login'));
     assert.equal(await page.locator('.handoff-step-head code').first().innerText(), listName, 'the same list is back');
     await page.getByRole('button', { name: 'Seal more files' }).click();
-    assert.match(await page.locator('#seal-more-ask').innerText(), /^You haven't downloaded hashwing-\d{8}-\d{6}\.manifest\.fseal\. Download it first\?$/);
+    assert.match(await page.locator('#seal-more-ask').innerText(), /^You haven't downloaded hashwing-\d{8}-\d{6}\.manifest\.fseal\. Download it first\? The receipt message isn't saved yet\.$/);
     await page.keyboard.press('Escape');
-    // A kept list with an unkept receipt message still asks, and still counts as unsaved work.
+    // A requested list download asks nothing; it still is not saved, so Seal more files asks once and it still counts as unsaved work.
     await Promise.all([page.waitForEvent('download'), page.getByRole('button', { name: 'Download sealed list' }).click()]);
     assert.match(await page.locator('.handoff .download-status').innerText(), /^Download started: hashwing-\d{8}-\d{6}\.manifest\.fseal\. Check your Downloads folder\.$/);
+    assert.equal(await page.locator('#seal-more-ask').count(), 0, 'list: no question after Download');
     assert.deepEqual(await panel.locator('.button.primary').allInnerTexts(), ['Copy message'], 'list: Copy message is next after Download');
     await page.getByRole('button', { name: 'Seal more files' }).click();
-    assert.match(await page.locator('#seal-more-ask').innerText(), /^You started a download of hashwing-\d{8}-\d{6}\.manifest\.fseal\. Did it save\?$/);
-    await page.locator('.confirm-box').getByRole('button', { name: 'I saved it' }).click();
-    await page.waitForFunction(() => document.getElementById('seal-more-ask')?.textContent === "You haven't kept the receipt message. Copy it first?");
-    assert.equal(await page.evaluate(() => document.activeElement?.textContent), 'Copy message');
-    assert.deepEqual(await panel.locator('.button.primary').allInnerTexts(), ['Copy message'], 'list: one primary while the receipt question is open');
-    assert.equal(await panel.locator('.confirm-box .button.primary').count(), 1);
-    assert.equal(await page.evaluate(() => { const e = new Event('beforeunload', { cancelable: true }); window.dispatchEvent(e); return e.defaultPrevented; }), true, 'the list\'s unkept receipt still warns before reload');
+    assert.match(await page.locator('#seal-more-ask').innerText(), /^You started a download of hashwing-\d{8}-\d{6}\.manifest\.fseal\. Did it save\? The receipt message isn't saved yet\.$/);
+    assert.equal(await page.evaluate(() => document.activeElement?.textContent), 'Download again');
+    assert.deepEqual(await panel.locator('.button.primary').allInnerTexts(), ['Download again'], 'list: one primary while the question is open');
+    assert.equal(await page.evaluate(() => { const e = new Event('beforeunload', { cancelable: true }); window.dispatchEvent(e); return e.defaultPrevented; }), true, 'the list\'s requested download still warns before reload');
     await page.getByRole('button', { name: 'Discard it' }).click();
     await page.waitForFunction(() => document.activeElement?.id === 'seal-what-title');
     assert.equal(await page.locator('.seal-total').count(), 0);
