@@ -55,14 +55,17 @@ and `COGNITO_CLIENT_ID` (`<UserPoolClientId>`). Without both, every signed-in re
 There is no self sign-up. `custom:org_id` (immutable) and `custom:role` (`admin` or `pilot`) are set by an
 operator with `tools/registry_onboard.py`, never by the app or the invitee. Not yet run against real Cognito.
 
-1. Add the company's org id (1 to 64 letters, digits, `_` or `-`) to `tools/registry_orgs.json` and commit it. The script
-   refuses any org not listed there, and names the closest listed id when it looks like a typo.
+1. Add the company's org id (1 to 64 letters, digits, `_` or `-`) to the production allow-list, a JSON file
+   `{"orgs": [...]}` that you keep **outside this public repository** (with the owner's other private config), and pass
+   it with `--orgs <path>`. The script refuses any org not listed there, names the closest listed id when it looks like
+   a typo, and refuses a list inside the repository except with `--dry-run`. `tools/registry_orgs.demo.json` holds
+   example ids only (`example-company-a`, `example-company-b`) for dry runs and demos; never add a customer to it.
 2. Check the request, then create the first admin. `--role admin` must be typed together with `--first-admin`;
    without `--role` the role is `pilot`:
 
    ```sh
-   python3 tools/registry_onboard.py invite --pool-id <UserPoolId> --org <org> --email <email> --role admin --first-admin --dry-run
-   python3 tools/registry_onboard.py invite --pool-id <UserPoolId> --org <org> --email <email> --role admin --first-admin
+   python3 tools/registry_onboard.py invite --pool-id <UserPoolId> --orgs <path> --org <org> --email <email> --role admin --first-admin --dry-run
+   python3 tools/registry_onboard.py invite --pool-id <UserPoolId> --orgs <path> --org <org> --email <email> --role admin --first-admin
    ```
 
    A later admin uses `--confirm-additional-admin` instead. The script cannot see whether the company already has

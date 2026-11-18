@@ -102,7 +102,7 @@ export const NOT_IN_LIST = 'Not in the list'; // the one name for extra files (E
 const STATUS = { match: 'Matches', 'bytes-differ': 'Bytes differ', missing: 'Missing', 'not-in-manifest': NOT_IN_LIST };
 
 /**
- * OWNER DECISION 1 (open; provisional strict choice, coordinator 2026-11-18). true: green "Verified" needs a key on
+ * OWNER DECISION 1 (decided by the owner 2026-11-18: keep strict). true: green "Verified" needs a key on
  * this device's trusted list, so complete files from an unpinned, replaced or one-time key read
  * "Files match · signer not confirmed". false: complete files read "Verified" whatever the key (the key trust line
  * still qualifies it). This is the one switch; nothing else reads the decision.
