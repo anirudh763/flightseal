@@ -65,7 +65,7 @@ The budget email only warns. Nothing stops requests or spend until you act. Pick
    This has not been tested. The one way back known to work is to destroy and deploy again, which also deletes the
    table.
 2. **Remove everything:** follow "Destroy" below with `npx cdk destroy HashWingRegistry`. The table and the user
-   pool are deleted with the stack.
+   pool are deleted with the stack (dev stage only; a `stage=prod` stack keeps them, see "Destroy").
 
 Then check Cost Explorer for which line grew: API Gateway requests, Lambda, DynamoDB or logs (see the abuse
 scenario in [COST.md](COST.md)). Do not add a WAF: it has a fixed monthly fee.
@@ -76,7 +76,9 @@ scenario in [COST.md](COST.md)). Do not add a WAF: it has a fixed monthly fee.
 cd infra && npx cdk destroy HashWingRegistry
 ```
 
-The table, log group and user pool use `RemovalPolicy.DESTROY`, so they go with the stack. Then check, in us-east-1:
+In the dev stage the table, log group and user pool use `RemovalPolicy.DESTROY`, so they go with the stack. A
+`stage=prod` stack uses `RemovalPolicy.RETAIN`: they stay after `cdk destroy` and keep billing (storage and PITR)
+until deleted by hand, and the table and user pool need deletion protection turned off first. Then check, in us-east-1:
 
 ```sh
 aws cloudformation describe-stacks --stack-name HashWingRegistry          # expect: does not exist
