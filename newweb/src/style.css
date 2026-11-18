@@ -1205,7 +1205,6 @@ input[type=datetime-local] { width: 100%; max-width: 320px; min-width: 0; min-he
 /* The comparison keeps its columns only in a container at least 720px wide (EXPERIENCE.md "Width rules"). */
 .compare-wrap { container-type: inline-size; }
 .compare-table { width: 100%; }
-.compare-table .hash-cell { white-space: nowrap; }
 .compare-table .hash-cell code { margin-right: 8px; }
 .copy-hash { min-height: 44px; }
 .compare-summaries { display: none; margin: 0; padding: 0; list-style: none; }
@@ -1220,3 +1219,12 @@ input[type=datetime-local] { width: 100%; max-width: 320px; min-width: 0; min-he
   .compare-summaries { display: block; }
 }
 .field-hint a, .verify-check .field-hint a { text-decoration: underline; text-underline-offset: 2px; }
+.verify-check .panel-body > .button.primary { justify-self: start; width: auto; }
+.compare-table td, .compare-table th { overflow-wrap: normal; }
+.compare-table td:first-child { min-width: 16ch; overflow-wrap: break-word; }
+.compare-table td:nth-child(2), .compare-table th:nth-child(2) { white-space: nowrap; text-align: right; }
+.compare-table .hash-cell { display: flex; align-items: center; gap: 8px; white-space: nowrap; }
+.compare-table .hash-cell code { margin: 0; }
+.verify-advanced { margin: 0 0 16px; }
+.verify-files { display: grid; gap: 16px; min-width: 0; }
+.verify-files[hidden] { display: none; }

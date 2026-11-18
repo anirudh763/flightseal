@@ -47,7 +47,7 @@ export function CompareTable({ rows, label }) {
         <td className="wrap">{row.name}{row.note}</td>
         <td className="mono-values">{bytes(row)}</td>
         <td><StatusChip status={row.status} />{row.extra}</td>
-        <td className="hash-cell"><code>{row.sha256.slice(0, 4)}…{row.sha256.slice(-4)}</code>{copyButton(row)}</td>
+        <td><span className="hash-cell"><code>{row.sha256.slice(0, 4)}…{row.sha256.slice(-4)}</code>{copyButton(row)}</span></td>
       </tr>)}</tbody>
     </table>
     <ul className="compare-summaries" aria-label={label}>{rows.map((row) => <li key={row.key}>

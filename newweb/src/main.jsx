@@ -1760,7 +1760,7 @@ function App() {
       {__REGISTRY_URL__ && screen === 'verify' && shownVerifyMode === 'files' && shareToken && <RegistryBoundary><ShareRecordPanel token={shareToken} /></RegistryBoundary>}
       {!linkChoice && screen === 'verify' && route.params.has('share') && <p className="inline-notice">This copy of HashWing can't open HashWing share links. Check the files instead.</p>}
       {/* Always mounted (hidden elsewhere), so a running check of large files survives a visit to another page. */}
-      <div className="screen verify-layout" hidden={screen !== 'verify' || shownVerifyMode !== 'files'}>
+      <div className="screen verify-files" hidden={screen !== 'verify' || shownVerifyMode !== 'files'}>
         <section className="panel verify-check" aria-labelledby="check-title"><div className="panel-head"><ShieldCheck aria-hidden="true" size={18} /><h2 id="check-title">Check files</h2></div><div className="panel-body">
           <label className="field-label" htmlFor="check-file">Sealed file or list <span>(.fseal)</span></label>
           <input id="check-file" type="file" accept=".fseal,application/octet-stream" aria-invalid={fieldError('check-file') ? 'true' : undefined} aria-describedby={fieldError('check-file') ? 'check-file-error' : undefined} onChange={(e) => pickCheckFile(e.target.files?.[0] || null)} />
