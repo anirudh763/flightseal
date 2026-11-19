@@ -225,10 +225,11 @@ try {
   settings.on('pageerror', (error) => runtimeErrors.push(`settings: ${error}`));
   const fingerprintOf = (hex) => createHash('sha256').update(Buffer.from(hex, 'hex')).digest('hex');
   const grouped = (hex) => hex.match(/.{4}/g).join(' ');
-  const addCompany = async (name, fingerprint, source) => {
+  const addCompany = async (name, fingerprint, source, { tick = true } = {}) => {
     await settings.locator('#tc-name').fill(name);
     await settings.locator('#tc-fingerprint').fill(fingerprint);
     if (source) await settings.getByLabel(source, { exact: true }).check();
+    await settings.locator('#tc-confirmed').setChecked(tick);
     await settings.getByRole('button', { name: 'Add company' }).click();
   };
   // Reports sit behind the verdict's one "Download report" disclosure; every one starts with the headline's Result line.
@@ -245,8 +246,16 @@ try {
     await settings.goto(`${url}#/app/settings`);
     await settings.waitForFunction(() => document.querySelector('.commandbar h1')?.textContent === 'Settings');
     await settings.locator('.trusted-companies-details > summary').click();
+    assert.equal(await settings.locator('#tc-confirmed').isChecked(), false, 'the box starts unticked');
+    await settings.locator('#tc-confirmed').check();
+    await settings.getByLabel('other', { exact: true }).check();
+    assert.equal(await settings.locator('#tc-confirmed').isChecked(), false, 'changing the channel clears the tick');
     await addCompany('Acme Survey', 'ab'.repeat(32), '');
     assert.match(await settings.getByRole('alert').innerText(), /Choose where you got this fingerprint/);
+    // R34: the "I confirmed this myself" box is required; unticked, nothing is saved and the alert names the box.
+    await addCompany('Acme Survey', 'ab'.repeat(32), 'company website you already knew', { tick: false });
+    assert.equal(await settings.getByRole('alert').innerText(), 'Tick the box to confirm you checked this fingerprint yourself.');
+    assert.equal(await settings.locator('.company-list').count(), 0, 'nothing saved without the tick');
     await addCompany('Acme Survey', 'zz', 'company website you already knew');
     assert.match(await settings.getByRole('alert').innerText(), /64 hexadecimal digits/);
     await addCompany('Acme Survey', 'ab'.repeat(32), 'company website you already knew');
@@ -259,7 +268,8 @@ try {
     await settings.getByRole('button', { name: 'Replace key' }).click();
     const list = await settings.locator('.company-list').innerText();
     assert.match(list, new RegExp(grouped(sender)));
-    assert.match(list, /Added from contract or invoice/);
+    assert.match(list, /Added from contract or invoice on \d{4}-\d{2}-\d{2} · confirmed by you/);
+    assert.equal(await settings.locator('#tc-confirmed').isChecked(), false, 'the box is cleared after a save');
     await addCompany('Old Co', 'cd'.repeat(32), 'other');
     await settings.getByRole('button', { name: 'Mark as compromised: Old Co' }).click();
     await settings.locator('.confirm-box').getByRole('button', { name: 'Mark as compromised' }).click();
@@ -270,6 +280,13 @@ try {
     assert.match(history, /Old Co[\s\S]*Marked compromised on \d{4}-\d{2}-\d{2}/);
     // Removing a company keeps its compromised record, so that key can't come back and Remove is hidden for it.
     assert.equal(await settings.getByRole('button', { name: 'Remove: Old Co' }).count(), 0, 'no Remove for a name with only compromised records');
+    // R35: the compromised mark survives a page reload.
+    await settings.reload();
+    await settings.waitForFunction(() => document.querySelector('.commandbar h1')?.textContent === 'Settings');
+    await settings.locator('.trusted-companies-details > summary').click();
+    await settings.locator('.trusted-companies details > summary', { hasText: 'Key history' }).click();
+    assert.match(await settings.locator('.company-history').innerText(), /Old Co[\s\S]*Marked compromised on \d{4}-\d{2}-\d{2}/, 'after reload');
+    assert.doesNotMatch(await settings.locator('.company-list').innerText(), /Old Co/);
     await addCompany('Old Co', 'cd'.repeat(32), 'other');
     assert.equal(await settings.getByRole('alert').innerText(), 'This key was marked as compromised, so it can’t be added again. Ask the company for a new key.');
     await addCompany('Temp Co', 'ef'.repeat(32), 'other');
@@ -348,18 +365,23 @@ try {
     await pin('name').fill('Unit A');
     assert.equal(await pinButton.isEnabled(), false, 'a source is required');
     await pin('source').selectOption('phone');
+    assert.equal(await pinButton.isEnabled(), false, 'the confirmation tick is required (R34)');
+    await pin('confirmed').check();
     await pinButton.click();
     // The previous check marked this key compromised, so it cannot be pinned again under another name.
     assert.match(await page.locator('[aria-labelledby="check-title"] .trusted-key-controls [role=status]').innerText(), /marked as compromised, so it can’t be added again/);
     const firstKey = 'cd'.repeat(32);
     await page.locator('#check-key').fill(firstKey);
+    await page.waitForFunction(() => document.querySelector('#check-key-pin-confirmed')?.checked === false, null, { timeout: 3000 }).catch(() => assert.fail('a new key clears the tick'));
     await pin('name').fill('Unit A');
     await pin('source').selectOption('phone');
+    await pin('confirmed').check();
     await pinButton.click();
     assert.match(await page.locator('[aria-labelledby="check-title"] .trusted-key-controls [role=status]').innerText(), /Saved local pin Unit A/);
     await page.locator('#check-key').fill('ab'.repeat(32));
     await pin('name').fill('Unit A');
     await pin('source').selectOption('phone');
+    await pin('confirmed').check();
     await pinButton.click();
     const box = page.locator('[aria-labelledby="check-title"] .trusted-key-controls .confirm-box');
     assert.match(await box.innerText(), new RegExp(`Key changed for “Unit A” \\(old fingerprint ${grouped(fingerprintOf(firstKey))}\\)`));
@@ -382,7 +404,7 @@ try {
     // A pin from before this guard (or written by hand) must still never make the weak key "trusted".
     await page.evaluate(({ fp }) => {
       const store = JSON.parse(localStorage.getItem('flightseal_trusted_keys_v1') || '[]');
-      store.push({ name: 'Weak Co', publicKey: '', fingerprint: fp, source: 'website', addedAt: '', status: 'active' });
+      store.push({ name: 'Weak Co', publicKey: '', fingerprint: fp, source: 'website', addedAt: '', status: 'active', confirmedAt: '2026-11-19T00:00:00.000Z' });
       localStorage.setItem('flightseal_trusted_keys_v1', JSON.stringify(store));
     }, { fp: weakFp });
     const forge = (message) => message.replace(/key=[0-9a-f]{64} sig=[0-9a-f]{128}/, `key=${weakKey} sig=${weakSig}`).replace(/Public key: [0-9a-f]{64}/, `Public key: ${weakKey}`);
@@ -504,6 +526,7 @@ try {
       await admin.locator('#tc-name').fill('Late Co');
       await admin.locator('#tc-fingerprint').fill(fingerprintOf(publicKey));
       await admin.getByLabel('contract or invoice', { exact: true }).check();
+      await admin.locator('#tc-confirmed').check();
       await admin.getByRole('button', { name: 'Add company' }).click();
       await admin.getByRole('button', { name: 'Mark as compromised: Late Co' }).waitFor();
       await checker.goto(`${url}#/app/verify`);
@@ -525,7 +548,14 @@ try {
       assert.equal(JSON.parse((await save('Download JSON')).toString('utf8')).keyTrust.status, 'compromised');
       const pdf = await save('Download PDF');
       assert.equal(pdf.subarray(0, 5).toString(), '%PDF-');
-      assert.match((await pdfText(pdf)).replace(/\s+/g, ' '), /Key trust: Signed by a key you marked as compromised: Late Co\./, 'PDF key trust line');
+      const pdfWords = (await pdfText(pdf)).replace(/\s+/g, ' ');
+      assert.match(pdfWords, /Key trust: Signed by a key you marked as compromised: Late Co\./, 'PDF key trust line');
+      // R75: the seal time is earlier than the mark, yet nothing says the signature came before (or after) the compromise.
+      const near = /\b(before|after|predat\w*|prior to)\b\W+(?:\w+\W+){0,3}compromis|compromis\w*\W+(?:\w+\W+){0,3}(before|after|predat\w*|prior to)\b/i;
+      assert.equal(await checker.locator('#verdict-heading').innerText(), 'Signed by a key marked compromised');
+      assert.doesNotMatch(await checker.locator('main').innerText(), near, 'screen');
+      for (const name of ['Download text report', 'Download Markdown report', 'Download JSON']) assert.doesNotMatch((await save(name)).toString('utf8'), near, name);
+      assert.doesNotMatch(pdfWords, near, 'PDF');
       rmSync(big);
     } finally { await ctx.close(); }
   });
