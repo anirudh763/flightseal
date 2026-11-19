@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
-  BYTES_DIFFER, composeNote, landingLine, manifestReport, parseLandingLine, parseNote, parseSealedLine, reportedInterval,
+  BYTES_DIFFER, applyRegistryRecord, composeNote, landingLine, manifestReport, parseLandingLine, parseNote, parseSealedLine, reportedInterval,
   timeFields, toIsoFromLocal, trustLine,
 } from '../src/recipient-trust.mjs';
 import { SOURCES } from '../src/trusted-keys.mjs';
@@ -249,4 +249,92 @@ test('R75: a compromised key with an earlier seal time reads compromised, and no
   }
   assert.match('signed before the compromise', near, 'the guard regex catches the wording it forbids');
   assert.match('compromised after it was sealed', near);
+});
+
+// AC-37 (design §7.1): the share link's registry record, applied after verdict(). It can only lower a result.
+const REC = { head: 'a'.repeat(64), count: 3, key_fingerprint: 'b'.repeat(64), received_at: '2026-11-17T10:00:00Z' };
+const RCPT = { head: 'a'.repeat(64), count: '3', fingerprint: 'b'.repeat(64) };
+const ITEM = (status) => ({ id: 1, name: 'a', bytes: 1, sha256: 'a'.repeat(64), note: '', status, local: status === 'missing' ? null : 0 });
+const RESULTS = {
+  verified: verdict({ signed: true, trust: { status: 'trusted', entry: { name: 'Acme', source: 'phone' } }, items: [ITEM('match')] }),
+  compromised: verdict({ signed: true, trust: { status: 'compromised', entry: { name: 'Acme' } }, items: [ITEM('match')] }),
+  'not-verified': verdict({ signed: false, reason: 'bad' }),
+  company: verdict({ signed: true, trust: { status: 'trusted', entry: { name: 'X' } }, company: { name: 'Acme', matches: false } }),
+  differ: verdict({ signed: true, trust: { status: 'trusted', entry: { name: 'Acme' } }, items: [ITEM('bytes-differ')] }),
+  'differ-or-missing': verdict({ signed: true, trust: { status: 'trusted', entry: { name: 'Acme' } }, items: [{ ...ITEM('missing'), name: '' }], extras: [{ name: 'b' }] }),
+  incomplete: verdict({ signed: true, trust: { status: 'trusted', entry: { name: 'Acme' } }, items: [ITEM('missing')] }),
+  'not-in-list': verdict({ signed: true, trust: { status: 'trusted', entry: { name: 'Acme' } }, items: [ITEM('match')], extras: [{ name: 'b' }] }),
+  'signer-not-confirmed': verdict({ signed: true, trust: { status: 'untrusted' }, items: [ITEM('match')] }),
+};
+const MISMATCHES = { head: { ...REC, head: 'c'.repeat(64) }, count: { ...REC, count: 4 }, key: { ...REC, key_fingerprint: 'd'.repeat(64) } };
+
+test('applyRegistryRecord: never raises any verdict, for every record outcome', () => {
+  for (const [key, result] of Object.entries(RESULTS)) assert.equal(result.key, key === 'company' ? 'not-verified' : key, `fixture ${key}`);
+  const rank = { ok: 2, warn: 1, bad: 0 };
+  const outcomes = { match: [REC, RCPT], unavailable: [null, RCPT], 'no receipt': [REC, null], ...Object.fromEntries(Object.entries(MISMATCHES).map(([f, r]) => [`${f} differs`, [r, RCPT]])) };
+  for (const [key, result] of Object.entries(RESULTS)) {
+    for (const [name, [record, receipt]] of Object.entries(outcomes)) {
+      const out = applyRegistryRecord(result, record, receipt);
+      assert.ok(rank[out.result.kind] <= rank[result.kind], `${key} × ${name}: ${result.kind} → ${out.result.kind}`);
+      if (key !== 'verified' || name === 'match' || name === 'unavailable') assert.equal(out.result, result, `${key} × ${name}: unchanged`);
+      assert.equal(out.line.label, 'Registry record');
+    }
+  }
+});
+
+test('applyRegistryRecord: a match keeps the headline; each field mismatch lowers Verified; unavailable is information only', () => {
+  const match = applyRegistryRecord(RESULTS.verified, REC, RCPT);
+  assert.equal(match.result.headline, 'Verified');
+  assert.deepEqual(match.line, { label: 'Registry record', value: "Matches the registry's record", kind: 'ok' });
+  assert.equal(applyRegistryRecord(RESULTS.verified, REC, { ...RCPT, count: '03' }).result.headline, 'Verified', 'count compared as a number');
+  assert.equal(applyRegistryRecord(RESULTS.verified, { ...REC, count: 2 ** 53 - 1 }, { ...RCPT, count: '18446744073709551615' }).result.key, 'link-mismatch', 'large counts never round to equal');
+  for (const [field, record] of Object.entries(MISMATCHES)) {
+    const out = applyRegistryRecord(RESULTS.verified, record, RCPT);
+    assert.equal(out.result.key, 'link-mismatch', field);
+    assert.equal(out.result.headline, "Files match · doesn't match the link", field);
+    assert.equal(out.result.kind, 'warn', field);
+    assert.deepEqual(out.line, { label: 'Registry record', value: "Doesn't match the registry's record for this link", kind: 'warn' }, field);
+  }
+  assert.equal(applyRegistryRecord(RESULTS.verified, REC, null).result.key, 'link-mismatch', 'no receipt line is a mismatch, never a match');
+  const gone = applyRegistryRecord(RESULTS.verified, null, RCPT);
+  assert.equal(gone.result, RESULTS.verified);
+  assert.deepEqual(gone.line, { label: 'Registry record', value: "This link was withdrawn or couldn't be checked", kind: 'info' });
+  const kept = applyRegistryRecord(RESULTS.compromised, MISMATCHES.head, RCPT);
+  assert.equal(kept.result.headline, 'Signed by a key marked compromised');
+  assert.equal(kept.line.kind, 'warn');
+});
+
+test('applyRegistryRecord: a match line is green only under Verified; beside any other headline it is information', () => {
+  assert.equal(applyRegistryRecord(RESULTS.verified, REC, RCPT).line.kind, 'ok');
+  for (const [key, result] of Object.entries(RESULTS)) {
+    if (key === 'verified') continue;
+    const out = applyRegistryRecord(result, REC, RCPT);
+    assert.equal(out.line.value, "Matches the registry's record", key);
+    assert.equal(out.line.kind, 'info', key);
+  }
+});
+
+test('manifestReport with the record step: the Result line equals the lowered headline in every format, with the record line', () => {
+  const args = { sealedName: 'x.manifest.fseal', sources: SOURCES, keyFingerprint: 'b'.repeat(64), head: 'a'.repeat(64), trust: { status: 'trusted', entry: { name: 'Acme', source: 'phone' } }, items: [ITEM('match')], extras: [], locals: [{ name: 'a', sha256: 'a'.repeat(64) }] };
+  const cases = [
+    [REC, 'Verified', "Matches the registry's record"],
+    [MISMATCHES.head, "Files match · doesn't match the link", "Doesn't match the registry's record for this link"],
+    [null, 'Verified', "This link was withdrawn or couldn't be checked"],
+  ];
+  for (const [record, headline, value] of cases) {
+    const screen = applyRegistryRecord(verdict({ signed: true, trust: args.trust, items: args.items, extras: [] }), record, RCPT).result;
+    assert.equal(screen.headline, headline);
+    const r = manifestReport({ ...args, applyRecord: (result) => applyRegistryRecord(result, record, RCPT) });
+    const result = `Result: ${headline}. ${screen.sentence}`;
+    const line = `Registry record: ${value}`;
+    assert.deepEqual(r.text.split('\n').slice(0, 2), [result, line]);
+    assert.ok(r.markdown.startsWith(`${result}\n\n${line}\n\n`));
+    assert.deepEqual(r.pdfLines.slice(0, 2), [result, line]);
+    const json = JSON.parse(r.json);
+    assert.equal(json.result, result);
+    assert.equal(json.verdict.headline, headline);
+    assert.equal(json.record.value, value);
+  }
+  const plain = manifestReport(args);
+  assert.ok(!plain.text.includes('Registry record') && !('record' in JSON.parse(plain.json)), 'no link, no record line');
 });

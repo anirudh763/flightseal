@@ -40,6 +40,15 @@ export function backoffDelay(n, random = Math.random) {
   return d / 2 + random() * (d / 2);
 }
 
+// A Retry-After header (delay in seconds, or an HTTP date) as ms from nowMs, capped at 15 min; null when absent,
+// unparseable, zero or past.
+export function retryAfterDelay(value, nowMs) {
+  if (value == null) return null;
+  const s = String(value).trim();
+  const ms = /^\d+$/.test(s) ? Number(s) * 1000 : Date.parse(s) - nowMs;
+  return Number.isFinite(ms) && ms > 0 ? Math.min(BACKOFF_CAP, ms) : null;
+}
+
 const STATE_LABELS = { sealed_local: 'Sealed locally', registering: 'Registering', waiting_for_connection: 'Waiting for connection',
   registered: 'Registered', needs_attention: 'Needs attention' };
 export const stateLabel = (state) => STATE_LABELS[state] ?? 'Unknown';
@@ -214,6 +223,7 @@ export async function openOutbox({
   let spill = null; // rows whose persistent write failed
   let gen = 0, closed = false, needsSignIn = false, badToken = null;
   let timer = null, inflight = null, running = null, rerun = false, force = false, prefetched = false, wakeAt = Infinity;
+  let notBefore = 0; // a server Retry-After: no unforced send for the whole queue before this time
   let serverEpoch = null; // read once per open, before anything is dispatched
   const listeners = new Set();
 
@@ -296,10 +306,13 @@ export async function openOutbox({
         || (res.status === 429 && res.code !== 'quota_exceeded')
         || res.status === 408 || res.status >= 500) {
       const attempts = (row.attempts || 0) + 1;
+      const hinted = (res.status === 429 && res.code !== 'quota_exceeded') || res.status === 503
+        ? retryAfterDelay(res.retryAfter, t) : null;
+      if (hinted) notBefore = Math.max(notBefore, t + hinted);
       if (attempts >= MAX_ATTEMPTS) {
         await save({ ...row, attempts, state: 'needs_attention', reason: 'attempts_exhausted', next_attempt_at: undefined, updated_at: t });
       } else {
-        await save({ ...row, attempts, state: 'waiting_for_connection', reason: res.code, next_attempt_at: t + backoffDelay(attempts, random), updated_at: t });
+        await save({ ...row, attempts, state: 'waiting_for_connection', reason: res.code, next_attempt_at: t + (hinted ?? backoffDelay(attempts, random)), updated_at: t });
       }
       if (g === gen) emit();
       return STOP;
@@ -372,6 +385,8 @@ export async function openOutbox({
     clearTimer();
     wakeAt = Infinity;
     if (!forced && !online.isOnline()) return;
+    if (forced) notBefore = 0; // an explicit retry sends now; the server may ask to wait again
+    else if (now() < notBefore) { schedule(notBefore - now()); return; }
     if (serverEpoch === null) {
       await checkEpoch(g);
       if (g !== gen) return;

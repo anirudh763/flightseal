@@ -7,7 +7,7 @@ import { WEAK_KEY_MESSAGE, blobSource, checkReceipts, decodeReceipts, parseHex, 
 import { mutateFile, readIndexedRecords, recordAt } from '../../docs/records.mjs';
 import { parseLocation, parseRouteHash, productHref, routeHash, safeReturnRoute } from './routes.mjs';
 import {
-  announceLocalLogout, authenticateLocalProfile, clearLocalSession, createLocalProfile, getLocalSession,
+  announceLocalLogout, authenticateLocalProfile, clearLocalSession, createLocalProfile, dropRevokedLocalSession, getLocalSession,
   listLocalProfiles, readWorkspaceContext, removeLocalProfile, removeWorkspaceContext, saveWorkspaceContext, setLocalSession,
   subscribeToLocalLogout,
 } from './local-auth.mjs';
@@ -31,7 +31,7 @@ import { LinkStep, VERIFY_OPENS_ON, VerifyChooser } from './verify-start.jsx';
 import { createEncryptedProfileBackup, inspectEncryptedProfileBackup, commitBackupRestore, previewBackupRestore } from './profile-backup.mjs';
 import { createSyncProvider } from './sync-provider.mjs';
 import { CONFIRM_MESSAGE, PINS_CHANGED, SOURCES, addTrustedCompany, fingerprintHex, formatFingerprint, listTrustedHistory, listTrustedKeys, markCompromised, pinTrustedKey, removeTrustedKey, trustForKey } from './trusted-keys.mjs';
-import { RegistryBarLink, RegistryBoundary, RegistryPanel, RegistryShareNote, RegistrySigningLine, SealedOnDevice, ShareRecordPanel, getRegistry, useJobsRegistry, registryLogout, registryScope, registrySealStart, registrySealed, useRegistryTimeField, useRegistryUnsent } from './registry-ui.jsx';
+import { RegistryBarLink, RegistryBoundary, RegistryPanel, RegistryShareNote, RegistrySigningLine, SealedOnDevice, ShareRecordPanel, getRegistry, useRegistryRecordCheck, useShareRecord, useJobsRegistry, registryLogout, registryScope, registrySealStart, registrySealed, useRegistryTimeField, useRegistryUnsent } from './registry-ui.jsx';
 import { CompanyKeysPanel } from './company-keys.jsx';
 import { BYTES_DIFFER, TRUST_KIND, composeNote, countsLine, offersOriginal, pairFiles, verdict, landingLine, manifestReport, parseLandingLine, parseNote, parseSealedLine, timeFields, toIsoFromLocal, trustLine } from './recipient-trust.mjs';
 
@@ -1404,6 +1404,16 @@ function App() {
     setRoute(parseRouteHash('#/'));
   };
   useEffect(() => subscribeToLocalLogout(logoutFromAnotherTab), [activeSession?.userId, route.kind]);
+  // A tab that was frozen or hidden when its profile logged out elsewhere may have missed the message.
+  useEffect(() => {
+    const check = () => {
+      if (document.visibilityState === 'hidden' || activeSession?.kind !== 'account') return;
+      if (dropRevokedLocalSession()) logoutFromAnotherTab({ type: 'logout', userId: activeSession.userId });
+    };
+    const events = ['pageshow', 'focus', 'resume', 'visibilitychange'];
+    for (const name of events) (name === 'pageshow' || name === 'focus' ? window : document).addEventListener(name, check);
+    return () => { for (const name of events) (name === 'pageshow' || name === 'focus' ? window : document).removeEventListener(name, check); };
+  }, [activeSession?.userId, route.kind]);
 
   const finishAuthentication = async (profile, requestedRoute, importGuest, submittedEpoch) => {
     if (submittedEpoch !== authEpochRef.current) return { error: 'This sign-in was canceled because the local session changed. Try again.' };
@@ -1507,6 +1517,9 @@ function App() {
   }, [result, pinsVersion]);
   const protectView = !!result && result === protectResult;
   const registryLine = __REGISTRY_URL__ ? useRegistryTimeField(protectView ? result.receipts : '', { fromLink: !!shareToken }) : null; // eslint-disable-line react-hooks/rules-of-hooks -- a build-time constant
+  // AC-37: one share fetch feeds the record panel and both Verify paths; the check compares it with the receipt line.
+  const shareView = __REGISTRY_URL__ ? useShareRecord(shareToken) : null; // eslint-disable-line react-hooks/rules-of-hooks -- a build-time constant
+  const recordCheck = __REGISTRY_URL__ ? useRegistryRecordCheck(shareView, checkIsList ? parseHandover(checkText).receipts : protectView ? result.receipts : '') : null; // eslint-disable-line react-hooks/rules-of-hooks -- a build-time constant
   const resultTimes = protectView && protectTimes?.for === result ? timeFields({ landing: protectTimes.landing, landingSigned: false, sealedAt: protectTimes.sealedAt, registry: registryLine }) : null;
   // A just-sealed result is the sender's own key, so the recipient's trust line is not shown for it.
   const shownTrust = keyTrust?.for === result && !(protectView && !resultTimes) ? keyTrust : null;
@@ -1535,11 +1548,14 @@ function App() {
   ] : [];
   // Shown once the trust lookup and the rebuild of the original have finished, so the headline never changes under focus.
   const smallMismatch = protectView && companyMismatch?.for === result ? companyMismatch.name : '';
-  const smallReady = protectView && resultTimes && (!smallSigned || keyTrust?.for === result) && (!smallSigned || !smallCovered || restored != null || smallMismatch);
+  const smallReady = protectView && resultTimes && (!smallSigned || keyTrust?.for === result) && (!smallSigned || !smallCovered || restored != null || smallMismatch) && !(__REGISTRY_URL__ && recordCheck?.pending);
   // A failing check's sentence comes from the failure only: the chain's description is used when the chain itself
   // failed, never when it passed (it would read "intact" under "Not verified", e.g. a receipt made for other bytes).
   const smallReason = (protectView && [result.native.status !== 'intact' && result.native.description, result.indexed.problem && result.indexed.description].find(Boolean)) || "The sealed file doesn't match the receipt message.";
-  const smallVerdict = smallReady ? verdict({ company: smallMismatch ? { name: smallMismatch, matches: false } : null, signed: smallSigned, reason: smallReason, trust: keyTrust?.for === result ? keyTrust : null, items: smallRows, coverage: { covered: result.receiptCoverage.covered, total: result.native.records } }) : null;
+  const smallChecked = smallReady ? verdict({ company: smallMismatch ? { name: smallMismatch, matches: false } : null, signed: smallSigned, reason: smallReason, trust: keyTrust?.for === result ? keyTrust : null, items: smallRows, coverage: { covered: result.receiptCoverage.covered, total: result.native.records } }) : null;
+  // A share link's record can only lower the result (AC-37); every line and report below reads the lowered one.
+  const smallRecord = __REGISTRY_URL__ && smallChecked && recordCheck?.apply ? recordCheck.apply(smallChecked) : null;
+  const smallVerdict = smallRecord ? smallRecord.result : smallChecked;
   const smallLines = smallVerdict ? [
     ['Signature', smallChecks.length && smallChecks.every((check) => check === 'ok') ? 'Valid' : 'Not valid'],
     ...(smallMismatch ? [['Trusted company', `Not signed by ${smallMismatch}'s key`]] : []),
@@ -1548,13 +1564,14 @@ function App() {
     ['Files', <span className="mono-values">{countsLine(smallRows, [])}</span>],
     ['Receipt coverage', smallCovered ? 'All items covered' : `Receipts cover ${fmtBig(result.receiptCoverage.covered)} of ${fmtBig(result.native.records)} records`],
     ...(registryLine ? [['Registry', registryLine.value]] : []),
+    ...(smallRecord ? [recordRow(smallRecord.line)] : []),
   ] : [];
   // Verify's small-file reports: each starts with the headline's Result line (and the company check, when one was chosen).
-  const smallResultLines = smallVerdict ? [`Result: ${smallVerdict.headline}. ${smallVerdict.sentence}`, ...(smallMismatch ? [`Trusted company: not signed by ${smallMismatch}'s key`] : [])] : [];
+  const smallResultLines = smallVerdict ? [`Result: ${smallVerdict.headline}. ${smallVerdict.sentence}`, ...(smallMismatch ? [`Trusted company: not signed by ${smallMismatch}'s key`] : []), ...(smallRecord ? [`${smallRecord.line.label}: ${smallRecord.line.value}`] : [])] : [];
   const smallDownloads = smallVerdict ? [
     ['Download text report', () => download('hashwing-check-report.txt', `${smallResultLines.join('\n')}\n${reportText}`)],
     ['Download Markdown report', () => download('hashwing-check-report.md', `${smallResultLines.join('\n\n')}\n\n${reportMarkdown}`, 'text/markdown;charset=utf-8')],
-    ['Download JSON', () => download('hashwing-check-report.json', JSON.stringify({ result: smallResultLines[0], verdict: { key: smallVerdict.key, headline: smallVerdict.headline, sentence: smallVerdict.sentence }, trustedCompany: smallMismatch ? { name: smallMismatch, signed: false } : null, ...JSON.parse(reportJson) }, null, 2), 'application/json')],
+    ['Download JSON', () => download('hashwing-check-report.json', JSON.stringify({ result: smallResultLines[0], verdict: { key: smallVerdict.key, headline: smallVerdict.headline, sentence: smallVerdict.sentence }, trustedCompany: smallMismatch ? { name: smallMismatch, signed: false } : null, ...JSON.parse(reportJson), ...(smallRecord ? { record: smallRecord.line } : {}) }, null, 2), 'application/json')],
   ] : [];
   const comparisonLine = (item) => `${item.subject} ${item.name}: ${item.matches ? 'Matches' : `${BYTES_DIFFER.title}. ${BYTES_DIFFER.text}`} (SHA-256 ${item.sha256}; sealed ${item.expected})`;
   const selectedTelemetryPoint = selectedTelemetryIndex == null ? null : telemetry[selectedTelemetryIndex];
@@ -1927,8 +1944,8 @@ function App() {
       </section>}
 
       {screen === 'verify' && linkChoice && <VerifyChooser mode={shownVerifyMode} onChange={chooseVerifyMode} />}
-      {__REGISTRY_URL__ && screen === 'verify' && shownVerifyMode === 'link' && <LinkStep initial={route.params.get('share') ? location.href : ''} opened={!!shareToken} onOpen={setLinkToken} onCheckFiles={() => { chooseVerifyMode('files'); setOperationStatus('Link record kept for comparison'); requestAnimationFrame(() => document.getElementById('check-file')?.focus()); }}><RegistryBoundary><ShareRecordPanel token={shareToken} /></RegistryBoundary></LinkStep>}
-      {__REGISTRY_URL__ && screen === 'verify' && shownVerifyMode === 'files' && shareToken && <RegistryBoundary><ShareRecordPanel token={shareToken} /></RegistryBoundary>}
+      {__REGISTRY_URL__ && screen === 'verify' && shownVerifyMode === 'link' && <LinkStep initial={route.params.get('share') ? location.href : ''} opened={!!shareToken} onOpen={setLinkToken} onCheckFiles={() => { chooseVerifyMode('files'); setOperationStatus('Link record kept for comparison'); requestAnimationFrame(() => document.getElementById('check-file')?.focus()); }}><RegistryBoundary><ShareRecordPanel view={shareView} /></RegistryBoundary></LinkStep>}
+      {__REGISTRY_URL__ && screen === 'verify' && shownVerifyMode === 'files' && shareToken && <RegistryBoundary><ShareRecordPanel view={shareView} /></RegistryBoundary>}
       {!linkChoice && screen === 'verify' && route.params.has('share') && <p className="inline-notice">This copy of HashWing can't open HashWing share links. Check the files instead.</p>}
       {/* Always mounted (hidden elsewhere), so a running check of large files survives a visit to another page. */}
       <div className="screen verify-files" hidden={screen !== 'verify' || shownVerifyMode !== 'files'}>
@@ -1943,10 +1960,11 @@ function App() {
           {checkPins.length ? <><label className="field-label" htmlFor="check-company">Trusted company <span>(optional)</span></label>
             <select id="check-company" value={checkCompany} onChange={(e) => { invalidateCheck(); setProtectResult(null); setRestored(null); setCheckCompany(e.target.value); }}><option value="">Not chosen: look the key up in my list</option>{checkPins.map((pin) => <option key={pin.name} value={pin.name}>{pin.name}</option>)}</select></>
             : <><p className="field-label">Trusted company</p><p className="field-hint">No trusted companies yet. <a href={workspaceHref('help')} onClick={(e) => { if (e.button !== 0 || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return; e.preventDefault(); navigate('help'); }}>Add one on Trust</a></p></>}
-          {checkIsList ? <ManifestCheck sealed={checkFile} text={checkText} fromLink={!!shareToken} anchor={listKey.anchor} keyConflict={listKey.keyConflict} company={checkCompany} companyFingerprint={companyFingerprint()} options={checkOptions} fieldError={checkError} onFieldError={(field, message) => field ? failCheck(field, message) : setCheckError(null)} trustHref={workspaceHref('help')} onTrust={toTrust} onActiveChange={setManifestCheckActive} /> : <>
+          {checkIsList ? <ManifestCheck sealed={checkFile} text={checkText} fromLink={!!shareToken} recordCheck={recordCheck} anchor={listKey.anchor} keyConflict={listKey.keyConflict} company={checkCompany} companyFingerprint={companyFingerprint()} options={checkOptions} fieldError={checkError} onFieldError={(field, message) => field ? failCheck(field, message) : setCheckError(null)} trustHref={workspaceHref('help')} onTrust={toTrust} onActiveChange={setManifestCheckActive} /> : <>
             {checkOptions}
             <button className="button primary" type="button" disabled={!checkFile || !checkText.trim() || !!busy} aria-describedby={checkWhy ? 'check-why' : undefined} onClick={runProtectCheck}>Check files</button>
             {checkWhy && <p id="check-why" className="field-hint">{checkWhy}</p>}
+            {__REGISTRY_URL__ && protectView && !smallVerdict && recordCheck?.pending && <p className="field-hint" role="status">Checking the share link…</p>}
             {smallVerdict && <VerdictBlock result={smallVerdict} focusKey={result} trustHref={workspaceHref('help')} onTrust={toTrust} downloads={smallDownloads} lines={smallLines}>
               <TimeFields fields={resultTimes} />
               {smallRows.length > 0 && <CompareTable rows={smallRows} label="File compared with the receipt" />}
@@ -2053,6 +2071,9 @@ const compromisedFingerprints = (history) => new Set(history.filter((entry) => e
 // Trusted companies for Verify's select: every active company not marked compromised (Trust stores fingerprints).
 const readCompanies = () => { try { const burned = compromisedFingerprints(listTrustedHistory()); return listTrustedKeys().filter((pin) => pin.fingerprint && !burned.has(pin.fingerprint)); } catch { return []; } };
 const readActivePins = () => { try { const burned = compromisedFingerprints(listTrustedHistory()); return listTrustedKeys().filter((pin) => pin.publicKey && !burned.has(pin.fingerprint)); } catch { return []; } };
+// AC-37's "Registry record" verdict line, styled like the key trust line (ok, warn, or plain for information).
+// The information line has no status shape, so it never looks like the round "ok" shape of a match.
+const recordRow = (line) => [line.label, <p className={`trust-line ${line.kind}`}>{line.kind !== 'info' && <span className="status-shape" aria-hidden="true" />}{line.value}</p>];
 function TrustLine({ trust }) {
   return <p className={`trust-line ${TRUST_KIND[trust.status] || 'warn'}`}><span className="status-shape" aria-hidden="true" />{trustLine(trust, SOURCES)}</p>;
 }
@@ -2390,20 +2411,32 @@ function ResultPanel({ result, resultTitle, reportText, onDownloadText, onDownlo
 
 // Large files (fingerprint only): originals stay on the operator's storage. State here never enters
 // runVerify/result, so "Save current run" cannot upload it, and no file bytes, names or digests leave this device.
-async function hashAll(files, signal, onProgress) {
+const couldNotRead = (file) => `Could not read ${file.name}. It may have been moved, changed or deleted after you chose it. Choose the files again and retry.`;
+// kept (optional): a WeakMap of File -> digest, filled as each file finishes, so Seal after a Cancel does not hash those again.
+async function hashAll(files, signal, onProgress, kept) {
   const out = [];
   for (let index = 0; index < files.length; index++) {
     const file = files[index];
     const started = performance.now();
+    const prior = kept?.get(file);
+    if (prior) { // shown as done (the next file starting) before any await, so the label never names it as being sealed
+      const last = index === files.length - 1;
+      onProgress({ index: last ? index : index + 1, done: last ? file.size : 0, started });
+      try { await file.slice(0, 1).arrayBuffer(); } catch { kept.delete(file); throw new Error(couldNotRead(file)); }
+      out.push(prior);
+      continue;
+    }
     onProgress({ index, done: 0, started });
     let r;
     try { r = await hashFile(file, { signal, onProgress: (done) => onProgress({ index, done, started }) }); }
     catch (cause) {
       if (cause?.name === 'AbortError') throw cause;
-      if (/could not be read|NotReadable|the file changed or became unreadable/i.test(cause?.message || '')) throw new Error(`Could not read ${file.name}. It may have been moved, changed or deleted after you chose it. Choose the files again and retry.`);
+      if (/could not be read|NotReadable|the file changed or became unreadable/i.test(cause?.message || '')) throw new Error(couldNotRead(file));
       throw new Error(`${cause?.message || 'Hashing failed'}. Reload the page and try again.`);
     }
-    out.push({ name: file.name, bytes: r.bytes, sha256: r.sha256 });
+    const entry = { name: file.name, bytes: r.bytes, sha256: r.sha256 };
+    kept?.set(file, entry);
+    out.push(entry);
   }
   return out;
 }
@@ -2447,6 +2480,7 @@ function ManifestSeal({ hidden, output, setOutput, carry, common, jobRef, signin
   const [copyStatus, setCopyStatus] = useState('');
   const [error, setError] = useState('');
   const controllerRef = useRef(null);
+  const keptRef = useRef(new WeakMap()); // digests finished before a Cancel; a new selection is new File objects
   const headingRef = useRef(null);
   const carriedRef = useRef(false);
   useEffect(() => () => controllerRef.current?.abort(), []);
@@ -2488,7 +2522,8 @@ function ManifestSeal({ hidden, output, setOutput, carry, common, jobRef, signin
     const scope = jobScope; // the job belongs to whoever was signed in when sealing began
     setPhase('hashing');
     try {
-      const hashed = await hashAll(files, controller.signal, setProgress);
+      const hashed = await hashAll(files, controller.signal, setProgress, keptRef.current);
+      keptRef.current = new WeakMap(); // kept only across a Cancel or a failure: a later Seal reads the files again
       const items = itemsFor(hashed);
       const payload = encodeManifest({ salt: newSalt(), items });
       setPhase('sealing'); setProgress(null);
@@ -2516,7 +2551,7 @@ function ManifestSeal({ hidden, output, setOutput, carry, common, jobRef, signin
       setMessage(`Sealed ${items.length} file${items.length === 1 ? '' : 's'}.`);
       onSealed?.(sealed.receipts, `${items.length} file${items.length === 1 ? '' : 's'}`, sealStart);
     } catch (cause) {
-      if (cause?.name === 'AbortError') { setMessage('Sealing cancelled. Your files are still chosen.'); requestAnimationFrame(() => document.getElementById('manifest-seal')?.focus()); }
+      if (cause?.name === 'AbortError') { setMessage(`Sealing cancelled. Your files are still chosen.${files.some((file) => keptRef.current.has(file)) ? ' Files already read are reused; choose them again to re-read everything.' : ''}`); requestAnimationFrame(() => document.getElementById('manifest-seal')?.focus()); }
       else fail(cause?.message || 'Something went wrong. Press Seal the list again.');
     } finally { if (controllerRef.current === controller) { controllerRef.current = null; setPhase(''); setProgress(null); } }
   };
@@ -2586,7 +2621,7 @@ function ItemNote({ note, showLanding }) {
 }
 // The list (manifest) half of Verify's files form. The sealed file, message and key come from the form in App;
 // this holds the originals, the hashing and the result, and stays mounted so a running check survives navigation.
-function ManifestCheck({ sealed, text, fromLink, anchor, keyConflict, company, companyFingerprint, options, fieldError, onFieldError, trustHref, onTrust, onActiveChange }) {
+function ManifestCheck({ sealed, text, fromLink, recordCheck, anchor, keyConflict, company, companyFingerprint, options, fieldError, onFieldError, trustHref, onTrust, onActiveChange }) {
   const [locals, setLocals] = useState([]);
   const [progress, setProgress] = useState(null);
   const [running, setRunning] = useState(false);
@@ -2602,10 +2637,11 @@ function ManifestCheck({ sealed, text, fromLink, anchor, keyConflict, company, c
   useEffect(() => { if (firstRender.current) { firstRender.current = false; return; } clear(); }, [sealed, text, anchor, company]); // stale results go when an input changes
   const pinsVersion = usePinsVersion();
   const pinsRef = useRef(pinsVersion); pinsRef.current = pinsVersion;
-  const reportFor = (trust, o, registry = null) => manifestReport({ sealedName: o.sealedName, trust, sources: SOURCES, keyFingerprint: o.fingerprint, head: o.head, sealedAt: o.sealedAt, items: o.comparison.items, extras: o.comparison.extras, locals: o.locals, registry });
+  const reportFor = (trust, o, registry = null) => manifestReport({ sealedName: o.sealedName, trust, sources: SOURCES, keyFingerprint: o.fingerprint, head: o.head, sealedAt: o.sealedAt, items: o.comparison.items, extras: o.comparison.extras, locals: o.locals, registry, applyRecord: __REGISTRY_URL__ ? recordCheck?.apply : null });
   const registryLine = __REGISTRY_URL__ ? useRegistryTimeField(outcome?.verified ? parseHandover(text).receipts : '', { fromLink }) : null; // eslint-disable-line react-hooks/rules-of-hooks -- a build-time constant
   // The registry row follows this device's outbox live (queued, then Registered), so the report is rebuilt with it.
-  const report = useMemo(() => (outcome?.verified && registryLine ? reportFor(outcome.trust, outcome, registryLine) : outcome?.report), [outcome, registryLine?.value, registryLine?.basis]); // eslint-disable-line react-hooks/exhaustive-deps
+  // Rebuilt with the share record too, so a report never says Verified under a lowered headline (AC-37).
+  const report = useMemo(() => (outcome?.verified && (registryLine || recordCheck) ? reportFor(outcome.trust, outcome, registryLine) : outcome?.report), [outcome, registryLine?.value, registryLine?.basis, recordCheck]); // eslint-disable-line react-hooks/exhaustive-deps
   // A pin may change (here, on Trust or in another tab) while files hash or after the result shows. Each result
   // records the pins version its trust was read at; re-read it whenever that is older than the current version.
   useEffect(() => {
@@ -2649,7 +2685,12 @@ function ManifestCheck({ sealed, text, fromLink, anchor, keyConflict, company, c
     } finally { if (controllerRef.current === controller) { controllerRef.current = null; setRunning(false); setProgress(null); } }
   };
   const comparison = outcome?.verified ? outcome.comparison : null;
-  const result = outcome && (outcome.verified ? verdict({ signed: true, trust: outcome.trust, items: comparison.items, extras: comparison.extras }) : (outcome.mismatch ? verdict({ signed: true, trust: outcome.trust, company: { name: outcome.mismatch, matches: false } }) : verdict({ signed: false, reason: outcome.reason })));
+  const checked = outcome && (outcome.verified ? verdict({ signed: true, trust: outcome.trust, items: comparison.items, extras: comparison.extras }) : (outcome.mismatch ? verdict({ signed: true, trust: outcome.trust, company: { name: outcome.mismatch, matches: false } }) : verdict({ signed: false, reason: outcome.reason })));
+  // AC-37: shown only once a share link's record has settled; it can only lower the result.
+  const recordPending = __REGISTRY_URL__ && recordCheck?.pending;
+  const applied = __REGISTRY_URL__ && checked && recordCheck?.apply ? recordCheck.apply(checked) : null;
+  const result = recordPending ? null : applied ? applied.result : checked;
+  const recordLines = applied ? [recordRow(applied.line)] : [];
   const downloads = outcome?.verified ? [
     ['Download text report', () => download(`${outcome.base}.check-report.txt`, report.text)],
     ['Download Markdown report', () => download(`${outcome.base}.check-report.md`, report.markdown, 'text/markdown;charset=utf-8')],
@@ -2678,8 +2719,9 @@ function ManifestCheck({ sealed, text, fromLink, anchor, keyConflict, company, c
     <button className="button primary" type="button" disabled={!sealed || !text.trim() || running} aria-describedby={!text.trim() ? 'check-why' : undefined} onClick={run}>Check files</button>
     {!text.trim() && <p id="check-why" className="field-hint">Paste the receipt message</p>}
     {message && <p className="field-hint" role="status">{message}</p>}
+    {__REGISTRY_URL__ && outcome && recordPending && <p className="field-hint" role="status">Checking the share link…</p>}
     {result && <div className="manifest-outcome"><VerdictBlock result={result} focusKey={outcome.focus} trustHref={trustHref} onTrust={onTrust} downloads={outcome.verified ? downloads : []}
-      lines={outcome.mismatch ? [['Signature', 'Valid'], ['Trusted company', `Not signed by ${outcome.mismatch}'s key`], ...(TRUST_KIND[outcome.trust.status] === 'bad' ? [['Key trust', <TrustLine trust={outcome.trust} />]] : [])] : outcome.verified ? [['Signature', 'Valid'], ['Key trust', <TrustLine trust={outcome.trust} />], ['Files', <span className="mono-values">{countsLine(comparison.items, comparison.extras)}</span>], ['Receipt coverage', 'All items covered'], ...(registryLine ? [['Registry', registryLine.value]] : [])] : [['Signature', 'Not valid']]}>
+      lines={outcome.mismatch ? [['Signature', 'Valid'], ['Trusted company', `Not signed by ${outcome.mismatch}'s key`], ...(TRUST_KIND[outcome.trust.status] === 'bad' ? [['Key trust', <TrustLine trust={outcome.trust} />]] : []), ...recordLines] : outcome.verified ? [['Signature', 'Valid'], ['Key trust', <TrustLine trust={outcome.trust} />], ['Files', <span className="mono-values">{countsLine(comparison.items, comparison.extras)}</span>], ['Receipt coverage', 'All items covered'], ...(registryLine ? [['Registry', registryLine.value]] : []), ...recordLines] : [['Signature', 'Not valid'], ...recordLines]}>
       {outcome.verified && <>
         <TimeFields fields={report.fields} />
         <CompareTable rows={rows} label="Files compared with the list" />
@@ -2689,4 +2731,6 @@ function ManifestCheck({ sealed, text, fromLink, anchor, keyConflict, company, c
   </>;
 }
 
+// A tab restored (after a discard) with the sessionStorage of a profile that logged out meanwhile starts logged out.
+if (dropRevokedLocalSession() && __REGISTRY_URL__) registryLogout();
 createRoot(document.getElementById('root')).render(<App />);

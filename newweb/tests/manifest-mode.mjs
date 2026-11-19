@@ -2,7 +2,7 @@
 // missing and one extra; refuse without a trusted key; Cancel stops hashing; no request body carries file bytes;
 // axe 0 violations and no horizontal scroll at 320/768/1440. Run after `npm --prefix newweb run build`.
 import { createRequire } from 'node:module';
-import { mkdirSync, mkdtempSync, writeFileSync, readFileSync, rmSync, openSync, ftruncateSync, closeSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, writeFileSync, readFileSync, rmSync, openSync, ftruncateSync, closeSync, writeSync, utimesSync } from 'node:fs';
 import { createHash, randomBytes } from 'node:crypto';
 import { tmpdir } from 'node:os';
 import { join, resolve, dirname } from 'node:path';
@@ -218,6 +218,58 @@ try {
     assert.equal(await page.getByRole('button', { name: 'Seal the list', exact: true }).isEnabled(), true);
     assert.equal(await page.locator('#manifest-handover-text').count(), 0);
     rmSync(big);
+  });
+
+  await check('Cancel keeps the files already hashed: Seal again does not hash the first file twice', async () => {
+    const sparse = (name, size) => { const p = join(dir, name); const fd = openSync(p, 'w'); ftruncateSync(fd, size); closeSync(fd); return p; };
+    const zerosDigest = (size) => { const h = createHash('sha256'); const chunk = Buffer.alloc(64 * 2 ** 20); for (let n = 0; n < size; n += chunk.length) h.update(chunk); return h.digest(); };
+    const first = sparse('first.bin', 256 * 2 ** 20), second = sparse('second.bin', 2 ** 30);
+    await page.locator('#manifest-files').setInputFiles([first, second]);
+    await page.getByRole('button', { name: 'Seal the list', exact: true }).click();
+    await page.waitForFunction(() => Number(document.querySelector('#manifest-seal-progress-1')?.value) > 0, null, { timeout: 60000 });
+    await page.getByRole('button', { name: 'Cancel' }).click();
+    await page.waitForFunction(() => !document.querySelector('#manifest-seal-progress-1') && [...document.querySelectorAll('[role=status]')].some((n) => n.textContent === 'Sealing cancelled. Your files are still chosen. Files already read are reused; choose them again to re-read everything.'));
+    await page.evaluate(() => {
+      window.__sealLabels = [];
+      const note = () => { const label = document.querySelector('.seal-progress label[for="manifest-seal-progress"]'); if (label) window.__sealLabels.push(label.textContent); };
+      window.__sealObserver = new MutationObserver(note);
+      window.__sealObserver.observe(document.body, { subtree: true, childList: true, characterData: true });
+    });
+    await page.getByRole('button', { name: 'Seal the list', exact: true }).click();
+    await page.waitForSelector('#manifest-handover-text', { timeout: 120000 });
+    const labels = await page.evaluate(() => { window.__sealObserver.disconnect(); return window.__sealLabels; });
+    const sealedCount = await page.getByText('Sealed 2 files.', { exact: true }).count();
+    const [download] = await Promise.all([page.waitForEvent('download'), page.getByRole('button', { name: 'Download sealed list' }).click()]);
+    const listPath = join(dir, 'kept.manifest.fseal'); await download.saveAs(listPath);
+    await confirmedMore(); // clear the result first, so a failure here leaves the next checks a clean page
+    rmSync(first); rmSync(second);
+    assert.ok(labels.length > 0, 'the progress label was seen');
+    assert.ok(!labels.some((text) => text.startsWith('Sealing 1 of 2')), `the first file was hashed again: ${[...new Set(labels)].slice(0, 3).join(' | ')}`);
+    assert.equal(sealedCount, 1, 'the result reads 2 files');
+    const sealed = readFileSync(listPath);
+    const at = (digest) => Math.max(sealed.indexOf(digest), sealed.indexOf(Buffer.from(digest.toString('hex'))));
+    const [d1, d2] = [at(zerosDigest(256 * 2 ** 20)), at(zerosDigest(2 ** 30))];
+    assert.ok(d1 >= 0 && d2 > d1, `the first item's digest is the 256 MiB file's (${d1}, ${d2})`);
+  });
+
+  await check('a kept file changed on disk (new modified time) after Cancel is refused, not sealed with its old fingerprint', async () => {
+    const sparse = (name, size) => { const p = join(dir, name); const fd = openSync(p, 'w'); ftruncateSync(fd, size); closeSync(fd); return p; };
+    const first = sparse('edited-first.bin', 64 * 2 ** 20), second = sparse('edited-second.bin', 2 ** 30);
+    try {
+      await page.locator('#manifest-files').setInputFiles([first, second]);
+      await page.getByRole('button', { name: 'Seal the list', exact: true }).click();
+      await page.waitForFunction(() => Number(document.querySelector('#manifest-seal-progress-1')?.value) > 0, null, { timeout: 60000 });
+      await page.getByRole('button', { name: 'Cancel' }).click();
+      await page.waitForFunction(() => [...document.querySelectorAll('[role=status]')].some((n) => n.textContent === 'Sealing cancelled. Your files are still chosen. Files already read are reused; choose them again to re-read everything.'));
+      const fd = openSync(first, 'r+'); writeSync(fd, Buffer.from('edited'), 0, 6, 0); closeSync(fd); // same size, new bytes
+      const later = new Date(Date.now() + 60000); utimesSync(first, later, later);
+      await page.getByRole('button', { name: 'Seal the list', exact: true }).click();
+      await page.locator('#manifest-error').getByText('Could not read edited-first.bin.', { exact: false }).waitFor({ timeout: 30000 });
+      assert.equal(await page.locator('#manifest-handover-text').count(), 0, 'nothing was sealed');
+    } finally {
+      await page.locator('#manifest-files').setInputFiles([]); // clear the selection for the next checks
+      rmSync(first); rmSync(second);
+    }
   });
 
   // Trusted companies live in Settings; a second page in the same context shares this browser's local list.

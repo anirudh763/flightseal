@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
 import { createRegistryClient } from '../src/registry-client.mjs';
 import {
-  openOutbox, createMemoryStore, ROW_FIELDS, STATES, backoffDelay, registrationLabel, stateLabel, attentionMessage, MAX_ATTEMPTS, MAX_ACKS, MAX_QUEUE,
+  openOutbox, createMemoryStore, ROW_FIELDS, STATES, backoffDelay, retryAfterDelay, registrationLabel, stateLabel, attentionMessage, MAX_ATTEMPTS, MAX_ACKS, MAX_QUEUE,
 } from '../src/outbox.mjs';
 
 const b64 = (o) => Buffer.from(JSON.stringify(o)).toString('base64url');
@@ -581,6 +581,75 @@ test('a gateway throttle 429 (no registry error code) is retried later with the 
   const [r] = await ob.list();
   assert.equal(r.state, 'waiting_for_connection');
   assert.ok(r.next_attempt_at > h.t);
+  ob.close();
+});
+
+const withRetryAfter = (status, body, value) => new Response(JSON.stringify(body), { status, headers: { 'content-type': 'application/json', 'retry-after': value } });
+
+test('retryAfterDelay: seconds or an HTTP date, capped at 15 min; null when bad, zero or past', () => {
+  const t = 1_800_000_000_000;
+  assert.equal(retryAfterDelay('30', t), 30000);
+  assert.equal(retryAfterDelay(new Date(t + 120000).toUTCString(), t), 120000);
+  assert.equal(retryAfterDelay('86400', t), 900000);
+  for (const v of ['soon', '0', new Date(t - 5000).toUTCString(), '', null, undefined, '-5']) assert.equal(retryAfterDelay(v, t), null, String(v));
+});
+
+for (const [name, status, value, wait] of [
+  ['a 429 throttle with Retry-After: 30 waits at least 30 s', 429, '30', 30000],
+  ['a 503 with an HTTP-date Retry-After waits until that date', 503, 'date+120', 120000],
+  ['a Retry-After of a day is capped at 15 min', 429, '86400', 900000],
+  ['a bad Retry-After falls back to the usual backoff', 429, 'soon', backoffDelay(1, () => 0.5)],
+  ['a zero Retry-After falls back to the usual backoff', 429, '0', backoffDelay(1, () => 0.5)],
+  ['a past Retry-After date falls back to the usual backoff', 503, 'date-60', backoffDelay(1, () => 0.5)],
+]) {
+  test(name, async () => {
+    const h = harness();
+    const v = value.startsWith('date') ? new Date(h.t + Number(value.slice(4)) * 1000).toUTCString() : value;
+    h.replies.push(() => withRetryAfter(status, { message: 'slow down' }, v));
+    const ob = await h.open();
+    await ob.enqueue({ receipt: receipt(1) });
+    await settle();
+    const [r] = await ob.list();
+    assert.equal(r.state, 'waiting_for_connection');
+    assert.equal(r.attempts, 1);
+    assert.equal(r.next_attempt_at - h.t, wait);
+    ob.close();
+  });
+}
+
+test('a Retry-After wait holds the whole queue; retryNow() still sends at once', async () => {
+  const h = harness();
+  h.replies.push(() => withRetryAfter(429, { message: 'slow down' }, '30'));
+  const ob = await h.open();
+  await ob.enqueue({ receipt: receipt(1) });
+  await settle();
+  assert.equal(h.regs().length, 1);
+  h.t += 10000;
+  await ob.enqueue({ receipt: receipt(2) });
+  await settle();
+  assert.equal(h.regs().length, 1, 'nothing is sent before the wait ends');
+  assert.equal(h.timers.at(-1).ms, 20000, 'the queue wakes when the wait ends');
+  await ob.retryNow();
+  await settle();
+  assert.equal(h.regs().length, 3);
+  assert.deepEqual((await ob.list()).map((r) => r.state), ['registered', 'registered']);
+  ob.close();
+});
+
+test('a quota_exceeded 429 with Retry-After still needs attention, with no automatic retry', async () => {
+  const h = harness();
+  h.replies.push(() => withRetryAfter(429, { error: 'quota_exceeded' }, '30'));
+  const ob = await h.open();
+  await ob.enqueue({ receipt: receipt(1) });
+  await settle();
+  const [r] = await ob.list();
+  assert.equal(r.state, 'needs_attention');
+  assert.equal(r.reason, 'quota_exceeded');
+  assert.equal(r.next_attempt_at, undefined);
+  h.t += 1000;
+  await ob.enqueue({ receipt: receipt(2) });
+  await settle();
+  assert.equal(h.regs().length, 2, 'a quota answer starts no queue-wide wait');
   ob.close();
 });
 
