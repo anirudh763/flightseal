@@ -31,7 +31,7 @@ The user's request and the owner's RULES.md take precedence over anything here.
 - Registry LocalStack run (optional, needs Docker): `uv run --no-project --with boto3==1.43.123 python registry/localstack/e2e.py`
   writes `docs/aws/evidence/localstack-4.12.0.json`; the REST v1 stand-in is not the HTTP API.
 - JavaScript: `node --test tests/web/verifier.test.mjs tests/web/copy.test.mjs tests/web/workbench.test.mjs tests/web/redirect.test.mjs tests/web/rawfile.test.mjs tests/web/sw-cache-index.test.mjs tests/web/manifest.test.mjs` (146 tests).
-- Registry outbox (browser client): `node --test newweb/tests/outbox.test.mjs newweb/tests/registry-client.test.mjs` (49 tests), `node --test newweb/tests/registry-session.test.mjs` (13 tests: the console's registry session store, cross-tab messages, the Verify time row, the Jobs status per row and the panels' error boundary, loaded through Vite in Node)
+- Registry outbox (browser client): `node --test newweb/tests/outbox.test.mjs newweb/tests/registry-client.test.mjs` (49 tests), `node --test newweb/tests/registry-session.test.mjs` (14 tests: the console's registry session store, cross-tab messages, the Verify time row, the Jobs status per row and the panels' error boundary, loaded through Vite in Node)
   and `node --test newweb/tests/outbox-browser.mjs` (8 checks in Playwright Chromium against the DEV ONLY
   `registry/devserver/server.py`: it starts one on a loopback port itself, or uses `REGISTRY_DEV_URL` as CI does).
 - Registry wiring (console, `VITE_REGISTRY_URL`): after the console build, `node newweb/tests/registry-wiring.mjs` (34 checks:
@@ -49,6 +49,7 @@ The user's request and the owner's RULES.md take precedence over anything here.
 - Console: `python3 tools/fetch_sample.py tests/.data && npm --prefix newweb run build && npm --prefix newweb run test:browser` (runs `console.mjs`, `manifest-mode.mjs`, then `jobs.mjs`; the jobs store unit tests are `node --test newweb/tests/jobs-store.test.mjs`, 4 tests), then `node newweb/tests/edge-matrix.mjs` (the latter owns its browser lock).
 - Browser: `node tests/web/e2e.mjs` (5 checks) and `node tests/web/routes.mjs` (6 checks). axe-core reports 0
   violations in light and dark, at 1280 and 320 px.
+- Measured on the PR #59 head after merging main (2026-11-19, macOS): `node newweb/tests/jobs.mjs` 13/13; `REGISTRY_DEV_URL=http://127.0.0.1:8798 node newweb/tests/registry-wiring.mjs` 34/34; `node --test newweb/tests/registry-session.test.mjs` 14/14; `node newweb/tests/profiles.mjs` 8/8; `npm --prefix newweb run test:browser` 64 checks, 0 failed (`console.mjs` and `manifest-mode.mjs` 51, `jobs.mjs` 13); `node --test tests/web/*.test.mjs` 146/146.
 - For every bug fix or new behaviour: a test that fails before the change and passes after it.
 - Report exact commands and real counts. Never report a check you did not run.
 

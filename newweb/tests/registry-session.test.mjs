@@ -25,7 +25,7 @@ globalThis.BroadcastChannel = class { constructor(name) { this.name = name; this
 
 const vite = await createServer({ root: ROOT, configFile: false, logLevel: 'silent', appType: 'custom', server: { middlewareMode: true, hmr: false, ws: false }, define: { __REGISTRY_URL__: JSON.stringify(URL_) } });
 after(() => vite.close());
-const { RegistryBoundary, getRegistry, jobStatus, jobsStatusMap, registryTimeField } = await vite.ssrLoadModule('/src/registry-ui.jsx');
+const { RegistryBoundary, getRegistry, jobStatus, jobsStatusMap, registryLine, registryTimeField } = await vite.ssrLoadModule('/src/registry-ui.jsx');
 
 const b64 = (o) => Buffer.from(JSON.stringify(o)).toString('base64url');
 const tokenFor = (sub) => `${b64({ alg: 'none' })}.${b64({ org_id: 'orgA', sub, role: 'pilot' })}.sig`;
@@ -231,7 +231,7 @@ test('the Verify time row for each state of this device\'s outbox row', () => {
   assert.deepEqual(registryTimeField({ ...base, listed: false }, lines), notYet);
 });
 
-test('Jobs status for each outbox state, pending proofs and no record, matched on any receipt line of the message', () => {
+test('Jobs status for each outbox state, pending proofs and no record, matched on the receipt line sent to the registry', () => {
   const R = receipt(19), msg = `HashWing receipt for x\nPublic key: ${hex(64, 'b')}\n${R}\n\nKeep this message.`;
   const base = { owner: 'orgA/u', outbox: {}, listed: true, rows: [], pending: [], online: true };
   const of = (s) => jobStatus(jobsStatusMap(s), msg);
@@ -256,6 +256,17 @@ test('Jobs status for each outbox state, pending proofs and no record, matched o
   assert.match(none.line, /no registry record for this job under the current sign-in/);
   assert.match(of({ ...base, owner: null, outbox: null }).line, /^Sign in to the company registry/, 'signed out: never a stale Registered');
   assert.match(of({ ...base, listed: false }).line, /isn't open yet/);
+});
+
+test('a multi-line receipt message matches only the line the registry got (registryLine, shared with registrySealed)', () => {
+  const first = receipt(100), last = receipt(200);
+  const msg = `HashWing receipt for x\nPublic key: ${hex(64, 'b')}\n${first}\n${last}\n\nKeep this message.\nTo check the file, open x and paste this whole message.\n`;
+  assert.equal(registryLine(msg), last, 'the last receipt line, never the trailing prose');
+  assert.equal(registryLine(`${first}\n${last}\n`), last, 'a bare receipts file picks the same line');
+  const base = { owner: 'orgA/u', outbox: {}, listed: true, rows: [], pending: [], online: true };
+  const of = (r) => jobStatus(jobsStatusMap({ ...base, rows: [{ id: 'x', receipt: r, state: 'registered', disposition: 'active', label: 'Registered', received_at: '2026-11-17T10:00:05Z' }] }), msg);
+  assert.equal(of(last).label, 'Registered');
+  assert.deepEqual([of(first).label, of(first).group], ['Sealed locally', null], 'a record for an earlier line is not this job');
 });
 
 test('a registry panel that throws while rendering shows one notice instead of blanking the app', () => {

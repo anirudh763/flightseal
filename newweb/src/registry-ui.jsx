@@ -294,8 +294,12 @@ export function registryScope(scope) { getRegistry().setScope(scope).catch(() =>
 
 // Called by main.jsx after a seal passed its own check. Only the receipt line goes to the outbox.
 export function registrySealStart() { return getRegistry().sealStart(); }
+/** The one receipt line the registry gets: the last receipt line of a receipts file or a whole receipt message. Jobs matches on this too. */
+export function registryLine(receipts) {
+  return String(receipts || '').split('\n').map((line) => line.trim()).filter((line) => line.startsWith('fseal-receipt ')).pop();
+}
 export function registrySealed(receipts, name, start) {
-  const receipt = String(receipts || '').split('\n').map((line) => line.trim()).filter(Boolean).pop();
+  const receipt = registryLine(receipts);
   if (receipt) getRegistry().sealed(receipt, name, start || undefined).catch(() => {}); // a seal never waits on or fails because of the registry
 }
 // The "Registry acceptance" time row for a checked receipt message: this device's outbox row for one of its receipt
@@ -381,7 +385,7 @@ function chipOf(row) { // the outbox's own labels, verbatim
 }
 const utc = (iso) => String(iso || '').replace('T', ' ').replace(/Z$/, ' UTC');
 
-// Jobs (flag on): each job's status from this snapshot's outbox rows and pending proofs, matched on the receipt line.
+// Jobs (flag on): each job's status from this snapshot's outbox rows and pending proofs, matched on registryLine (the line the registry got).
 // No request. Labels are the outbox's own, as in the list below; no record reads "Sealed locally" and is in no filter.
 const JOB_FILTERS = [['waiting', 'Waiting to send'], ['registered', 'Registered'], ['problems', 'Needs attention']];
 const JOB_DETAIL = 'Registry status';
@@ -415,10 +419,7 @@ export function jobsStatusMap(s) {
       : s.listed ? 'This device has no registry record for this job under the current sign-in.' : "This device's registry list isn't open yet." };
   return { map, none };
 }
-export function jobStatus({ map, none }, receipt) {
-  for (const line of String(receipt || '').split('\n')) { const hit = map.get(line.trim()); if (hit) return hit; }
-  return none;
-}
+export function jobStatus({ map, none }, receipt) { return map.get(registryLine(receipt)) ?? none; }
 export function useJobsRegistry() {
   const [, s] = useRegistry();
   const statusOf = useMemo(() => { const m = jobsStatusMap(s); return (job) => jobStatus(m, job.receipt); }, [s]);
