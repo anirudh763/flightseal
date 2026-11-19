@@ -72,15 +72,30 @@ _GY = 4 * pow(5, P - 2, P) % P
 B = (_recover_x(_GY, 0), _GY, 1, _recover_x(_GY, 0) * _GY % P)
 
 
-def verify(pub, msg, sig):
-    """True only for a valid signature; any malformed input is False."""
-    if not (isinstance(pub, bytes) and isinstance(sig, bytes) and len(pub) == 32 and len(sig) == 64):
-        return False
+def _strong_point(pub):
+    """The decoded point, or None for a malformed, non-canonical or small-order key."""
+    if not isinstance(pub, bytes) or len(pub) != 32:
+        return None
     a = _decode(pub)
     if a is None:
-        return False
+        return None
     a8 = _mul(8, a)
     if a8[0] % P == 0 and (a8[1] - a8[2]) % P == 0:  # small-order key: [8]A is the identity, forges for any message
+        return None
+    return a
+
+
+def weak_key(pub):
+    """True for any public key that `verify` refuses outright: wrong length, non-canonical, off-curve or small order."""
+    return _strong_point(pub) is None
+
+
+def verify(pub, msg, sig):
+    """True only for a valid signature; any malformed input is False."""
+    if not (isinstance(sig, bytes) and len(sig) == 64):
+        return False
+    a = _strong_point(pub)
+    if a is None:
         return False
     s = int.from_bytes(sig[32:], "little")
     if s >= L:

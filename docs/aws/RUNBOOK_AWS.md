@@ -85,8 +85,9 @@ admin signs in, check both (never run yet): `GET /v1/keys` with their ID token i
 
 ### How pilots sign
 
-Option A, decided by the owner on 2026-11-18 (design PR #57, spine AD-4). Option B (per-pilot keys approved by an
-admin) is built later and stays off by default.
+Option A, decided by the owner on 2026-11-18 (design PR #57, spine AD-4), is the default. Option B (a pilot's own
+key, authorized by the company key) has its server half built and is off everywhere; see "Pilot keys (Option B)"
+below.
 
 - A company has one signing computer and one active key. An admin enrolls that key from the signing computer
   (the steps below). Its private key never leaves that computer.
@@ -104,6 +105,34 @@ and signs them in the browser only if the server's `message` is byte-equal to th
 the Python client is `registry/registry/enroll_challenge.py`); otherwise it signs nothing. It then posts
 `{public_key, nonce, signature}` (plus `confirm_replace` on replace) to `POST /v1/keys`. Only flag-on builds have
 this section; the public Pages build does not.
+
+### Pilot keys (Option B)
+
+Server half only: the browser screens (Trust pilot UI, Verify delegated path) are not built, so nothing on the
+recipient side honours an authorization yet. **Do not switch an org on without the owner's explicit yes** (design
+"Defaults taken 2026-11-19" #1): a stolen or retired pilot key can still read "Verified" to recipients until its
+authorization ends (at most 30 days, 14 by default), and an honest pilot-signed proof drops to "signer not
+confirmed" once it ends.
+
+- **Switch on:** set `PILOT_KEYS_ORGS` on the Lambda to a comma list of exact org ids (for example `orgA,orgB`; no
+  spaces, no `*`; an entry that isn't exactly an org id is ignored). The stack never sets it, so this is a manual
+  change on the function's environment; a later `cdk deploy` that updates the function probably removes it again
+  (not verified on AWS). The dev server takes
+  `--pilot-keys-orgs orgA` (local only).
+- **Switch off:** remove the org from the list (or the whole variable). The pilot routes answer `pilot_keys_off`,
+  pilot keys get `key_not_active` on register, and every stored pilot key, tombstone and `PILOT_COUNT` is kept, so
+  switching back on restores them as they were. While an org is off, retire also answers `pilot_keys_off`: to revoke a
+  pilot key then, use `POST /v1/keys/<fp>/compromised`.
+- **Enroll:** the pilot makes a key on their own device, the company computer signs an authorization for its public
+  key (confirm the full fingerprint with the pilot by phone or in person first), then the pilot calls
+  `GET /v1/pilot-keys/challenge` and `POST /v1/pilot-keys`. The authorization must be signed by the org's current
+  active company key.
+- **Renewal** is a new pilot key and a new authorization. An authorization is never extended and a fingerprint is
+  never enrolled twice.
+- **Expired pilot keys stay `active`** in `GET /v1/keys` and still count toward the 50-key cap until an admin
+  retires them (`POST /v1/pilot-keys/<fp>/retire`); they cannot register. Retire the keys of pilots who leave.
+- **Company key replaced or compromised:** pilot keys under the old key stop registering (their parent isn't
+  active). Nothing is rewritten; retire them to free their slots, then authorize new keys under the new company key.
 
 ## When the budget alert fires
 
@@ -201,9 +230,10 @@ only there. A source that is not the served table is refused, because its tombst
      --restore-id <restore id>
    ```
 
-   It copies every tombstone (withdrawals, deletions, key rotations and compromises, epoch bumps), re-applies it,
-   recomputes each org's active key, and writes `SYSTEM/RESTORE` (source, target, restore ID) last. If it fails (for example the source
-   cannot be read), no marker is written and the function stays closed. Fix the cause and run it again; it is safe
+   It copies every tombstone (withdrawals, deletions, key rotations, retirements and compromises, epoch bumps),
+   re-applies it (the most revoked key state wins), recomputes each org's active company key and its active pilot
+   key count (pilot keys keep their state, kind, parent and `not_after`), and writes `SYSTEM/RESTORE` (source, target, restore ID) last. If it fails (for example the source
+   cannot be read, or a tombstone and its key disagree on whether the key is a pilot key), no marker is written and the function stays closed. Fix the cause and run it again; it is safe
    to repeat.
 4. Check: a share you know was withdrawn returns 404; an active one returns 200.
 5. If the source table no longer exists, its tombstones are gone. Keep the function closed and decide by hand:

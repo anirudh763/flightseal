@@ -72,16 +72,17 @@ One table, string keys `PK`/`SK`:
 
 | Item | Holds |
 |---|---|
-| `ORG#o / KEY#<fp>` | key state (active, rotated, compromised), enrolled_at, enrolled_by (the enrolling admin's `sub`, copied from the key tombstone when a restore brings the key back, or the placeholder `restore` or `unknown` when none was recorded; never returned to a client), changed_at. `fp` is the SHA-256 of the raw 32-byte public key |
-| `ORG#o / ACTIVE_KEY` | the one active fingerprint (a conditional pointer that keeps "at most one active key" true under races) |
-| `ORG#o / CHAL#<nonce>` | sub and a 5-minute expiry; deleted when used |
+| `ORG#o / KEY#<fp>` | `kind` (`company` or `pilot`; missing means `company`), key state (active, rotated, retired, compromised; `retired` is for pilot keys only), enrolled_at, enrolled_by (the enrolling admin's `sub`, copied from the key tombstone when a restore brings the key back, or the placeholder `restore` or `unknown` when none was recorded; never returned to a client), changed_at. Pilot keys also hold `company_fp` (the fingerprint of the company key that authorized them) and `not_after` (epoch seconds). An item with `company_fp` or `not_after` is a pilot key whatever `kind` says. `fp` is the SHA-256 of the raw 32-byte public key |
+| `ORG#o / ACTIVE_KEY` | the one active company fingerprint (a conditional pointer that keeps "at most one active company key" true under races); never a pilot key |
+| `ORG#o / PILOT_COUNT` | `n`, the number of active pilot keys (cap 50), changed only inside the transactions that enroll, retire or compromise a pilot key |
+| `ORG#o / CHAL#<nonce>` | sub, `kind` (`company` or `pilot`; missing means `company`) and a 5-minute expiry; deleted when used |
 | `ORG#o / EPOCH`, `ENV#<id>` | the org epoch; envelopes with sub, epoch and expiry (default 7 days) |
 | `ORG#o / QUOTA#YYYYMM` | registrations this month (default limit 2000, `REG_QUOTA_PER_MONTH`) |
 | `ORG#o / REG#<rid>` | fp, head, count, received_at, state, up to 10 share hashes |
 | `ORG#o / IDEM#<key>` | payload hash, rid, received_at, expiry (`DEDUPE_SECONDS`, default 7 days) |
 | `SHARE#<sha256(token)> / SHARE` | org, rid, state, expiry (default 30 days, 7 offered, at most 30) |
 | `ORG#o / SIDEM#<key>` | share idempotency: rid, token hash, the share's expiry, and its own expiry (`DEDUPE_SECONDS`) |
-| `TOMB#<org>#<id> / TOMB` | a withdrawal, deletion, key-compromise or epoch record, never expired |
+| `TOMB#<org>#<id> / TOMB` | a withdrawal, deletion, key-state or epoch record, never expired. `kind` is the tombstone's own kind (`registration`, `share`, `key`, `epoch`), so a key tombstone stores the key's kind as `key_kind` (missing means `company`), plus `company_fp` and `not_after` for a pilot key |
 
 ### Never stored
 
@@ -96,6 +97,15 @@ receipt format (400) → signature (422) → envelope (422 `envelope_expired`, `
 only here does a lookup of an already committed registration happen, so a retry of a committed one gets its ack) →
 key state (403) → one transaction. The signature is checked before the envelope and before any existence lookup,
 so an unsigned request cannot learn whether a registration exists.
+
+The three pilot-key routes check the `PILOT_KEYS_ORGS` switch right after identity and role, before the body is
+parsed: an org not switched on gets 403 `pilot_keys_off` whatever it sends.
+
+A pilot key (see Pilot keys) registers only when its org is in `PILOT_KEYS_ORGS`, its state is `active`, its
+`not_after` is after the registry clock, and its parent company KEY item is `active`; anything else is 403
+`key_not_active`. These are read before the transaction and checked again inside it as two `ConditionCheck` items (the
+pilot KEY item: state active and `not_after` > now; the parent KEY item: state active), so a retire, compromise or
+company key change that commits first wins. The company-key path is unchanged.
 
 A new registration is one `TransactWriteItems`: put REG if absent, put IDEM if absent or expired, and add one to the
 month's quota if it is under the limit. Either all three happen or none do, so a 429 leaves nothing behind. When the
@@ -140,6 +150,50 @@ different payload), an existing REG returns the original ack (or 410 if deleted)
   survives a repeat call and a backup restore. The write is conditioned on the state it read; if a concurrent
   request changed it, the function re-reads and returns the stored date when the key is now compromised, else 409
   `conflict`. Another org's fingerprint is the same 404 as an unknown one.
+
+### Pilot keys (Option B, off by default)
+
+Signing Option B lets a pilot's own key sign company receipts when the company key has authorized it (design
+`design-key-enrollment-option-b.md` §4.2, spine AD-23 and AD-24). The server half is built; the browser half (Trust
+pilot UI, Verify delegated path) is not. **Off everywhere by default.**
+
+- **Switch:** `PILOT_KEYS_ORGS`, an operator-set Lambda environment variable: a comma list of org ids. An entry
+  counts only if it is exactly an org id (`[A-Za-z0-9_-]{1,64}`, no spaces trimmed, no wildcard), so unset, empty,
+  whitespace, `*` and malformed entries switch nothing on. Read once when the function starts. No route can set it
+  and `infra/lib/stack.ts` never sets it (a synth test checks this). Off: the three routes below answer 403
+  `pilot_keys_off`, pilot keys answer 403 `key_not_active` on register, and the stored data is kept.
+- **Authorization** (`registry/registry/pilot_authorization.py`, vectors in `tests/fixtures/pilot-authorization.json`):
+  the company key signs exactly `hashwing-pilot-authorization v1\npilot_key=<64 hex>\ncompany_key=<64 hex>\nnot_after=<YYYY-MM-DDTHH:MM:SSZ>`
+  (no trailing newline). It travels as base64url without padding plus a 128-lowercase-hex signature; in a receipt
+  message as one line `Authorized by company key: <base64url>.<sig>`. Anything not canonical is refused. `not_after`
+  is at most 30 days ahead (default 14 in the client) and is compared with the registry clock only.
+- `GET /v1/pilot-keys/challenge` (any member) returns `{nonce, expires_at, message}` with `message` exactly
+  `hashwing-pilot-key-enroll v1\n<org>\n<nonce>`; the client rebuilds and compares it before signing
+  (`enroll_challenge.bytes_to_sign(org, challenge, "pilot")`). The CHAL item has `kind: "pilot"`.
+- `POST /v1/pilot-keys` (any member) takes `{public_key, nonce, signature, authorization, authorization_sig}` and
+  returns 201 `{key_fingerprint, kind: "pilot", state: "active", company_fingerprint, not_after}`. Order: switch (403)
+  → schema (400) → challenge signature by `public_key`, which also refuses weak keys (422 `bad_signature`) →
+  authorization (422 `bad_authorization`: malformed, weak or mismatched `pilot_key`, `pilot_key` equal to
+  `company_key`, signature not by `company_key`; 422 `authorization_expired`: `not_after` ≤ now or > now + 30 days) →
+  `company_key` is this org's `ACTIVE_KEY` (422 `company_key_not_active`) → fingerprint ever seen in this org, any
+  state or kind (409 `key_exists`) → one transaction: delete the CHAL item (exists, same `sub`, unexpired,
+  `kind: "pilot"`; else 400 `bad_challenge`), put the KEY item if absent, put its tombstone, add 1 to `PILOT_COUNT`
+  if `n` < 50 (else 409 `pilot_key_limit`), and check that `ACTIVE_KEY` still names the company key (else 422
+  `company_key_not_active`). Each enroll route accepts only its own challenge kind; `POST /v1/keys` accepts a
+  company challenge or one without `kind`. Pilot keys never go through `POST /v1/keys`, which rotates `ACTIVE_KEY`.
+- `POST /v1/pilot-keys/<fp>/retire` (admin) returns `{key_fingerprint, state: "retired", changed_at}`. An already
+  retired or compromised key returns its stored state and date and writes nothing. Unknown, another org's, or a
+  company key: 404. In one transaction: the KEY item (condition: state active), its tombstone, and `PILOT_COUNT` − 1.
+- `POST /v1/keys/<fp>/compromised` works for both kinds; for an active pilot key it also subtracts 1 from
+  `PILOT_COUNT`. The decrement has no floor condition, so the counter never blocks a revocation.
+- `GET /v1/keys` rows gain `kind`; pilot rows gain `company_fingerprint` and `not_after` (ISO). The response gains
+  `pilot_keys` (true when the caller's org is switched on).
+- **Renewal** is a new pilot key with a new authorization. A fingerprint once seen in an org is never enrolled again.
+- An expired pilot key (registry clock past `not_after`) stays `active` in the list and counts toward the 50 until
+  an admin retires it; it cannot register.
+- Recipients (Verify, browser half, not built) never see registry key state; the 500-entry recipient compromised list
+  lives in the recipient's browser. No share-view field reports pilot key state (a follow-up that needs an AD-9
+  amendment first).
 
 ### Shares
 
@@ -239,9 +293,12 @@ Registration lists: a future registration-list UI must accept stub rows from del
      `RESTORE_ID`. Until a marker names this table and this restore ID, every route answers 503 `restore_pending`
      (a marker copied in from the backup names an older table, so it does not count).
   2. Run `python -m registry.restore` with the served table as source. It refuses any other source, copies every
-     TOMB item, re-applies it (registrations deleted, shares withdrawn, rotated and compromised keys keep their
-     state and the active key is recomputed, the org epoch moves forward), and writes the `SYSTEM/RESTORE` marker
-     last. If the source's
+     TOMB item, re-applies it (registrations deleted, shares withdrawn, key states replayed, the org epoch
+     moves forward), and writes the `SYSTEM/RESTORE` marker last. A key's state becomes the most revoked of the
+     tombstone's and the restored item's (active < rotated < retired < compromised); `kind`, `company_fp` and
+     `not_after` are written back onto the KEY item. `ACTIVE_KEY` is recomputed from company keys only; pilot keys
+     keep their state, and `PILOT_COUNT` is recounted from the active pilot keys. If a tombstone and its KEY item
+     disagree on kind, the restore stops with an error before the marker. If the source's
      tombstones cannot be read, it stops with an error and writes no marker, so the function stays closed.
   3. After that, withdrawn and deleted views are 404 again and active ones are served.
 

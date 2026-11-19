@@ -1,7 +1,8 @@
 """DEV ONLY. Serves the real registry App over MemoryTable for the outbox browser tests. Never deploy this.
 
-python3 registry/devserver/server.py [--host 127.0.0.1] [--port 0]
+python3 registry/devserver/server.py [--host 127.0.0.1] [--port 0] [--pilot-keys-orgs orgA]
 Prints `READY http://<host>:<port>` once listening. Refuses any non-loopback bind.
+`--pilot-keys-orgs` sets PILOT_KEYS_ORGS (Option B pilot keys) for this dev server only; default off.
 
   /v1/*                   the registry, as an HTTP API v2 event (dev-hs256 tokens)
   /src/<name>.mjs         newweb/src modules
@@ -60,14 +61,15 @@ def unverified_claims(auth):
 
 
 class Dev:
-    def __init__(self):
+    def __init__(self, pilot_keys_orgs=""):
         self.lock = threading.Lock()
         self.cors = DEV_CORS
+        self.pilot_keys_orgs = pilot_keys_orgs
         self.reset()
 
     def reset(self):
         self.cors = DEV_CORS
-        self.app, self.table, self.clock = rh.make_app(CORS_ORIGINS=self.cors)
+        self.app, self.table, self.clock = rh.make_app(CORS_ORIGINS=self.cors, PILOT_KEYS_ORGS=self.pilot_keys_orgs)
         self.offset = 0
         self.hold_ms = 0
         self.drop = None  # the route name whose next request is dropped after it commits
@@ -218,11 +220,12 @@ def main():
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument("--host", default="127.0.0.1")
     ap.add_argument("--port", type=int, default=0)
+    ap.add_argument("--pilot-keys-orgs", default="", help="DEV ONLY: PILOT_KEYS_ORGS for this server (default: off)")
     args = ap.parse_args()
     if not loopback(args.host):
         sys.exit(f"refusing non-loopback bind {args.host!r}: this server is for local tests only")
     global DEV
-    DEV = Dev()
+    DEV = Dev(args.pilot_keys_orgs)
     server = ThreadingHTTPServer((args.host, args.port), Handler)
     server.daemon_threads = True
     print(f"READY http://{args.host}:{server.server_address[1]}", flush=True)

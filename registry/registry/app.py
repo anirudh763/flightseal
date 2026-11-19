@@ -12,13 +12,14 @@ import secrets
 import sys
 import time
 
-from . import ed25519, receipt
-from .identity import identify
+from . import ed25519, pilot_authorization, receipt
+from .identity import ORG_ID, identify
 from .store import ConditionFailed, StoreUnavailable, TransactionCanceled
 
 MAX_BODY = 4096
 MAX_SHARES = 10
 PAGE = 50
+PILOT_CAP = 50  # active pilot keys per org (design §11 default 4)
 DAY = 86400
 IDEM_KEY = re.compile(r"[A-Za-z0-9_-]{16,128}")
 HEX32 = re.compile(r"[0-9a-f]{32}")
@@ -38,6 +39,9 @@ ROUTES = [
     ("POST", r"/v1/keys", "enroll", ADMIN),
     ("GET", r"/v1/keys", "list_keys", ANY),
     ("POST", r"/v1/keys/([0-9a-f]{64})/compromised", "compromise", ADMIN),
+    ("GET", r"/v1/pilot-keys/challenge", "pilot_challenge", ANY),
+    ("POST", r"/v1/pilot-keys", "pilot_enroll", ANY),
+    ("POST", r"/v1/pilot-keys/([0-9a-f]{64})/retire", "retire", ADMIN),
     ("POST", r"/v1/epoch", "epoch", ADMIN),
     ("GET", r"/v1/epoch", "get_epoch", ANY),
     ("POST", r"/v1/shares", "create_share", ANY),
@@ -45,6 +49,8 @@ ROUTES = [
     ("DELETE", r"/v1/shares/([A-Za-z0-9_-]{1,128})", "withdraw_share", ANY),
 ]
 ROUTES = [(m, re.compile(p), name, access) for m, p, name, access in ROUTES]
+PILOT_ROUTES = {"pilot_challenge", "pilot_enroll", "retire"}  # 403 pilot_keys_off unless the org is switched on
+CHALLENGE_PREFIX = {"company": b"hashwing-key-enroll v1", "pilot": b"hashwing-pilot-key-enroll v1"}
 # Any GET under /v1/shares/, routed or not: a malformed link must get the same 404 headers as an unknown one.
 SHARE_VIEW = re.compile(r"/v1/shares/.*", re.S)
 # CORS. Only an exact allowlisted origin is echoed back, never "*", and credentials (cookies) are never allowed:
@@ -98,6 +104,17 @@ def _int_env(env, name, default):
         return default
 
 
+def _pilot_orgs(value):
+    """PILOT_KEYS_ORGS: a comma list of org ids. An entry counts only if it is exactly an org id (no trimming, no
+    wildcard), so unset, empty, whitespace, `*` and malformed entries switch nothing on."""
+    return frozenset(e for e in (value or "").split(",") if ORG_ID.fullmatch(e))
+
+
+def _is_pilot(item, kind_field="kind"):
+    """A KEY item (kind_field "kind") or key tombstone ("key_kind") is a pilot key if anything says so."""
+    return item.get(kind_field) == "pilot" or "company_fp" in item or "not_after" in item
+
+
 def _event_parts(event):
     if "requestContext" in event and "http" in (event.get("requestContext") or {}):  # HTTP API v2
         method, path = event["requestContext"]["http"].get("method", ""), event.get("rawPath", "")
@@ -118,6 +135,7 @@ class App:
         self.restore_id = env.get("RESTORE_ID", "")
         self.table_name = env.get("TABLE_NAME", "")
         self.cors = _cors_allowlist(env.get("CORS_ORIGINS", ""))
+        self.pilot_orgs = _pilot_orgs(env.get("PILOT_KEYS_ORGS"))
         self._restore_ok = False
 
     def now(self):
@@ -164,6 +182,8 @@ class App:
                     raise HttpError(401, "unauthorized")
                 if access == ADMIN and ident.role != "admin":
                     raise HttpError(403, "forbidden")
+                if name in PILOT_ROUTES and ident.org_id not in self.pilot_orgs:  # before the body is even parsed
+                    raise HttpError(403, "pilot_keys_off")
             status, out = getattr(self, name)(ident, self._json(raw, method), query, *args)
         except HttpError as err:
             status, out = err.status, {"error": err.code}
@@ -296,6 +316,18 @@ class App:
             raise HttpError(403, "key_not_enrolled")
         if key.get("state") != "active":
             raise HttpError(403, "key_not_active")
+        key_cond = [("eq", "state", "active")]
+        extra = []
+        if _is_pilot(key):
+            # Option B: refused unless the org is on, the authorization hasn't ended by the registry clock, and the
+            # parent company key is active. Read here, and checked again inside the transaction below.
+            parent = key.get("company_fp")
+            if (ident.org_id not in self.pilot_orgs or not isinstance(key.get("not_after"), int)
+                    or key["not_after"] <= now or not isinstance(parent, str) or parent == fp
+                    or (self.t.get(pk, "KEY#" + parent) or {}).get("state") != "active"):
+                raise HttpError(403, "key_not_active")
+            key_cond.append(("gt", "not_after", now))
+            extra.append({"op": "check", "key": (pk, "KEY#" + parent), "cond": [("eq", "state", "active")]})
 
         reg = {"PK": pk, "SK": "REG#" + rid, "fp": fp, "head": r.head.hex(), "count": r.count, "received_at": now,
                "state": "active", "share_hashes": []}
@@ -307,8 +339,8 @@ class App:
             {"op": "put", "item": idem_item, "cond": [("or", ("not_exists",), ("lt", "expires_at", now + 1))]},
             {"op": "update", "key": (pk, "QUOTA#" + month), "add": {"n": 1},
              "cond": [("or", ("missing", "n"), ("lt", "n", self.quota))]},
-            {"op": "check", "key": (pk, "KEY#" + fp), "cond": [("eq", "state", "active")]},  # a racing compromise wins
-        ])
+            {"op": "check", "key": (pk, "KEY#" + fp), "cond": key_cond},  # a racing compromise or retire wins
+        ] + extra)
         if failed is None:
             return 201, self._ack(reg, now)
         if failed[1]:  # a concurrent request with the same idempotency key won
@@ -323,7 +355,7 @@ class App:
             if committed:
                 return committed
             raise StoreUnavailable("registration vanished")
-        if failed[3]:
+        if any(failed[3:]):
             raise HttpError(403, "key_not_active")
         raise HttpError(429, "quota_exceeded")
 
@@ -403,15 +435,28 @@ class App:
     # ------------------------------------------------------------ keys
 
     @staticmethod
-    def challenge_message(org_id, nonce):
-        return b"hashwing-key-enroll v1\n" + org_id.encode() + b"\n" + nonce.encode()
+    def challenge_message(org_id, nonce, kind="company"):
+        return CHALLENGE_PREFIX[kind] + b"\n" + org_id.encode() + b"\n" + nonce.encode()
+
+    def _challenge(self, ident, kind):
+        nonce, now = secrets.token_hex(16), self.now()
+        self.t.put({"PK": f"ORG#{ident.org_id}", "SK": "CHAL#" + nonce, "sub": ident.sub, "kind": kind,
+                    "expires_at": now + 300, "ttl": now + 300 + DAY}, cond=[("not_exists",)])
+        return 200, {"nonce": nonce, "expires_at": _iso(now + 300),
+                     "message": self.challenge_message(ident.org_id, nonce, kind).decode()}
 
     def challenge(self, ident, _body, _query):
-        nonce, now = secrets.token_hex(16), self.now()
-        self.t.put({"PK": f"ORG#{ident.org_id}", "SK": "CHAL#" + nonce, "sub": ident.sub, "expires_at": now + 300,
-                    "ttl": now + 300 + DAY}, cond=[("not_exists",)])
-        return 200, {"nonce": nonce, "expires_at": _iso(now + 300),
-                     "message": self.challenge_message(ident.org_id, nonce).decode()}
+        return self._challenge(ident, "company")
+
+    def pilot_challenge(self, ident, _body, _query):
+        return self._challenge(ident, "pilot")
+
+    @staticmethod
+    def _chal_cond(ident, now, kind):
+        """Single use, unexpired, the caller's own, and of this route's kind (a challenge item without `kind` predates
+        pilot keys and is a company challenge)."""
+        kind_ok = ("or", ("missing", "kind"), ("eq", "kind", "company")) if kind == "company" else ("eq", "kind", kind)
+        return [("exists",), ("eq", "sub", ident.sub), ("gt", "expires_at", now), kind_ok]
 
     def enroll(self, ident, body, _query):
         self._fields(body, required=("public_key", "nonce", "signature"), optional=("confirm_replace",))
@@ -430,16 +475,16 @@ class App:
         if old and not confirm:
             raise HttpError(409, "confirm_required")
         ops = [
-            {"op": "delete", "key": (pk, "CHAL#" + nonce),
-             "cond": [("exists",), ("eq", "sub", ident.sub), ("gt", "expires_at", now)]},
-            {"op": "put", "item": {"PK": pk, "SK": "KEY#" + fp, "state": "active", "enrolled_at": now,
-                                   "enrolled_by": ident.sub, "changed_at": now}, "cond": [("not_exists",)]},
+            {"op": "delete", "key": (pk, "CHAL#" + nonce), "cond": self._chal_cond(ident, now, "company")},
+            {"op": "put", "item": {"PK": pk, "SK": "KEY#" + fp, "kind": "company", "state": "active",
+                                   "enrolled_at": now, "enrolled_by": ident.sub, "changed_at": now},
+             "cond": [("not_exists",)]},
         ]
-        ops.append(self._key_tomb(ident.org_id, fp, "active", now, now, ident.sub))
+        ops.append(self._key_tomb(ident.org_id, fp, "active", now, "company", None, None, now, ident.sub))
         if old:
             ops.append({"op": "update", "key": (pk, "KEY#" + old), "set": {"state": "rotated", "changed_at": now},
                         "cond": [("eq", "state", "active")]})
-            ops.append(self._key_tomb(ident.org_id, old, "rotated", now))
+            ops.append(self._key_tomb(ident.org_id, old, "rotated", now, "company", None, None))  # ACTIVE_KEY: company
             ops.append({"op": "put", "item": {"PK": pk, "SK": "ACTIVE_KEY", "fp": fp}, "cond": [("eq", "fp", old)]})
         else:
             ops.append({"op": "put", "item": {"PK": pk, "SK": "ACTIVE_KEY", "fp": fp}, "cond": [("not_exists",)]})
@@ -450,14 +495,67 @@ class App:
             raise HttpError(409, "key_exists" if failed[1] else "conflict")
         return 201, {"key_fingerprint": fp, "state": "active", "replaced": old}
 
+    def pilot_enroll(self, ident, body, _query):
+        """Option B: a pilot enrolls their own key with an authorization signed by the org's active company key.
+        Order: schema, challenge signature, authorization, company key active, key_exists, then one transaction."""
+        self._fields(body, required=("public_key", "nonce", "signature", "authorization", "authorization_sig"))
+        pub = bytes.fromhex(self._str(body, "public_key", HEX64))
+        nonce = self._str(body, "nonce", HEX32)
+        sig = bytes.fromhex(self._str(body, "signature", HEX128))
+        auth, auth_sig = body["authorization"], body["authorization_sig"]
+        if not isinstance(auth, str) or not isinstance(auth_sig, str):
+            raise HttpError(400, "bad_request")
+        if not ed25519.verify(pub, self.challenge_message(ident.org_id, nonce, "pilot"), sig):  # also refuses weak keys
+            raise HttpError(422, "bad_signature")
+        pk, now, fp = f"ORG#{ident.org_id}", self.now(), receipt.fingerprint(pub)
+        reason, parsed = pilot_authorization.check(auth, auth_sig, pub, None, now)  # the registry clock only
+        if reason:
+            raise HttpError(422, pilot_authorization.REGISTRY_ERROR[reason])
+        company_fp = receipt.fingerprint(parsed.company_key)
+        if (self.t.get(pk, "ACTIVE_KEY") or {}).get("fp") != company_fp:
+            raise HttpError(422, "company_key_not_active")
+        if self.t.get(pk, "KEY#" + fp) is not None:
+            raise HttpError(409, "key_exists")
+        not_after = parsed.not_after
+        failed = self._transact([
+            {"op": "delete", "key": (pk, "CHAL#" + nonce), "cond": self._chal_cond(ident, now, "pilot")},
+            {"op": "put", "item": {"PK": pk, "SK": "KEY#" + fp, "kind": "pilot", "company_fp": company_fp,
+                                   "not_after": not_after, "state": "active", "enrolled_at": now,
+                                   "enrolled_by": ident.sub, "changed_at": now}, "cond": [("not_exists",)]},
+            self._key_tomb(ident.org_id, fp, "active", now, "pilot", company_fp, not_after, now, ident.sub),
+            {"op": "update", "key": (pk, "PILOT_COUNT"), "add": {"n": 1},
+             "cond": [("or", ("missing", "n"), ("lt", "n", PILOT_CAP))]},
+            {"op": "check", "key": (pk, "ACTIVE_KEY"), "cond": [("eq", "fp", company_fp)]},
+        ])
+        if failed:
+            if failed[0]:
+                raise HttpError(400, "bad_challenge")
+            if failed[1]:
+                raise HttpError(409, "key_exists")
+            if failed[4]:
+                raise HttpError(422, "company_key_not_active")
+            raise HttpError(409, "pilot_key_limit")
+        return 201, {"key_fingerprint": fp, "kind": "pilot", "state": "active", "company_fingerprint": company_fp,
+                     "not_after": _iso(not_after)}
+
     @staticmethod
-    def _key_tomb(org, fp, state, now, enrolled_at=None, enrolled_by=None):
-        """Every key-state change leaves its latest state here, so a backup restore can replay it."""
+    def _key_tomb(org, fp, state, now, key_kind, company_fp, not_after, enrolled_at=None, enrolled_by=None):
+        """Every key-state change leaves its latest state here, so a backup restore can replay it. `kind` is the
+        tombstone's own kind ("key"), so the key's kind is stored as `key_kind`, with its pilot fields."""
         item = {"PK": f"TOMB#{org}#KEY#{fp}", "SK": "TOMB", "kind": "key", "org": org, "ref": fp, "state": state,
-                "at": now}
+                "at": now, "key_kind": key_kind}
+        if company_fp is not None:
+            item["company_fp"] = company_fp
+        if not_after is not None:
+            item["not_after"] = not_after
         if enrolled_at is not None:
             item.update(enrolled_at=enrolled_at, enrolled_by=enrolled_by or "unknown")
         return {"op": "put", "item": item}
+
+    def _tomb_for(self, org, fp, key, state, now):
+        pilot = _is_pilot(key)
+        return self._key_tomb(org, fp, state, now, "pilot" if pilot else "company", key.get("company_fp"),
+                              key.get("not_after"), key.get("enrolled_at"), key.get("enrolled_by"))
 
     def list_keys(self, ident, _body, query):
         """Never returns `enrolled_by` (a sub): only whether the caller enrolled each key."""
@@ -468,14 +566,25 @@ class App:
         items, last = self.t.query(pk, "KEY#", PAGE, "KEY#" + cursor if cursor else None)
         rows = []
         for k in items:
-            row = {"key_fingerprint": k["SK"][4:], "state": k["state"],
+            pilot = _is_pilot(k)
+            row = {"key_fingerprint": k["SK"][4:], "kind": "pilot" if pilot else "company", "state": k["state"],
                    "enrolled_by_me": k.get("enrolled_by") == ident.sub}
             for name in ("enrolled_at", "changed_at"):
                 if name in k:  # omitted rather than invented when a stub lacks it
                     row[name] = _iso(k[name])
+            if pilot:
+                row["company_fingerprint"] = k.get("company_fp")
+                row["not_after"] = _iso(k["not_after"]) if isinstance(k.get("not_after"), int) else None
             rows.append(row)
         active = (self.t.get(pk, "ACTIVE_KEY") or {}).get("fp")
-        return 200, {"keys": rows, "active_key": active, "next_cursor": last[4:] if last else None}
+        return 200, {"keys": rows, "active_key": active, "next_cursor": last[4:] if last else None,
+                     "pilot_keys": ident.org_id in self.pilot_orgs}
+
+    def _decrement_pilots(self, pk, key):
+        """Revoking an active pilot key frees a slot. No floor condition: the counter never blocks a revocation."""
+        if _is_pilot(key) and key["state"] == "active":
+            return [{"op": "update", "key": (pk, "PILOT_COUNT"), "add": {"n": -1}}]
+        return []
 
     def compromise(self, ident, body, _query, fp):
         """Idempotent: a key already compromised keeps its first `changed_at`, and nothing is written."""
@@ -488,7 +597,7 @@ class App:
             return self._compromised(fp, key)
         ops = [{"op": "update", "key": (pk, "KEY#" + fp), "set": {"state": "compromised", "changed_at": now},
                 "cond": [("eq", "state", key["state"])]},
-               self._key_tomb(ident.org_id, fp, "compromised", now, key.get("enrolled_at"), key.get("enrolled_by"))]
+               self._tomb_for(ident.org_id, fp, key, "compromised", now)] + self._decrement_pilots(pk, key)
         if (self.t.get(pk, "ACTIVE_KEY") or {}).get("fp") == fp:
             ops.append({"op": "delete", "key": (pk, "ACTIVE_KEY"), "cond": [("eq", "fp", fp)]})
         if self._transact(ops):
@@ -501,6 +610,32 @@ class App:
     @staticmethod
     def _compromised(fp, key):
         return 200, {"key_fingerprint": fp, "state": "compromised", "changed_at": _iso(key["changed_at"])}
+
+    def retire(self, ident, body, _query, fp):
+        """Option B: an admin removes a pilot key. Idempotent: an already retired or compromised key answers its stored
+        state and date, and nothing is written. Company keys are not retired here (404): they rotate or are compromised."""
+        self._fields(body)
+        pk, now = f"ORG#{ident.org_id}", self.now()
+        key = self.t.get(pk, "KEY#" + fp)
+        if key is None or not _is_pilot(key):
+            raise not_found()
+        if key["state"] in ("retired", "compromised"):
+            return self._retired(fp, key)
+        failed = self._transact([
+            {"op": "update", "key": (pk, "KEY#" + fp), "set": {"state": "retired", "changed_at": now},
+             "cond": [("eq", "state", "active")]},
+            self._tomb_for(ident.org_id, fp, key, "retired", now),
+        ] + self._decrement_pilots(pk, key))
+        if failed:
+            key = self.t.get(pk, "KEY#" + fp)
+            if key and key["state"] in ("retired", "compromised"):  # a concurrent retire or compromise won
+                return self._retired(fp, key)
+            raise HttpError(409, "conflict")
+        return 200, {"key_fingerprint": fp, "state": "retired", "changed_at": _iso(now)}
+
+    @staticmethod
+    def _retired(fp, key):
+        return 200, {"key_fingerprint": fp, "state": key["state"], "changed_at": _iso(key["changed_at"])}
 
     # ------------------------------------------------------------ shares
 
