@@ -31,7 +31,7 @@ import { LinkStep, VERIFY_OPENS_ON, VerifyChooser } from './verify-start.jsx';
 import { createEncryptedProfileBackup, inspectEncryptedProfileBackup, commitBackupRestore, previewBackupRestore } from './profile-backup.mjs';
 import { createSyncProvider } from './sync-provider.mjs';
 import { PINS_CHANGED, SOURCES, addTrustedCompany, fingerprintHex, formatFingerprint, listTrustedHistory, listTrustedKeys, markCompromised, pinTrustedKey, removeTrustedKey, trustForKey } from './trusted-keys.mjs';
-import { RegistryBarLink, RegistryBoundary, RegistryPanel, RegistryShareNote, RegistrySigningLine, SealedOnDevice, ShareRecordPanel, getRegistry, registryLogout, registryScope, registrySealStart, registrySealed, useRegistryTimeField, useRegistryUnsent } from './registry-ui.jsx';
+import { RegistryBarLink, RegistryBoundary, RegistryPanel, RegistryShareNote, RegistrySigningLine, SealedOnDevice, ShareRecordPanel, getRegistry, useJobsRegistry, registryLogout, registryScope, registrySealStart, registrySealed, useRegistryTimeField, useRegistryUnsent } from './registry-ui.jsx';
 import { BYTES_DIFFER, TRUST_KIND, composeNote, countsLine, offersOriginal, pairFiles, verdict, landingLine, manifestReport, parseLandingLine, parseNote, parseSealedLine, timeFields, toIsoFromLocal, trustLine } from './recipient-trust.mjs';
 
 const syncProvider = createSyncProvider({ supabaseUrl: import.meta.env.VITE_SUPABASE_URL, supabaseAnonKey: import.meta.env.VITE_SUPABASE_ANON_KEY });
@@ -245,6 +245,7 @@ function App() {
   const [unsavedError, setUnsavedError] = useState('');
   const [discardAsk, setDiscardAsk] = useState(false);
   const registryUnsent = __REGISTRY_URL__ ? useRegistryUnsent() : 0; // the flag is a build-time constant, so the hook order never changes
+  const jobsRegistry = __REGISTRY_URL__ ? useJobsRegistry() : null; // eslint-disable-line react-hooks/rules-of-hooks -- a build-time constant
   const [videoInfo, setVideoInfo] = useState(null);
   const [videoUrl, setVideoUrl] = useState('');
   const [videoOffset, setVideoOffset] = useState('0');
@@ -1891,9 +1892,10 @@ function App() {
           <ManifestSeal hidden={protectMode !== 'manifest' || !!resumedJob} output={manifestOutput} jobScope={localScope} newJobId={newJobId} onJob={(row, scope) => { setResumedJob(null); setPendingResume(null); addJob(row, scope); }} ask={!!pendingResume && protectMode === 'manifest'} onKeep={() => setPendingResume(null)} onRunning={setManifestRunning} setOutput={setManifestOutput} carry={carryToLarge} common={sealCommon} jobRef={jobRef} signingKey={signingKey} onActiveChange={setManifestSealActive} onUnsaved={setManifestUnsaved} onSealed={__REGISTRY_URL__ ? registrySealed : undefined} onDone={setManifestSealed} onSealMore={() => { setJobRef(''); afterSealMore(); }} shareNote={__REGISTRY_URL__ ? <RegistryShareNote /> : null} />
         </div></section>
       </section>
-      {/* Every build lists jobs here (AC-60); the flag-on build still shows registry-ui's list instead, until the registry chips join this one. */}
+      {/* Every build lists jobs here (AC-60); the flag-on build keeps registry-ui's list here (assign, retry, export/import, share, delete) and shows registry statuses on Jobs. */}
       {!__REGISTRY_URL__ && screen === 'protect' && <div className="screen"><SealedRecent rows={jobs.rows} storage={jobs.storage} notice={jobsNotice || jobs.error} allJobsHref={workspaceHref('jobs')} onAllJobs={(e) => { if (e.button !== 0 || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return; e.preventDefault(); navigate('jobs'); }} /></div>}
-      {screen === 'jobs' && <JobsPage rows={jobs.rows} loaded={jobsState.scope === localScope} resumeBlocked={sealRunning} storage={jobs.storage} error={jobs.error || jobsNotice} q={route.params.get('q') || ''} page={Number(route.params.get('page')) || 1}
+      {screen === 'jobs' && <JobsPage rows={jobs.rows} loaded={jobsState.scope === localScope && (jobsRegistry?.ready ?? true)} resumeBlocked={sealRunning} storage={jobs.storage} error={jobs.error || jobsNotice} q={route.params.get('q') || ''} page={Number(route.params.get('page')) || 1}
+        {...(jobsRegistry && { statusOf: jobsRegistry.statusOf, filters: jobsRegistry.filters, detailLabel: jobsRegistry.detailLabel, status: route.params.get('status') || '' })}
         onUrl={setJobsUrl} onResume={resumeJob} onRemove={removeJob} onDownload={(name, text) => download(name, text, 'application/json')}
         sealHref={workspaceHref('protect')} onSeal={(e) => { if (e.button !== 0 || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return; e.preventDefault(); navigate('protect'); }} />}
       {__REGISTRY_URL__ && <section className="screen" aria-label="Registry status" hidden={screen !== 'protect'}><RegistryBoundary><SealedOnDevice onSignIn={() => navigate('help')} /></RegistryBoundary></section>}

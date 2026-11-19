@@ -307,6 +307,7 @@ class App:
             {"op": "put", "item": idem_item, "cond": [("or", ("not_exists",), ("lt", "expires_at", now + 1))]},
             {"op": "update", "key": (pk, "QUOTA#" + month), "add": {"n": 1},
              "cond": [("or", ("missing", "n"), ("lt", "n", self.quota))]},
+            {"op": "check", "key": (pk, "KEY#" + fp), "cond": [("eq", "state", "active")]},  # a racing compromise wins
         ])
         if failed is None:
             return 201, self._ack(reg, now)
@@ -322,6 +323,8 @@ class App:
             if committed:
                 return committed
             raise StoreUnavailable("registration vanished")
+        if failed[3]:
+            raise HttpError(403, "key_not_active")
         raise HttpError(429, "quota_exceeded")
 
     def list_registrations(self, ident, _body, query):
@@ -456,25 +459,48 @@ class App:
             item.update(enrolled_at=enrolled_at, enrolled_by=enrolled_by or "unknown")
         return {"op": "put", "item": item}
 
-    def list_keys(self, ident, _body, _query):
-        items, _ = self.t.query(f"ORG#{ident.org_id}", "KEY#", PAGE)
-        return 200, {"keys": [{"key_fingerprint": k["SK"][4:], "state": k["state"], "enrolled_at": _iso(k["enrolled_at"]),
-                               "changed_at": _iso(k["changed_at"])} for k in items]}
+    def list_keys(self, ident, _body, query):
+        """Never returns `enrolled_by` (a sub): only whether the caller enrolled each key."""
+        cursor = query.get("cursor")
+        if cursor is not None and not HEX64.fullmatch(cursor):
+            raise HttpError(400, "bad_request")
+        pk = f"ORG#{ident.org_id}"
+        items, last = self.t.query(pk, "KEY#", PAGE, "KEY#" + cursor if cursor else None)
+        rows = []
+        for k in items:
+            row = {"key_fingerprint": k["SK"][4:], "state": k["state"],
+                   "enrolled_by_me": k.get("enrolled_by") == ident.sub}
+            for name in ("enrolled_at", "changed_at"):
+                if name in k:  # omitted rather than invented when a stub lacks it
+                    row[name] = _iso(k[name])
+            rows.append(row)
+        active = (self.t.get(pk, "ACTIVE_KEY") or {}).get("fp")
+        return 200, {"keys": rows, "active_key": active, "next_cursor": last[4:] if last else None}
 
     def compromise(self, ident, body, _query, fp):
+        """Idempotent: a key already compromised keeps its first `changed_at`, and nothing is written."""
         self._fields(body)
         pk, now = f"ORG#{ident.org_id}", self.now()
         key = self.t.get(pk, "KEY#" + fp)
         if key is None:
             raise not_found()
+        if key["state"] == "compromised":
+            return self._compromised(fp, key)
         ops = [{"op": "update", "key": (pk, "KEY#" + fp), "set": {"state": "compromised", "changed_at": now},
-                "cond": [("exists",)]},
+                "cond": [("eq", "state", key["state"])]},
                self._key_tomb(ident.org_id, fp, "compromised", now, key.get("enrolled_at"), key.get("enrolled_by"))]
         if (self.t.get(pk, "ACTIVE_KEY") or {}).get("fp") == fp:
             ops.append({"op": "delete", "key": (pk, "ACTIVE_KEY"), "cond": [("eq", "fp", fp)]})
         if self._transact(ops):
+            key = self.t.get(pk, "KEY#" + fp)
+            if key and key["state"] == "compromised":  # a concurrent call won: report its date
+                return self._compromised(fp, key)
             raise HttpError(409, "conflict")
-        return 200, {"key_fingerprint": fp, "state": "compromised"}
+        return 200, {"key_fingerprint": fp, "state": "compromised", "changed_at": _iso(now)}
+
+    @staticmethod
+    def _compromised(fp, key):
+        return 200, {"key_fingerprint": fp, "state": "compromised", "changed_at": _iso(key["changed_at"])}
 
     # ------------------------------------------------------------ shares
 

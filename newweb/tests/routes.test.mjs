@@ -54,6 +54,9 @@ test('Jobs keeps its search and page in the URL, and only those', () => {
   assert.equal(routeHash('jobs', { q: 'roof north', page: 2 }), '#/app/jobs?q=roof+north&page=2');
   assert.equal(routeHash('jobs', { q: '', page: 1 }), '#/app/jobs');
   assert.equal(routeHash('verify', { q: 'x', page: 3 }), '#/app/verify', 'other routes ignore q and page');
+  assert.equal(routeHash('jobs', { q: 'x', status: 'registered', page: 2 }), '#/app/jobs?q=x&page=2&status=registered');
+  assert.equal(routeHash('jobs', { status: 'bogus' }), '#/app/jobs', 'an unknown status is dropped');
+  assert.equal(routeHash('verify', { status: 'waiting' }), '#/app/verify', 'only Jobs keeps a status');
 });
 
 test('receipt deep links retain their selected public receipt position',()=>{

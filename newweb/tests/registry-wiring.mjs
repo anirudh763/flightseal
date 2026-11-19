@@ -1,7 +1,7 @@
 // Registry wiring in the console (VITE_REGISTRY_URL), against the DEV ONLY registry/devserver/server.py.
 // 1. The flag-off bundle in docs/console carries no registry code, and the flag-off console makes no registry request.
 // 2. A flag-on console built into .test-artifacts/registry-wiring/build drives sign-in, the outbox list, shares,
-//    delete and the recipient view in Playwright Chromium. Run `npm --prefix newweb run build` first (flag off).
+//    delete and the recipient view in Playwright Chromium, then Jobs (5 checks). Run `npm --prefix newweb run build` first (flag off).
 import { createRequire } from 'node:module';
 import { spawn, spawnSync } from 'node:child_process';
 import { createServer } from 'node:http';
@@ -1001,6 +1001,160 @@ try {
       assert.equal(await d.locator('#company-registry').getByText('Signed in to the company registry').count(), 0, 'an older saved token is not used after a sign-out');
     } finally { await c.close(); }
   });
+
+  // Jobs with the flag on (R22, R26; AC-56..AC-58): each row's status from this device's registry list (no request),
+  // the URL-backed status filter and the row detail. Its own context and owner.
+  {
+    const jctx = await newContext();
+    await jctx.grantPermissions(['clipboard-read', 'clipboard-write'], { origin: new URL(flagOn.url).origin });
+    const jp = watch(await jctx.newPage(), 'jobs-flag-on');
+    const REG = 'jobs-reg.ulg', ATT = 'jobs-att.ulg', LOC = 'jobs-loc.ulg', ALL = [REG, ATT, LOC];
+    const jobRow = (name) => jp.locator('.jobs-table tbody tr:not(.jobs-detail-row)').filter({ has: jp.locator('.jobs-name', { hasText: new RegExp(`^${name.replace(/\./g, '\\.')}\\.fseal$`) }) });
+    const jobChip = (name) => jobRow(name).locator('.jobs-status').innerText();
+    const shownJobs = async () => (await jp.locator('.jobs-table tbody tr:not(.jobs-detail-row) .jobs-name').allInnerTexts()).sort();
+    const statusParam = () => jp.evaluate(() => new URLSearchParams(location.hash.split('?')[1] || '').get('status'));
+    const pick = async (label, value) => {
+      await jp.locator('#jobs-status-filter').selectOption({ label });
+      await jp.waitForFunction((v) => new URLSearchParams(location.hash.split('?')[1] || '').get('status') === v, value);
+    };
+    const sent = []; // every request to the registry origin from the moment Jobs opens
+    let logBefore = 0;
+    try {
+      await check('Jobs (flag on): each row reads the label "Sealed on this device" shows for that file (Registered, Needs attention, Sealed locally); no "Verified"', async () => {
+        await jp.goto(`${flagOn.url}#/app/protect`);
+        await jp.locator('#page-protect').waitFor();
+        await sealSmall(jp, LOC); // signed out: an unassigned pending proof
+        await chipIs(jp, LOC, 'Sealed locally');
+        await signIn(jp, 'jobs-pilot', 'pilot');
+        await importSeedA(jp);
+        await sealSmall(jp, REG);
+        await chipIs(jp, REG, 'Registered');
+        await go(jp, 'help');
+        await jp.getByRole('button', { name: 'Clear key', exact: true }).click();
+        await sealSmall(jp, ATT, undefined, { jobRef: 'JOBS-ATT-1' }); // the one-time key: key_not_enrolled
+        await chipIs(jp, ATT, 'Needs attention');
+        await chipIs(jp, LOC, 'Sealed locally');
+        const listed = {};
+        for (const n of ALL) listed[n] = await rowOf(jp, n).locator(':scope > summary .status-label').textContent();
+        assert.deepEqual(listed, { [REG]: 'Registered', [ATT]: 'Needs attention', [LOC]: 'Sealed locally' });
+        await sleep(500);
+        logBefore = (await dev('log')).log.length;
+        jp.on('request', (r) => { if (r.url().startsWith(base)) sent.push(r.url()); });
+        await go(jp, 'jobs');
+        await jp.locator('.jobs-table caption').waitFor();
+        await jp.waitForFunction(() => document.querySelectorAll('.jobs-status.ok').length === 1, null, { timeout: 10000 });
+        for (const n of ALL) assert.equal(await jobChip(n), listed[n], `${n} on Jobs`);
+        assert.match(await jobRow(REG).locator('.jobs-status').getAttribute('class'), /\bok\b/);
+        assert.match(await jobRow(ATT).locator('.jobs-status').getAttribute('class'), /\bwarn\b/);
+        assert.ok(!(await jp.locator('main').innerText()).includes('Verified'), 'Jobs never says Verified');
+      });
+
+      await check('Jobs (flag on): the Status filter shows only matching rows, keeps status in the URL across a search, Back restores the previous filter', async () => {
+        await pick('Registered', 'registered');
+        assert.deepEqual(await shownJobs(), [`${REG}.fseal`]);
+        await pick('Needs attention', 'problems');
+        assert.deepEqual(await shownJobs(), [`${ATT}.fseal`]);
+        await pick('Waiting to send', 'waiting');
+        assert.deepEqual(await shownJobs(), [`${LOC}.fseal`]);
+        await pick('All', null);
+        assert.deepEqual(await shownJobs(), ALL.map((n) => `${n}.fseal`).sort());
+        await pick('Registered', 'registered');
+        await jp.locator('#jobs-search').fill('jobs-');
+        await jp.waitForFunction(() => location.hash === '#/app/jobs?q=jobs-&status=registered');
+        assert.deepEqual(await shownJobs(), [`${REG}.fseal`]);
+        await jp.goBack();
+        await jp.waitForFunction(() => location.hash === '#/app/jobs?status=registered');
+        await jp.goBack();
+        await jp.waitForFunction(() => location.hash === '#/app/jobs');
+        assert.equal(await jp.locator('#jobs-status-filter').inputValue(), '', 'Back restores All');
+        assert.equal((await shownJobs()).length, 3);
+        await pick('Registered', 'registered');
+        await jp.locator('#jobs-search').fill('no-such-job');
+        await jp.getByRole('button', { name: 'Clear search' }).click();
+        await jp.waitForFunction(() => location.hash === '#/app/jobs?status=registered');
+        assert.deepEqual(await shownJobs(), [`${REG}.fseal`], 'Clear search keeps the status');
+        await jp.evaluate(() => { location.hash = '/app/jobs?status=bogus'; });
+        await jp.locator('.jobs-table caption').waitFor();
+        assert.equal(await jp.locator('#jobs-status-filter').inputValue(), '', 'an unknown status reads as All');
+        assert.equal((await shownJobs()).length, 3);
+      });
+
+      await check('Jobs (flag on): Details opens from the keyboard with job ref, package, items, sealed time, the registry line and its time, and Copy receipt message; no registry request from Jobs', async () => {
+        await go(jp, 'jobs');
+        assert.equal(await jobChip(REG), 'Registered');
+        await jobRow(REG).getByRole('button', { name: `Remove ${REG}.fseal` }).focus();
+        await jp.keyboard.press('Tab');
+        const details = jobRow(REG).getByRole('button', { name: `Details for ${REG}.fseal` });
+        assert.equal(await jp.evaluate(() => document.activeElement?.getAttribute('aria-label')), `Details for ${REG}.fseal`);
+        assert.equal(await details.getAttribute('aria-expanded'), 'false');
+        await jp.keyboard.press('Enter');
+        assert.equal(await details.getAttribute('aria-expanded'), 'true');
+        const detail = jp.locator(`#${await details.getAttribute('aria-controls')}`);
+        const facts = Object.fromEntries(await detail.locator('dt').evaluateAll((dts) => dts.map((dt) => [dt.textContent, dt.nextElementSibling.textContent])));
+        assert.equal(facts['Job ref'], 'None');
+        assert.equal(facts.Package, `${REG}.fseal`);
+        assert.match(facts.Items, /^1 item · [\d,]+ bytes$/);
+        assert.ok(facts.Sealed, 'sealed time');
+        assert.match(facts['Registry status'], /^Registered at \d{4}-\d\d-\d\d \d\d:\d\d:\d\d UTC\. This is the registry's statement, not proof of the files\.$/, 'the registry\'s time only');
+        await detail.getByRole('button', { name: 'Copy receipt message' }).click();
+        await jp.getByText('Receipt message copied.').waitFor();
+        assert.match(await jp.evaluate(() => navigator.clipboard.readText()), /fseal-receipt v1 count=/);
+        await details.focus();
+        await jp.keyboard.press('Enter');
+        assert.equal(await details.getAttribute('aria-expanded'), 'false');
+        assert.equal(await jp.locator('.jobs-detail-row').count(), 0, 'pressing Details again collapses it');
+        await jobRow(ATT).getByRole('button', { name: `Details for ${ATT}.fseal` }).click();
+        const att = jp.locator('.jobs-detail-row');
+        assert.match(await att.innerText(), /JOBS-ATT-1/);
+        assert.match(await att.innerText(), /This signing key isn't enrolled for your company yet\..*Updated /s);
+        assert.ok(!(await jp.locator('main').innerText()).includes('Verified'));
+        await sleep(500);
+        assert.deepEqual(sent, [], 'no registry request while Jobs was opened, filtered and expanded');
+        assert.equal((await dev('log')).log.length, logBefore, 'the registry saw no request from Jobs');
+        await jp.evaluate(() => { location.hash = '/app/jobs?status=registered'; });
+        await jp.reload(); // the filter waits for this device's list after the sign-in resumes
+        await jp.locator('.jobs-status.ok').waitFor({ timeout: 30000 });
+        assert.deepEqual(await shownJobs(), [`${REG}.fseal`]);
+        assert.equal(await statusParam(), 'registered');
+      });
+
+      await check('Jobs (flag on): axe 0 violations and no horizontal scroll at 320/768/1440 with a filter and an expanded detail; screenshots', async () => {
+        await jp.evaluate(() => { location.hash = '/app/jobs?status=waiting'; });
+        await jp.locator('.jobs-table caption').waitFor();
+        for (const width of [320, 768, 1440]) {
+          await jp.setViewportSize({ width, height: 900 });
+          const details = jobRow(LOC).getByRole('button', { name: `Details for ${LOC}.fseal` });
+          if ((await details.getAttribute('aria-expanded')) !== 'true') await details.click();
+          await jp.locator('.jobs-detail-row').waitFor();
+          const overflow = await jp.evaluate(() => document.documentElement.scrollWidth - innerWidth);
+          assert.ok(overflow <= 0, `jobs@${width}: horizontal scroll ${overflow}px`);
+          await axe(jp, `jobs@${width}`);
+          await jp.screenshot({ path: join(OUT, `jobs-${width}.png`), fullPage: true });
+        }
+        await jp.setViewportSize({ width: 1440, height: 900 });
+      });
+
+      await check('Jobs (flag on): after registry sign-out the rows stay, the registered one reads "Sealed locally" with the sign-in line; an empty filter offers "Show all jobs"', async () => {
+        await go(jp, 'help');
+        await jp.locator('#company-registry').getByRole('button', { name: 'Sign out' }).click();
+        await jp.locator('#registry-token').waitFor();
+        await go(jp, 'jobs');
+        await jp.locator('.jobs-table caption').waitFor();
+        assert.equal(await statusParam(), null);
+        assert.equal((await shownJobs()).length, 3, 'the local rows are still listed');
+        for (const n of ALL) assert.equal(await jobChip(n), 'Sealed locally', `${n} signed out`);
+        assert.equal(await jp.locator('.jobs-status.ok, .jobs-status.warn').count(), 0, 'no stale Registered or Needs attention');
+        await jobRow(REG).getByRole('button', { name: `Details for ${REG}.fseal` }).click();
+        await jp.locator('.jobs-detail-row').getByText("Sign in to the company registry to see this job's registry status.").waitFor();
+        await pick('Registered', 'registered');
+        await jp.getByText('No jobs with this status.').waitFor();
+        await jp.getByRole('button', { name: 'Show all jobs' }).click();
+        await jp.waitForFunction(() => location.hash === '#/app/jobs');
+        assert.equal((await shownJobs()).length, 3);
+        assert.equal(await jp.evaluate(() => document.activeElement?.id), 'jobs-status-filter');
+      });
+    } finally { await jctx.close(); }
+  }
 
   await check('no console or page errors', async () => { assert.deepEqual(errors, []); });
 } finally {

@@ -25,7 +25,7 @@ globalThis.BroadcastChannel = class { constructor(name) { this.name = name; this
 
 const vite = await createServer({ root: ROOT, configFile: false, logLevel: 'silent', appType: 'custom', server: { middlewareMode: true, hmr: false, ws: false }, define: { __REGISTRY_URL__: JSON.stringify(URL_) } });
 after(() => vite.close());
-const { RegistryBoundary, getRegistry, registryTimeField } = await vite.ssrLoadModule('/src/registry-ui.jsx');
+const { RegistryBoundary, getRegistry, jobStatus, jobsStatusMap, registryLine, registryTimeField } = await vite.ssrLoadModule('/src/registry-ui.jsx');
 
 const b64 = (o) => Buffer.from(JSON.stringify(o)).toString('base64url');
 const tokenFor = (sub) => `${b64({ alg: 'none' })}.${b64({ org_id: 'orgA', sub, role: 'pilot' })}.sig`;
@@ -229,6 +229,44 @@ test('the Verify time row for each state of this device\'s outbox row', () => {
   assert.deepEqual(registryTimeField(row({ state: 'registering', label: 'Registering' }), lines, { fromLink: true }), { value: 'Not yet registered', basis: "this device's list: Registering" }, 'a signed-in sender keeps their own record');
   assert.deepEqual(registryTimeField({ ...base, outbox: null, listed: false }, lines), notYet);
   assert.deepEqual(registryTimeField({ ...base, listed: false }, lines), notYet);
+});
+
+test('Jobs status for each outbox state, pending proofs and no record, matched on the receipt line sent to the registry', () => {
+  const R = receipt(19), msg = `HashWing receipt for x\nPublic key: ${hex(64, 'b')}\n${R}\n\nKeep this message.`;
+  const base = { owner: 'orgA/u', outbox: {}, listed: true, rows: [], pending: [], online: true };
+  const of = (s) => jobStatus(jobsStatusMap(s), msg);
+  const row = (extra) => ({ ...base, rows: [{ id: 'x', receipt: R, updated_at: 5, ...extra }] });
+  assert.deepEqual(of(row({ state: 'registered', disposition: 'active', label: 'Registered', received_at: '2026-11-17T10:00:05Z' })),
+    { label: 'Registered', kind: 'ok', group: 'registered', line: "Registered at 2026-11-17 10:00:05 UTC. This is the registry's statement, not proof of the files.", at: null });
+  const deleted = of(row({ state: 'registered', disposition: 'deleted', label: 'Registered, later deleted' }));
+  assert.deepEqual([deleted.label, deleted.kind, deleted.group], ['Registered, later deleted', 'neutral', 'registered']);
+  const attention = of(row({ state: 'needs_attention', reason: 'key_not_enrolled', label: 'Needs attention' }));
+  assert.deepEqual([attention.kind, attention.group], ['warn', 'problems']);
+  assert.match(attention.line, /^This signing key isn't enrolled/);
+  assert.deepEqual([of(row({ state: 'registering', label: 'Registering' })).kind, of(row({ state: 'registering', label: 'Registering' })).group], ['neutral', 'waiting']);
+  const off = of({ ...row({ state: 'sealed_local', label: 'Sealed locally' }), online: false });
+  assert.deepEqual([off.label, off.group], ['Waiting for connection', 'waiting'], 'offline, a new row waits for the connection');
+  const pending = (p, owner = 'orgA/u') => of({ ...base, owner, pending: [{ receipt: R, at: 7, ...p }] });
+  assert.deepEqual([pending({ owner: null }).label, pending({ owner: null }).group, pending({ owner: null }).at], ['Sealed locally', 'waiting', 7]);
+  assert.match(pending({ owner: null }).line, /isn't assigned to a company yet/);
+  assert.match(pending({ owner: 'orgA/other' }).line, /another registry sign-in/, 'held under another owner');
+  assert.equal(of({ ...row({ state: 'registered', label: 'Registered' }), pending: [{ receipt: R, owner: null }] }).label, 'Registered', 'an outbox row wins over a pending one');
+  const none = of(base);
+  assert.deepEqual([none.label, none.group, none.at], ['Sealed locally', null, null]);
+  assert.match(none.line, /no registry record for this job under the current sign-in/);
+  assert.match(of({ ...base, owner: null, outbox: null }).line, /^Sign in to the company registry/, 'signed out: never a stale Registered');
+  assert.match(of({ ...base, listed: false }).line, /isn't open yet/);
+});
+
+test('a multi-line receipt message matches only the line the registry got (registryLine, shared with registrySealed)', () => {
+  const first = receipt(100), last = receipt(200);
+  const msg = `HashWing receipt for x\nPublic key: ${hex(64, 'b')}\n${first}\n${last}\n\nKeep this message.\nTo check the file, open x and paste this whole message.\n`;
+  assert.equal(registryLine(msg), last, 'the last receipt line, never the trailing prose');
+  assert.equal(registryLine(`${first}\n${last}\n`), last, 'a bare receipts file picks the same line');
+  const base = { owner: 'orgA/u', outbox: {}, listed: true, rows: [], pending: [], online: true };
+  const of = (r) => jobStatus(jobsStatusMap({ ...base, rows: [{ id: 'x', receipt: r, state: 'registered', disposition: 'active', label: 'Registered', received_at: '2026-11-17T10:00:05Z' }] }), msg);
+  assert.equal(of(last).label, 'Registered');
+  assert.deepEqual([of(first).label, of(first).group], ['Sealed locally', null], 'a record for an earlier line is not this job');
 });
 
 test('a registry panel that throws while rendering shows one notice instead of blanking the app', () => {

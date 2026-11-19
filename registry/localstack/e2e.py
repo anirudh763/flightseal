@@ -38,6 +38,7 @@ import boto3  # noqa: E402
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / "registry"))
 from registry import ed25519, receipt  # noqa: E402
+from registry.enroll_challenge import bytes_to_sign  # noqa: E402
 from registry.identity import make_dev_token  # noqa: E402
 
 IMAGE = "localstack/localstack:4.12.0"
@@ -244,7 +245,7 @@ def scenarios(url, tok, table, dedupe):
     _, ch = http("GET", url + "/v1/keys/challenge", admin)
     status, out = http("POST", url + "/v1/keys", admin, {
         "public_key": ed25519.public_key(seed).hex(), "nonce": ch["nonce"],
-        "signature": ed25519.sign(seed, ch["message"].encode()).hex()})
+        "signature": ed25519.sign(seed, bytes_to_sign("orgA", ch)).hex()})
     check("enroll company key (admin, signed challenge)", status == 201, f"{status} {out.get('state', out)}")
 
     env_a = envelope(pilot)

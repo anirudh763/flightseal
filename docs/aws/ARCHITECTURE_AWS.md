@@ -72,7 +72,7 @@ One table, string keys `PK`/`SK`:
 
 | Item | Holds |
 |---|---|
-| `ORG#o / KEY#<fp>` | key state (active, rotated, compromised), enrolled_at, enrolled_by, changed_at. `fp` is the SHA-256 of the raw 32-byte public key |
+| `ORG#o / KEY#<fp>` | key state (active, rotated, compromised), enrolled_at, enrolled_by (the enrolling admin's `sub`, copied from the key tombstone when a restore brings the key back, or the placeholder `restore` or `unknown` when none was recorded; never returned to a client), changed_at. `fp` is the SHA-256 of the raw 32-byte public key |
 | `ORG#o / ACTIVE_KEY` | the one active fingerprint (a conditional pointer that keeps "at most one active key" true under races) |
 | `ORG#o / CHAL#<nonce>` | sub and a 5-minute expiry; deleted when used |
 | `ORG#o / EPOCH`, `ENV#<id>` | the org epoch; envelopes with sub, epoch and expiry (default 7 days) |
@@ -120,6 +120,26 @@ different payload), an existing REG returns the original ack (or 410 if deleted)
 - A restore keeps deletions made after the backup: a registration the backup never had comes back as a deleted stub
   holding only its id and state. `GET /v1/registrations` lists it with just `registration_id` and
   `disposition: "deleted"`, and any retry, with a new or the original idempotency key, gets 410 `registration_deleted`.
+
+### Company keys
+
+- `GET /v1/keys/challenge` (admin) returns `{nonce, expires_at, message}`. `nonce` is 32 lowercase hex and `message`
+  is exactly `hashwing-key-enroll v1\n<org>\n<nonce>`. Clients build those bytes themselves and sign only when
+  `message` is byte-equal (`registry/registry/enroll_challenge.py`); they never sign the server's text as such.
+- `POST /v1/keys` (admin) takes `{public_key, nonce, signature, confirm_replace?}` and returns
+  `{key_fingerprint, state, replaced}`. A retry after a lost response is 409 `key_exists`; `GET /v1/keys` then shows
+  that fingerprint as `active_key`.
+- `GET /v1/keys?cursor` (any member) returns `{keys: [{key_fingerprint, state, enrolled_at, changed_at,
+  enrolled_by_me}], active_key, next_cursor}`, 50 rows a page in fingerprint order. `enrolled_by_me` is true only
+  when the caller's `sub` enrolled the key (false when a restore left only a placeholder); the stored `enrolled_by` is never returned.
+  `active_key` is the active fingerprint or null. Pass `next_cursor` back as `cursor` (64 lowercase hex, else 400
+  `bad_request`) for the next page; it is null on the last page, except that an exactly full page may return a
+  cursor whose next page is empty, as with registrations. A row lacking `enrolled_at` or `changed_at` omits it.
+- `POST /v1/keys/<fp>/compromised` (admin) returns `{key_fingerprint, state: "compromised", changed_at}`. It is
+  idempotent: on a key already compromised it returns the stored `changed_at` and writes nothing, so the first date
+  survives a repeat call and a backup restore. The write is conditioned on the state it read; if a concurrent
+  request changed it, the function re-reads and returns the stored date when the key is now compromised, else 409
+  `conflict`. Another org's fingerprint is the same 404 as an unknown one.
 
 ### Shares
 
