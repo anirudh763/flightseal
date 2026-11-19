@@ -79,9 +79,11 @@ def cases():
         case("wrong prefix: v2", "malformed", text=prefixed("hashwing-pilot-authorization v2")),
         case("trailing newline", "malformed", text=good + b"\n"),
         case("base64 padding", "malformed", text=good, auth=padded),
-        case("standard base64 alphabet", "malformed", text=good,
-             auth=good_auth.replace("-", "+").replace("_", "/") if ("-" in good_auth or "_" in good_auth)
-             else good_auth + "+"),
+        # A canonical statement is printable ASCII without '>', '?' or '~', so its base64url never holds '-' or '_' and
+        # a like-for-like alphabet swap can't be built. These keep the length and put the standard-alphabet characters
+        # where base64url has none: a decoder that maps '+'/'/' to '-'/'_' still gets non-canonical bytes.
+        case("standard base64 '+' (same length)", "malformed", text=good, auth="+" + good_auth[1:]),
+        case("standard base64 '/' (same length)", "malformed", text=good, auth=good_auth[:-1] + "/"),
         case("uppercase hex in the statement", "malformed",
              text=good.replace(b"pilot_key=" + P.hex().encode(), b"pilot_key=" + P.hex().upper().encode())),
         case("uppercase hex signature", "malformed", sig=good_sig.upper()),

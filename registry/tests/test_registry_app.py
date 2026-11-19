@@ -58,11 +58,19 @@ def test_unexpected_fields_are_400_and_write_nothing():
 
 
 def test_no_route_accepts_private_key_material():
-    # R71: an invitation or enrollment never moves a company private key; every POST route refuses one. The org is
-    # switched on for pilot keys so the Option B routes reach their schema check.
-    app, table, clock, pilot = setup(PILOT_KEYS_ORGS="orgA")
+    # R71: an invitation or enrollment never moves a company private key; every POST route refuses one. Run with the
+    # pilot switch unset (as deployed) and with orgA switched on, so the Option B routes reach their schema check.
+    for env in ({}, {"PILOT_KEYS_ORGS": "orgA"}):
+        _no_private_key_material(env)
+
+
+def _no_private_key_material(env):
+    app, table, clock, pilot = setup(**env)
     admin = token(clock, role="admin", sub="admin-1")
     before = dict(table.items)
+    pilot_routes = ((("/v1/pilot-keys", pilot, {"public_key": "00" * 32, "nonce": "n", "signature": "00" * 64,
+                                                "authorization": "a", "authorization_sig": "00" * 64}),
+                     (f"/v1/pilot-keys/{'ab' * 32}/retire", admin, {})) if env else ())
     for field in ("private_key", "privateKeyPem", "seed"):
         secret = {field: SEED_B.hex()}
         for path, tok, body in (
@@ -70,10 +78,7 @@ def test_no_route_accepts_private_key_material():
                 ("/v1/keys", admin, {"public_key": "00" * 32, "nonce": "n", "signature": "00" * 64}),
                 ("/v1/registrations", pilot, {"receipt": "r", "idempotency_key": "idem-key-0000000001", "envelope_id": "e"}),
                 ("/v1/shares", pilot, {"registration_id": "0" * 32, "token_hash": "0" * 64,
-                                       "idempotency_key": "idem-key-0000000001"}),
-                ("/v1/pilot-keys", pilot, {"public_key": "00" * 32, "nonce": "n", "signature": "00" * 64,
-                                           "authorization": "a", "authorization_sig": "00" * 64}),
-                (f"/v1/pilot-keys/{'ab' * 32}/retire", admin, {})):
+                                       "idempotency_key": "idem-key-0000000001"})) + pilot_routes:
             s, out, _ = call(app, "POST", path, tok, {**body, **secret})
             assert (s, out["error"]) == (400, "unexpected_field"), (path, field)
     assert table.items == before

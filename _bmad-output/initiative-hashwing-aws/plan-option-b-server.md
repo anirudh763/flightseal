@@ -3,16 +3,16 @@ title: 'Option B server half: pilot authorization format, /v1/pilot-keys, regist
 type: feature
 ticket: ''
 created: '2026-11-19'
-status: in-progress
+status: built
 baseline_revision: '2ead46684154445f6056e61ed2780a196bd9a955'
 route: full
 route_source: auto
 risk: high
-review: ''
-review_source: ''
-lenses_ran: []
+review: quick
+review_source: pinned
+lenses_ran: [quick]
 review_loop_iteration: 0
-followup_review_recommended: false
+followup_review_recommended: true
 context:
   - '{project-root}/_bmad-output/initiative-hashwing-aws/design-key-enrollment-option-b.md'
 warnings: [oversized]
@@ -116,6 +116,13 @@ All paths relative to the worktree.
 
 ## Review Triage Log
 
+### 2026-11-19 — Review pass
+- verdicts: 3 findings — high 0, medium 2, low 1, false 0, maybe-false 0
+- findings:
+  - `[medium]` `[patch]` THREAT_MODEL row said a rogue admin can't mint a pilot signer at the registry; an admin can replace ACTIVE_KEY via `POST /v1/keys` + `confirm_replace` and then authorize pilots — row rewritten: refused at the recipient (pin), not at the registry; browser half not built.
+  - `[medium]` `[patch]` "standard base64 alphabet" vector fell back to a trailing `+` (length change) — a canonical statement's base64url can never contain `-`/`_` (no `>`, `?`, `~` in it), so replaced by two same-length cases with `+` and `/`; JSON regenerated (26 cases).
+  - `[low]` `[patch]` `test_no_route_accepts_private_key_material` ran only with the switch on — now runs with the switch unset and on (pilot routes only when on).
+
 ## Design Notes
 
 Tests use the existing `Clock`/`make_app(**env)` helpers; `make_app(PILOT_KEYS_ORGS="orgA")` switches orgA on. Race tests follow `test_register_racing_a_compromise_is_refused_and_writes_nothing` (swap `table.transact` once). The cap race: pre-set `PILOT_COUNT.n = 49`, then run two enrolls whose transactions interleave via that hook; exactly one 201.
@@ -127,3 +134,11 @@ Tests use the existing `Clock`/`make_app(**env)` helpers; `make_app(PILOT_KEYS_O
 - `cd /private/tmp/claude-501/-Users-anirudhyadav/d85e4c7d-ebdd-49d1-8c47-0eace70cc60c/scratchpad/wt && uv run --no-project --python 3.12 --with pyulog==1.3.0 --with pytest --with pyyaml==6.0.2 python -m pytest -q` -- expected: baseline 200 passed, 30 skipped, plus any new root tests, 0 failed
 - `cd /private/tmp/claude-501/-Users-anirudhyadav/d85e4c7d-ebdd-49d1-8c47-0eace70cc60c/scratchpad/wt/infra && npm ci && npm test` -- expected: all pass
 - `cd /private/tmp/claude-501/-Users-anirudhyadav/d85e4c7d-ebdd-49d1-8c47-0eace70cc60c/scratchpad/wt && python3 tests/fixtures/make_pilot_authorization.py && git diff --exit-code tests/fixtures/pilot-authorization.json` -- expected: no diff
+
+## Auto Run Result
+
+- Summary: Option B server half: `pilot_authorization.py` + shared vectors (26 cases), `/v1/pilot-keys` challenge/enroll/retire behind `PILOT_KEYS_ORGS` (off unless set; stack never sets it), pilot register checks inside the registration transaction, compromise/retire decrement `PILOT_COUNT`, restore keeps kinds, recounts `PILOT_COUNT`, rebuilds ACTIVE_KEY from company keys only, refuses kind disagreements; infra routes 16; docs and ledger.
+- Review: 3 patches applied (2 medium, 1 low), 0 deferred, 0 rejected. Follow-up review recommended: true — two medium entries patched; the named unverified risk is the new transactions never having run against DynamoDB/LocalStack (only MemoryTable).
+- Verification (after merging origin/main f2583ef): `registry/tests` 280 passed, 0 skipped; root pytest 343 passed, 30 skipped; `ctest` 5/5; `infra` npm test 19/19; vector generator reproduces the JSON byte for byte.
+- Residual risks: real DynamoDB transactions not exercised; expired pilot keys stay `active` and count toward 50 until retired; recipient signal and the 500-entry recipient list are browser/follow-up work.
+
