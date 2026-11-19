@@ -3,7 +3,7 @@ title: 'AC-37: Verify compares a share link with the registry record (downgrade 
 type: feature
 ticket: ''
 created: '2026-11-19'
-status: in-review
+status: built
 baseline_revision: 'f2583efddeab71a84ba0be1f5f85b9c1b75d58fd'
 route: full
 route_source: auto
@@ -17,7 +17,14 @@ context:
   - '{project-root}/_bmad-output/initiative-hashwing-aws/design-key-enrollment-option-b.md'
   - '{project-root}/AGENTS.md'
 warnings: [multiple-goals]
-deferred: []
+deferred:
+  - summary: >-
+      A registry-side "removed or marked compromised" key signal on the share view is not built.
+    evidence: |-
+      GET /v1/shares/<token> returns only head, count, key_fingerprint and received_at; design §8 and §11 default 2 defer the signal past PRs 1 to 3.
+    location: >-
+      registry/registry/app.py get_share
+    severity: medium
 ---
 
 <intent-contract>
@@ -78,6 +85,14 @@ deferred: []
 
 ## Review Triage Log
 
+### 2026-11-19 — Review pass
+- verdicts: 4 findings — high 0, medium 0, low 4, false 0, maybe-false 0
+- findings:
+  - `[low]` `[patch]` Ledger "Follow-ups still open" still listed the registryTimeField gap — sentence now says it is built in this PR.
+  - `[low]` `[patch]` EXPERIENCE small-file bullet omitted the link-mismatch headline — bullet now names it (flag on, from a share link).
+  - `[low]` `[patch]` Info record line drew the same round shape as the ok match line — `recordRow` draws no status shape for the info line.
+  - `[low]` `[patch]` Untested `.catch` in `useShareRecord` — removed; `getShare` never rejects (registry-client resolves every call).
+
 ## Design Notes
 
 `manifestReport(..., applyRecord)` takes a closure built in flag-guarded code: `(r) => applyRegistryRecord(r, record, receipt)`. Flag-off nothing references `applyRegistryRecord`, so Rollup drops it and its strings. Add the new strings to `FORBIDDEN` in `registry-wiring.mjs`; that check scans `git show HEAD:docs/console`, so the parent rebuilds `docs/console` (AGENTS.md rule) and commits before the final wiring run.
@@ -97,3 +112,11 @@ Docs: design §4.1 line "400 `bad_challenge`…" → the client shows "That requ
 - `REGISTRY_DEV_URL=http://127.0.0.1:8797 node newweb/tests/registry-wiring.mjs` -- all pass
 - `npm --prefix newweb run test:browser`; `node newweb/tests/profiles.mjs`; `node --test tests/web/*.test.mjs` -- all pass
 - `grep -rl "registry's record for this link\|doesn't match the link" docs/console` -- nothing
+
+## Auto Run Result
+
+- Summary: AC-37 registry record line on Verify (downgrade only, flag on), one shared share fetch, registryTimeField on registryLine, disabled primary button contrast fix, docs corrected.
+- Files: `newweb/src/recipient-trust.mjs` (applyRegistryRecord, manifestReport applyRecord), `newweb/src/registry-ui.jsx` (useShareRecord, useRegistryRecordCheck, registryTimeField), `newweb/src/main.jsx` (both Verify paths), `newweb/src/style.css` (disabled text #56645c), tests (recipient-trust, registry-session, registry-wiring), docs (design, EXPERIENCE, ledger, AGENTS.md), `docs/console` rebuilt.
+- Review: 4 low patches applied, 1 item deferred (registry-side compromise signal), 0 rejected. followup_review_recommended: false (no high, no medium patched).
+- Verification: `node --test newweb/tests/*.test.mjs` 161/161; `REGISTRY_DEV_URL=http://127.0.0.1:8797 node newweb/tests/registry-wiring.mjs` 45/45 (contrast rest 6.82, hover 9.27, focus 6.82, disabled 4.87); `npm --prefix newweb run test:browser` 64 ok; `node newweb/tests/profiles.mjs` 8/8; `node --test tests/web/*.test.mjs` 147/147; outbox-browser 8/8; flag-off `docs/console` has none of the new strings.
+- Residual risks: element screenshots at 1440 are partly covered by the sticky top bar (a screenshot artefact, not a layout bug).
