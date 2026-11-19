@@ -43,6 +43,7 @@ export function routeHash(target, params = {}) {
   if (Number.isSafeInteger(Number(params.receipt)) && Number(params.receipt)>0) query.set('receipt',String(Number(params.receipt)));
   if (target === 'jobs' && params.q) query.set('q', String(params.q).slice(0, 200)); // Jobs: the search and the page are in the URL
   if (target === 'jobs' && Number.isSafeInteger(Number(params.page)) && Number(params.page) > 1) query.set('page', String(Number(params.page)));
+  if (target === 'jobs' && ['waiting', 'registered', 'problems'].includes(params.status)) query.set('status', params.status); // the flag-on status filter
   return `#${path}${query.size ? `?${query.toString()}` : ''}`;
 }
 
