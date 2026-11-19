@@ -1231,12 +1231,16 @@ try {
         await dialog.getByRole('button', { name: 'Replace key' }).click();
         await waitRows((rows) => rows.length === 2 && rows.some((r) => /Active Enrolled .* by you/.test(r)) && rows.some((r) => new RegExp(`Replaced on ${DAY}`).test(r)), 'replaced rows');
         assert.equal(keyPosts[1].confirm_replace, true);
+        // the Replace button is gone once its key is active, so focus goes to the section heading, not <body>
+        await kp.waitForFunction(() => document.activeElement?.id === 'company-keys-title', null, { timeout: 5000 });
         const html = await kp.evaluate(() => ({ text: document.body.innerText, html: document.documentElement.outerHTML }));
         assert.ok(!/rotated/i.test(html.text) && !/rotated/i.test(html.html), '"rotated" never reaches the page');
       });
 
       await check('lost response: an enroll whose answer is lost reads as success on the next press (409 key_exists, the loaded key is the active key)', async () => {
+        await panel.getByText("This key is now your company's active key.").waitFor();
         await generate();
+        assert.equal(await panel.getByText("This key is now your company's active key.").count(), 0, 'the last key\'s message is cleared when another key is loaded');
         const isPost = (url) => new URL(url).pathname === '/v1/keys';
         let dropped = 0;
         const drop = async (route) => {
@@ -1277,6 +1281,7 @@ try {
         await dialog.getByRole('button', { name: 'Mark compromised' }).click();
         const row = keyRows().filter({ hasText: fp });
         await row.getByText(new RegExp(`^Marked compromised on ${DAY}$`)).waitFor();
+        await kp.waitForFunction(() => document.activeElement?.id === 'company-keys-title', null, { timeout: 5000 }); // its trigger is gone
         assert.equal(await row.getByRole('button', { name: 'Mark compromised' }).count(), 0, 'no second mark');
       });
 
@@ -1289,6 +1294,9 @@ try {
         const buttons = await shownButtons();
         assert.deepEqual([...new Set(buttons)], ['Copy'], JSON.stringify(buttons));
         assert.equal(buttons.length, 3);
+        await kctx.setOffline(true); offline = true;
+        try { await panel.getByText("You're offline. Key changes need a connection.").waitFor(); } // members get the reason too
+        finally { await kctx.setOffline(false); offline = false; }
       });
 
       await check('offline: key actions are disabled and the reason is shown', async () => {
