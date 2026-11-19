@@ -7,6 +7,7 @@ import { spawn, spawnSync } from 'node:child_process';
 import { createServer } from 'node:http';
 import { mkdirSync, readFileSync, readdirSync, statSync, writeFileSync } from 'node:fs';
 import { readFile } from 'node:fs/promises';
+import { createHash } from 'node:crypto';
 import { dirname, extname, join, normalize, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import assert from 'node:assert/strict';
@@ -25,7 +26,9 @@ const { chromium } = require('playwright');
 const AXE = readFileSync(require.resolve('axe-core/axe.min.js'), 'utf8');
 // "Sealed on this device" ships in every build now (AC-60), so the registry list is caught by its own strings instead.
 const FORBIDDEN = ['Company registry', 'Test sign-in', 'Export pending proofs', 'Not sent to the registry yet', 'hashwing-outbox', 'hashwing-pending', 'hashwing-registry-signouts', '/v1/envelopes', '/v1/shares', 'registry-test-secret', 'dev-hs256',
-  'REGISTRY_URL', 'execute-api', 'amazonaws.com', '__dev/token', 'Your company\'s keys', '/v1/keys', 'hashwing-key-enroll'];
+  'REGISTRY_URL', 'execute-api', 'amazonaws.com', '__dev/token', 'Your company\'s keys', '/v1/keys', 'hashwing-key-enroll',
+  // AC-37: the share record step (applyRegistryRecord) ships only in registry-on builds.
+  "Matches the registry's record", "Doesn't match the registry's record for this link", "Files match · doesn't match the link", "This link was withdrawn or couldn't be checked", 'Registry record', 'Checking the share link'];
 const JWT = /eyJ[\w-]+\.eyJ[\w-]+\./; // any signed token (a pasted dev token is an HS256 JWT)
 const LINK_DEAD = "This link doesn't open. It may have been withdrawn or expired, or it was copied incompletely. Ask the sender for a new link.";
 const SEED_A_PEM = `-----BEGIN PRIVATE KEY-----\n${Buffer.concat([Buffer.from('302e020100300506032b657004220420', 'hex'), Buffer.from([...Array(32).keys()])]).toString('base64')}\n-----END PRIVATE KEY-----\n`;
@@ -34,6 +37,7 @@ const checks = [];
 const errors = [];
 let base, devServer, lock, browser, flagOff, flagOn;
 let flightA = null; // the registered small-file seal and its receipt message, for the client's check
+let twoFiles = null; // the registered two-file list, its receipt message, key and originals (AC-37 list path)
 let offline = false; // while a check holds the context offline, no-SW static loads (the icon) fail too
 
 async function check(name, fn) {
@@ -116,6 +120,33 @@ async function axe(page, label) {
   await page.evaluate(AXE);
   const results = await page.evaluate(() => window.axe.run(document, { runOnly: { type: 'tag', values: ['wcag2a', 'wcag2aa', 'wcag21a', 'wcag21aa', 'wcag22aa', 'best-practice'] } }));
   assert.equal(results.violations.length, 0, `${label}: ${results.violations.map((v) => `${v.id}: ${v.nodes.map((n) => n.target.join(' ')).join('; ')}`).join(' | ')}`);
+}
+// WCAG contrast of an element's text against its own background, each composited over the real backdrop (the first
+// opaque ancestor background and the translucent ones above it), with the element's own opacity applied to both.
+async function contrastOf(locator) {
+  return locator.evaluate((el) => {
+    const rgba = (c) => { const m = c.match(/[\d.]+/g).map(Number); return { r: m[0], g: m[1], b: m[2], a: m.length > 3 ? m[3] : 1 }; };
+    const over = (top, bottom, a = top.a) => ({ r: top.r * a + bottom.r * (1 - a), g: top.g * a + bottom.g * (1 - a), b: top.b * a + bottom.b * (1 - a), a: 1 });
+    const layers = [];
+    let opacity = 1; // ponytail: ancestor opacity is folded into the element's; no ancestor here sets one
+    for (let n = el.parentElement; n; n = n.parentElement) {
+      const style = getComputedStyle(n);
+      opacity *= Number(style.opacity);
+      const bg = rgba(style.backgroundColor);
+      if (bg.a > 0) layers.push(bg);
+      if (bg.a === 1) break;
+    }
+    let backdrop = { r: 255, g: 255, b: 255, a: 1 }; // the canvas
+    for (const layer of layers.reverse()) backdrop = over(layer, backdrop);
+    const style = getComputedStyle(el);
+    opacity *= Number(style.opacity);
+    const ownBg = over(rgba(style.backgroundColor), backdrop);
+    const text = over(rgba(style.color), ownBg);
+    const fg = over(text, backdrop, opacity), bg = over(ownBg, backdrop, opacity);
+    const lum = ({ r, g, b }) => { const f = (v) => { v /= 255; return v <= 0.03928 ? v / 12.92 : ((v + 0.055) / 1.055) ** 2.4; }; return 0.2126 * f(r) + 0.7152 * f(g) + 0.0722 * f(b); };
+    const [hi, lo] = [lum(fg), lum(bg)].sort((x, y) => y - x);
+    return Math.round(((hi + 0.05) / (lo + 0.05)) * 100) / 100;
+  });
 }
 const CLIENT_BASIS = "not needed to check files from a share link";
 const REGISTERED_BASIS = "the registry's clock; the registry's statement, not proof of the files";
@@ -354,6 +385,7 @@ try {
     const value = `Registered at ${receivedAt}`;
     assert.deepEqual(await registryLineOfLastSeal(page, 'flight-a.fseal', new RegExp(`^${value}$`)), [value, REGISTERED_BASIS]);
     flightA = { path: join(OUT, 'flight-a.fseal'), handover: await page.locator('#check-text').inputValue() };
+    assert.ok(!(await page.locator('.verdict-lines').innerText()).includes('Registry record'), 'no share link, no registry record line');
     const token = await page.evaluate(() => sessionStorage.getItem('hashwing-registry-token'));
     const line = `Registry acceptance: ${value} (${REGISTERED_BASIS})`;
     const outs = { text: await exportOf(page, 'Download text report', token), markdown: await exportOf(page, 'Download Markdown report', token) };
@@ -372,7 +404,8 @@ try {
   await check('large files: a two-file manifest seal registers as "2 files"; checking it reads Registered on screen and in its text, Markdown, JSON and PDF reports', async () => {
     await sealMore(page);
     await page.getByLabel('Large files: fingerprint only, files stay where they are').check();
-    await page.locator('#manifest-files').setInputFiles([{ name: 'v1.mp4', mimeType: 'video/mp4', buffer: Buffer.from(`one ${Date.now()}`) }, { name: 'v2.mp4', mimeType: 'video/mp4', buffer: Buffer.from(`two ${Date.now()}`) }]);
+    const originals = [{ name: 'v1.mp4', mimeType: 'video/mp4', buffer: Buffer.from(`one ${Date.now()}`) }, { name: 'v2.mp4', mimeType: 'video/mp4', buffer: Buffer.from(`two ${Date.now()}`) }];
+    await page.locator('#manifest-files').setInputFiles(originals);
     await page.getByRole('button', { name: 'Seal the list', exact: true }).click();
     await chipIs(page, '2 files', 'Registered', 60000);
     // AC-25/AC-26 on the manifest check: the same receipt reads Registered on screen and in its text report.
@@ -380,6 +413,7 @@ try {
     const publicKey = /Public key: ([0-9a-f]{64})/.exec(handover)[1];
     const [download] = await Promise.all([page.waitForEvent('download'), page.getByRole('button', { name: 'Download sealed list' }).click()]);
     const sealedPath = join(OUT, 'two-files.manifest.fseal'); await download.saveAs(sealedPath);
+    twoFiles = { path: sealedPath, handover, publicKey, originals };
     await go(page, 'verify');
     await page.locator('#check-file').setInputFiles(sealedPath);
     await page.locator('#check-text').fill(handover);
@@ -475,6 +509,9 @@ try {
     await reviewer.waitForFunction(() => document.querySelector('#verdict-heading')?.textContent === 'Files match · signer not confirmed', null, { timeout: 60000 });
     await reviewer.waitForFunction(() => /Registry\s+No account needed/.test(document.querySelector('.verdict-lines')?.innerText || ''), null, { timeout: 30000 })
       .catch(async () => assert.fail(`verdict lines: ${await reviewer.locator('.verdict-lines').innerText()}`));
+    // AC-37: the link's real record matches this receipt, so the line says so and the headline stays as it was.
+    assert.match(await reviewer.locator('.verdict-lines').innerText(), /Registry record\s+Matches the registry's record/);
+    assert.ok(!/verified|matches/i.test(await reviewer.locator('.registry-record').innerText()), 'the record panel itself still never says matches');
     const clientTime = reviewer.locator('[aria-labelledby="check-title"] .time-fields > div', { has: reviewer.locator('dt', { hasText: 'Registry acceptance' }) });
     assert.deepEqual([await clientTime.locator('dd span').innerText(), await clientTime.locator('dd small').innerText()], ['No account needed', CLIENT_BASIS]);
     assert.ok(!(await reviewer.locator('main').innerText()).includes('Not signed in'), 'the client never reads "Not signed in"');
@@ -497,6 +534,121 @@ try {
     assert.equal(await reviewer.getByLabel('I have files').isChecked(), true);
     assert.equal(await reviewer.locator('.registry-record').count(), 0, 'Verify without a link shows no old record');
     await fresh.close();
+  });
+
+  await check('AC-37 share link and receipt: a match keeps Verified; a different record lowers it to "Files match · doesn\'t match the link" on screen and in the report; a 404 adds an information line; a compromised pin stays compromised', async () => {
+    const token = shareUrl.split('share=')[1];
+    const publicKey = /Public key: ([0-9a-f]{64})/.exec(flightA.handover)[1];
+    const fingerprint = createHash('sha256').update(Buffer.from(publicKey, 'hex')).digest('hex');
+    const at = '2026-11-01T10:00:00.000Z';
+    const pinned = [{ name: 'Flight A Co', publicKey: '', fingerprint, source: 'phone', addedAt: at, status: 'active', confirmedAt: at }];
+    const compromised = [{ name: 'Flight A Co', publicKey: '', fingerprint, source: 'phone', addedAt: at, status: 'compromised', confirmedAt: at, compromisedAt: at }];
+    const fresh = await newContext();
+    const reviewer = watch(await fresh.newPage(), 'reviewer-record');
+    const real = await (await fetch(`${base}/v1/shares/${token}`)).json();
+    // Opens the link with these pins (and, when given, this registry answer), checks flight-a and returns the result.
+    const checkWith = async (pins, answer = null) => {
+      await reviewer.goto(shareUrl);
+      await reviewer.evaluate((p) => localStorage.setItem('flightseal_trusted_keys_v1', JSON.stringify(p)), pins);
+      const route = answer && ((r) => r.fulfill({ status: answer[0], contentType: 'application/json', headers: { 'access-control-allow-origin': '*' }, body: JSON.stringify(answer[1]) }));
+      if (route) await reviewer.route(`${base}/v1/shares/**`, route);
+      try {
+        await reviewer.goto('about:blank');
+        await reviewer.goto(shareUrl);
+        await reviewer.getByRole('button', { name: 'Check the files' }).click();
+        await reviewer.locator('#check-file').setInputFiles(flightA.path);
+        await reviewer.locator('#check-text').fill(flightA.handover);
+        await reviewer.getByRole('button', { name: 'Check files' }).click();
+        await reviewer.locator('#verdict-heading').waitFor({ timeout: 60000 });
+        await reviewer.waitForFunction(() => /Registry record/.test(document.querySelector('.verdict-lines')?.innerText || ''), null, { timeout: 30000 });
+        return { headline: await reviewer.locator('#verdict-heading').innerText(), lines: (await reviewer.locator('.verdict-lines').innerText()).replace(/\s+/g, ' ') };
+      } finally { if (route) await reviewer.unroute(`${base}/v1/shares/**`, route); }
+    };
+    const reportHead = async () => (await exportOf(reviewer, 'Download text report', token)).split('\n').slice(0, 2);
+    try {
+      let r = await checkWith(pinned);
+      assert.equal(r.headline, 'Verified', r.lines);
+      assert.match(r.lines, /Registry record Matches the registry's record/);
+      assert.match((await reportHead())[1], /^Registry record: Matches the registry's record$/);
+      // Keyboard: Tab from the headline reaches the verdict's next control, the report menu.
+      await reviewer.locator('#verdict-heading').focus();
+      await reviewer.keyboard.press('Tab');
+      assert.equal(await reviewer.evaluate(() => document.activeElement?.closest('.verdict-next') !== null), true, `Tab went to ${await reviewer.evaluate(() => document.activeElement?.outerHTML.slice(0, 120))}`);
+      for (const width of [320, 1440]) {
+        await reviewer.setViewportSize({ width, height: 900 });
+        const overflow = await reviewer.evaluate(() => document.documentElement.scrollWidth - innerWidth);
+        assert.ok(overflow <= 0, `verify record@${width}: horizontal scroll ${overflow}px`);
+        await axe(reviewer, `verify record@${width}`);
+        await reviewer.locator('.verdict').screenshot({ path: join(OUT, `verify-record-${width}.png`) });
+      }
+      await reviewer.setViewportSize({ width: 1440, height: 900 });
+
+      r = await checkWith(pinned, [200, { ...real, head: real.head === 'f'.repeat(64) ? 'e'.repeat(64) : 'f'.repeat(64) }]);
+      assert.equal(r.headline, "Files match · doesn't match the link", r.lines);
+      assert.match(r.lines, /Registry record Doesn't match the registry's record for this link/);
+      const [result, line] = await reportHead();
+      assert.ok(result.startsWith(`Result: ${r.headline}. `), result);
+      assert.equal(line, "Registry record: Doesn't match the registry's record for this link");
+      const md = await exportOf(reviewer, 'Download Markdown report', token);
+      assert.ok(md.startsWith(`${result}\n\nRegistry record: Doesn't match the registry's record for this link\n\n`), md.slice(0, 400));
+      const smallJson = JSON.parse(await exportOf(reviewer, 'Download JSON', token));
+      assert.equal(smallJson.result, result);
+      assert.equal(smallJson.verdict.key, 'link-mismatch');
+      assert.deepEqual(smallJson.record, { label: 'Registry record', value: "Doesn't match the registry's record for this link", kind: 'warn' });
+
+      r = await checkWith(pinned, [404, { error: 'not_found' }]);
+      assert.equal(r.headline, 'Verified', r.lines);
+      assert.match(r.lines, /Registry record This link was withdrawn or couldn't be checked/);
+      assert.ok((await reportHead())[0].startsWith('Result: Verified. '));
+
+      // The list path: flight-a's link opened with the two-file list's receipt reads as a different record.
+      await reviewer.goto(shareUrl);
+      await reviewer.evaluate((p) => localStorage.setItem('flightseal_trusted_keys_v1', JSON.stringify(p)), pinned);
+      await reviewer.goto('about:blank');
+      await reviewer.goto(shareUrl);
+      await reviewer.getByRole('button', { name: 'Check the files' }).click();
+      await reviewer.locator('#check-file').setInputFiles(twoFiles.path);
+      await reviewer.locator('#check-text').fill(twoFiles.handover);
+      await reviewer.locator('#check-originals').setInputFiles(twoFiles.originals);
+      await reviewer.locator('.check-options summary').click();
+      await reviewer.locator('#check-key').fill(twoFiles.publicKey);
+      await reviewer.getByRole('button', { name: 'Check files' }).click();
+      const outcome = reviewer.locator('.manifest-outcome');
+      await outcome.locator('#verdict-heading').waitFor({ timeout: 60000 });
+      assert.equal(await outcome.locator('#verdict-heading').innerText(), "Files match · doesn't match the link", await outcome.innerText());
+      assert.match((await outcome.locator('.verdict-lines').innerText()).replace(/\s+/g, ' '), /Registry record Doesn't match the registry's record for this link/);
+      const listText = (await exportOf(reviewer, 'Download text report', token, outcome)).split('\n');
+      assert.ok(listText[0].startsWith("Result: Files match · doesn't match the link. "), listText[0]);
+      assert.equal(listText[1], "Registry record: Doesn't match the registry's record for this link");
+      const listJson = JSON.parse(await exportOf(reviewer, 'Download JSON', token, outcome));
+      assert.equal(listJson.verdict.key, 'link-mismatch');
+      assert.equal(listJson.record.value, "Doesn't match the registry's record for this link");
+
+      // While the record is still loading, the files form says so politely and shows no verdict yet.
+      let release; const held = new Promise((ok) => { release = ok; });
+      const hold = async (route) => { await held; await route.fulfill({ status: 200, contentType: 'application/json', headers: { 'access-control-allow-origin': '*' }, body: JSON.stringify(real) }); };
+      await reviewer.goto('about:blank');
+      await reviewer.route(`${base}/v1/shares/**`, hold);
+      try {
+        await reviewer.goto(shareUrl);
+        await reviewer.getByRole('button', { name: 'Check the files' }).click();
+        await reviewer.locator('#check-file').setInputFiles(flightA.path);
+        await reviewer.locator('#check-text').fill(flightA.handover);
+        await reviewer.getByRole('button', { name: 'Check files' }).click();
+        await reviewer.getByRole('status').filter({ hasText: 'Checking the share link…' }).waitFor({ timeout: 30000 });
+        assert.equal(await reviewer.locator('#verdict-heading').count(), 0, 'no verdict while the record loads');
+        release();
+        await reviewer.locator('#verdict-heading').waitFor({ timeout: 30000 });
+        assert.equal(await reviewer.locator('#verdict-heading').innerText(), 'Verified');
+        assert.equal(await reviewer.getByText('Checking the share link…').count(), 0);
+      } finally { release(); await reviewer.unroute(`${base}/v1/shares/**`, hold); }
+
+      r = await checkWith(compromised);
+      assert.equal(r.headline, 'Signed by a key marked compromised', r.lines);
+      assert.match(r.lines, /Registry record Matches the registry's record/);
+      assert.ok((await reportHead())[0].startsWith('Result: Signed by a key marked compromised. '));
+      assert.equal(await reviewer.locator('.verdict-lines .trust-line', { hasText: "Matches the registry's record" }).evaluate((el) => el.classList.contains('info') && !el.classList.contains('ok')), true, 'a match beside a compromised headline is not green');
+    } finally { await fresh.close(); }
   });
 
   await check('share view: a malformed record or a 429 shows the one "temporarily unavailable" message, and the app keeps rendering', async () => {
@@ -1424,8 +1576,7 @@ try {
           assert.deepEqual(small, [], `company keys@${width}: buttons under 44px`);
           await kp.mouse.move(0, 0); await sleep(300); // nothing hovered while axe reads colours
           await axe(kp, `company keys@${width}`);
-          await panel.scrollIntoViewIfNeeded();
-          await kp.screenshot({ path: join(OUT, `company-keys-${width}.png`), fullPage: true });
+          await panel.screenshot({ path: join(OUT, `company-keys-${width}.png`) });
         }
         await kp.setViewportSize({ width: 1440, height: 900 });
         assert.equal(await panel.locator('.button.primary').count(), 1, 'one primary button in the section');
@@ -1439,6 +1590,38 @@ try {
           reached = await kp.evaluate(() => document.activeElement?.textContent === 'Replace with this key');
         }
         assert.ok(reached, 'Tab reaches Replace with this key');
+      });
+
+      await check('company keys: the primary button keeps 4.5:1 text contrast at rest, on mouse hover, on keyboard focus and disabled (320px)', async () => {
+        const primary = panel.getByRole('button', { name: 'Replace with this key' });
+        await kp.setViewportSize({ width: 320, height: 900 });
+        await primary.scrollIntoViewIfNeeded();
+        const transition = await primary.evaluate((b) => getComputedStyle(b).transition);
+        const settle = () => sleep(400); // .button has a .12s background transition: sample after it ends
+        const ratios = {};
+        await kp.mouse.move(0, 0); await settle();
+        ratios.rest = await contrastOf(primary);
+        const box = await primary.boundingBox();
+        await kp.mouse.move(box.x + box.width / 2, box.y + box.height / 2); await settle();
+        assert.equal(await primary.evaluate((b) => b.matches(':hover')), true, 'really hovered');
+        ratios.hover = await contrastOf(primary);
+        await kp.mouse.move(0, 0);
+        await panel.getByRole('button', { name: 'Copy' }).first().focus();
+        for (let i = 0; i < 12 && !(await primary.evaluate((b) => b === document.activeElement)); i++) await kp.keyboard.press('Tab');
+        assert.equal(await primary.evaluate((b) => b.matches(':focus-visible')), true, 'keyboard focus');
+        await settle();
+        ratios.focus = await contrastOf(primary);
+        await kctx.setOffline(true); offline = true;
+        try {
+          await panel.getByText("You're offline. Key changes need a connection.").waitFor();
+          assert.equal(await primary.isDisabled(), true);
+          await kp.mouse.move(0, 0); await settle();
+          ratios.disabled = await contrastOf(primary);
+        } finally { await kctx.setOffline(false); offline = false; }
+        await panel.getByText("You're offline.", { exact: false }).waitFor({ state: 'detached' });
+        await kp.setViewportSize({ width: 1440, height: 900 });
+        console.log(`  contrast (Replace with this key, 320px; transition: ${transition}): ${JSON.stringify(ratios)}`);
+        for (const [state, ratio] of Object.entries(ratios)) assert.ok(ratio >= 4.5, `${state}: ${ratio}:1`);
       });
     } finally { await kctx.close(); }
   }

@@ -234,6 +234,17 @@ test('the Verify time row for each state of this device\'s outbox row', () => {
   assert.deepEqual(registryTimeField({ ...base, listed: false }, lines), notYet);
 });
 
+test('the Verify time row reads only the last receipt line of a message, the one the registry got', () => {
+  const early = receipt(31), last = receipt(32), message = `${early}\n${last}\n`;
+  const base = { owner: 'orgA/u', outbox: {}, listed: true, rows: [], pending: [], online: true };
+  const registeredEarly = { ...base, rows: [{ id: 'x', receipt: early, label: 'Registered', state: 'registered', disposition: 'active', received_at: '2026-11-17T10:00:05Z' }] };
+  assert.deepEqual(registryTimeField(registeredEarly, message), { value: 'No registry record on this device', basis: 'this device has no registry record for this receipt' });
+  assert.deepEqual(registryTimeField({ ...base, owner: null, outbox: null, pending: [{ receipt: early }] }, message), { value: 'Not signed in', basis: "sign in to the company registry to see this device's record" });
+  const registeredLast = { ...base, rows: [{ ...registeredEarly.rows[0], receipt: last }] };
+  assert.equal(registryTimeField(registeredLast, message).value, 'Registered at 2026-11-17T10:00:05Z');
+  assert.deepEqual(registryTimeField({ ...base, owner: null, outbox: null }, 'no receipt line here', { fromLink: true }), { value: 'No account needed', basis: 'not needed to check files from a share link' });
+});
+
 test('Jobs status for each outbox state, pending proofs and no record, matched on the receipt line sent to the registry', () => {
   const R = receipt(19), msg = `HashWing receipt for x\nPublic key: ${hex(64, 'b')}\n${R}\n\nKeep this message.`;
   const base = { owner: 'orgA/u', outbox: {}, listed: true, rows: [], pending: [], online: true };

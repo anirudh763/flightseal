@@ -72,8 +72,8 @@ company key to sign a receipt or an authorization. The same rule applies to the 
   calls `GET /v1/keys`, following `next_cursor`; it shows success only if that fingerprint equals the response's
   `active_key` (and, after PR 3, its row is `kind: company`). Otherwise "This key was enrolled before and
   can't be enrolled again" (a retired fingerprint is never re-used).
-- 400 `bad_challenge` (expired or used): the client gets one fresh challenge and asks the user to press again. No
-  automatic loop.
+- 400 `bad_challenge` (expired or used): the client shows "That request expired. Press the button again." The next
+  press gets a fresh challenge; nothing is fetched automatically.
 - Compromise retry: 200 with the original `changed_at` (fix above).
 
 **Errors the UI maps** (raw codes only under "More options", AC-29): 401, 403 `forbidden` (not an admin),
@@ -161,8 +161,8 @@ HashWing." (AC-50). One primary button per section.
 - List: fingerprint (groups of four, Copy), state label, "Enrolled {date}" plus "by you" when `enrolled_by_me`.
   `rotated` shows "Replaced on {date}"; the string "rotated" never appears (AC-38).
 - Admins: **Enroll this key**, **Replace with this key** (shown when another key is active; confirm dialog, safe choice
-  focused), **Mark compromised** (confirm: "New receipts signed with it will be refused. Older proofs from it will show a
-  warning."). Members: read-only (AC-39). The server enforces roles regardless.
+  focused), **Mark compromised** (confirm: "New receipts signed with it will be refused. Older proofs from it show a warning once the
+  people who check them mark it compromised too."). Members: read-only (AC-39). The server enforces roles regardless.
 - Offline: actions disabled, "You're offline. Key changes need a connection." (AC-40).
 - Option A note under the list (R71): "Only the company computer holds this key. Pilots on other devices seal with a
   one-time key, which reads 'signer not confirmed'."
