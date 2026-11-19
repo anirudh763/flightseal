@@ -228,7 +228,7 @@ try {
     await page.getByRole('button', { name: 'Seal the list', exact: true }).click();
     await page.waitForFunction(() => Number(document.querySelector('#manifest-seal-progress-1')?.value) > 0, null, { timeout: 60000 });
     await page.getByRole('button', { name: 'Cancel' }).click();
-    await page.waitForFunction(() => !document.querySelector('#manifest-seal-progress-1') && [...document.querySelectorAll('[role=status]')].some((n) => n.textContent === 'Sealing cancelled. Your files are still chosen.'));
+    await page.waitForFunction(() => !document.querySelector('#manifest-seal-progress-1') && [...document.querySelectorAll('[role=status]')].some((n) => n.textContent === 'Sealing cancelled. Your files are still chosen. Files already read are reused; choose them again to re-read everything.'));
     await page.evaluate(() => {
       window.__sealLabels = [];
       const note = () => { const label = document.querySelector('.seal-progress label[for="manifest-seal-progress"]'); if (label) window.__sealLabels.push(label.textContent); };
@@ -252,7 +252,7 @@ try {
     assert.ok(d1 >= 0 && d2 > d1, `the first item's digest is the 256 MiB file's (${d1}, ${d2})`);
   });
 
-  await check('a kept file changed on disk after Cancel is refused, not sealed with its old fingerprint', async () => {
+  await check('a kept file changed on disk (new modified time) after Cancel is refused, not sealed with its old fingerprint', async () => {
     const sparse = (name, size) => { const p = join(dir, name); const fd = openSync(p, 'w'); ftruncateSync(fd, size); closeSync(fd); return p; };
     const first = sparse('edited-first.bin', 64 * 2 ** 20), second = sparse('edited-second.bin', 2 ** 30);
     try {
@@ -260,7 +260,7 @@ try {
       await page.getByRole('button', { name: 'Seal the list', exact: true }).click();
       await page.waitForFunction(() => Number(document.querySelector('#manifest-seal-progress-1')?.value) > 0, null, { timeout: 60000 });
       await page.getByRole('button', { name: 'Cancel' }).click();
-      await page.waitForFunction(() => [...document.querySelectorAll('[role=status]')].some((n) => n.textContent === 'Sealing cancelled. Your files are still chosen.'));
+      await page.waitForFunction(() => [...document.querySelectorAll('[role=status]')].some((n) => n.textContent === 'Sealing cancelled. Your files are still chosen. Files already read are reused; choose them again to re-read everything.'));
       const fd = openSync(first, 'r+'); writeSync(fd, Buffer.from('edited'), 0, 6, 0); closeSync(fd); // same size, new bytes
       const later = new Date(Date.now() + 60000); utimesSync(first, later, later);
       await page.getByRole('button', { name: 'Seal the list', exact: true }).click();

@@ -2540,7 +2540,7 @@ function ManifestSeal({ hidden, output, setOutput, carry, common, jobRef, signin
       setMessage(`Sealed ${items.length} file${items.length === 1 ? '' : 's'}.`);
       onSealed?.(sealed.receipts, `${items.length} file${items.length === 1 ? '' : 's'}`, sealStart);
     } catch (cause) {
-      if (cause?.name === 'AbortError') { setMessage('Sealing cancelled. Your files are still chosen.'); requestAnimationFrame(() => document.getElementById('manifest-seal')?.focus()); }
+      if (cause?.name === 'AbortError') { setMessage(`Sealing cancelled. Your files are still chosen.${files.some((file) => keptRef.current.has(file)) ? ' Files already read are reused; choose them again to re-read everything.' : ''}`); requestAnimationFrame(() => document.getElementById('manifest-seal')?.focus()); }
       else fail(cause?.message || 'Something went wrong. Press Seal the list again.');
     } finally { if (controllerRef.current === controller) { controllerRef.current = null; setPhase(''); setProgress(null); } }
   };

@@ -159,3 +159,16 @@ test('a logout reaches a tab restored with its old session: marked, revoked, a l
   for (let i = 0; i < 60; i += 1) announceLocalLogout({ userId: i.toString(16).padStart(32, '0'), storage, sessionStorage: new MemoryStorage(), cryptoObject: webcrypto });
   assert.equal(Object.keys(JSON.parse(storage.getItem('flightseal_logouts_v1'))).length, 50, 'at most 50 marks are kept');
 });
+
+test('a clock that jumped back never revokes a fresh login: the new session starts after the newest logout mark', async () => {
+  const storage = new MemoryStorage();
+  const p = await createLocalProfile('clock@example.test', 'correct horse battery staple', { storage, cryptoObject: webcrypto });
+  const stale = new MemoryStorage();
+  setLocalSession({ kind: 'account', userId: p.id }, { storage: stale, profileStorage: storage, cryptoObject: webcrypto });
+  storage.setItem('flightseal_logouts_v1', JSON.stringify({ [p.id]: Date.now() + 3_600_000 })); // logged out on a clock an hour ahead
+  assert.equal(getLocalSession({ storage: stale, profileStorage: storage }), null, 'the session from before that logout is still revoked');
+  const fresh = new MemoryStorage();
+  setLocalSession({ kind: 'account', userId: p.id }, { storage: fresh, profileStorage: storage, cryptoObject: webcrypto });
+  assert.deepEqual(getLocalSession({ storage: fresh, profileStorage: storage }), { app: APP_ID, schema: 1, kind: 'account', userId: p.id }, 'a login after it stays valid');
+  assert.equal(dropRevokedLocalSession({ storage: fresh, profileStorage: storage }), false);
+});

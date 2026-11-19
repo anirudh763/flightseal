@@ -222,9 +222,11 @@ export function listLocalProfiles({ storage = globalThis.localStorage } = {}) {
   return readRegistry(storageOrThrow(storage)).profiles.map(({ id, email }) => ({ id, email }));
 }
 
-export function setLocalSession(session, { storage = globalThis.sessionStorage, cryptoObject = globalThis.crypto } = {}) {
+export function setLocalSession(session, { storage = globalThis.sessionStorage, profileStorage = globalThis.localStorage, cryptoObject = globalThis.crypto } = {}) {
+  // Later than this profile's newest logout mark, so a clock that jumped back never revokes a fresh login.
+  const mark = session?.kind === 'account' ? Number(readLogoutMarks(profileStorage)[session.userId]) : NaN;
   const value = session?.kind === 'account'
-    ? { app: APP_ID, schema: SESSION_SCHEMA, kind: 'account', userId: session.userId, at: Date.now() }
+    ? { app: APP_ID, schema: SESSION_SCHEMA, kind: 'account', userId: session.userId, at: Number.isFinite(mark) ? Math.max(Date.now(), mark + 1) : Date.now() }
     : { app: APP_ID, schema: SESSION_SCHEMA, kind: 'guest', userId: randomId(cryptoObject) };
   if (value.kind === 'account' && !/^[a-f0-9]{32}$/.test(value.userId || '')) throw new Error('The local profile ID is invalid.');
   try {
