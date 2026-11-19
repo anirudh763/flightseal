@@ -316,6 +316,25 @@ try {
     assert.deepEqual(await page.locator('.jobs-table tbody .jobs-ref').allInnerTexts(), ['P-1'], 'signing back in shows them again');
   });
 
+  await check('removing a local profile deletes its jobs database and keeps the guest\'s', async () => {
+    const scopeDb = (scope) => page.evaluate(async (s) => `hashwing-jobs-v1-${[...new Uint8Array(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(s)))].map((b) => b.toString(16).padStart(2, '0')).join('')}`, scope);
+    const userId = await page.evaluate(() => Object.values(sessionStorage).map((v) => { try { return JSON.parse(v); } catch { return null; } }).find((v) => v?.kind === 'account')?.userId);
+    assert.ok(userId, 'the signed-in profile id');
+    const profileDb = await scopeDb(`profile:${userId}`), guestDb = await scopeDb('guest');
+    assert.ok((await dbNames(page)).includes(profileDb), 'the profile has a jobs database before removal');
+    page.once('dialog', (d) => d.accept());
+    await page.locator('.profile-menu > summary').click();
+    await page.getByRole('button', { name: 'Remove local profile, saved view and jobs', exact: true }).click();
+    await page.waitForFunction(() => !document.querySelector('.profile-menu > summary')?.textContent.includes('jobs-'));
+    let names = await dbNames(page);
+    for (let i = 0; i < 50 && names.includes(profileDb); i += 1) { await page.waitForTimeout(100); names = await dbNames(page); }
+    assert.ok(!names.includes(profileDb), `the profile's jobs database is gone: ${names.join()}`);
+    assert.ok(names.includes(guestDb), 'the guest\'s jobs database remains');
+    await go(page, 'jobs');
+    await page.locator('.jobs-table caption').waitFor();
+    assert.equal(await page.locator('.jobs-table caption').innerText(), 'Showing 1–25 of 61', 'the guest\'s jobs are untouched');
+  });
+
   await check('flag off (AC-02, AC-60): no registry request, no outbox or pending database; jobs live in their own database', async () => {
     const names = await dbNames(page);
     assert.ok(names.some((n) => /^hashwing-jobs-v1-[0-9a-f]{64}$/.test(n)), names.join());

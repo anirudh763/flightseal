@@ -26,7 +26,7 @@ import { FrontDoor, SkipLink } from './front-door.jsx';
 import { FileTotals, Handoff, SigningLine, exactBytes } from './seal-send.jsx';
 import { CompareTable, VerdictBlock } from './compare-table.jsx';
 import { JobsPage, SealedRecent } from './jobs.jsx';
-import { openJobsStore } from './jobs-store.mjs';
+import { deleteJobsDb, openJobsStore } from './jobs-store.mjs';
 import { LinkStep, VERIFY_OPENS_ON, VerifyChooser } from './verify-start.jsx';
 import { createEncryptedProfileBackup, inspectEncryptedProfileBackup, commitBackupRestore, previewBackupRestore } from './profile-backup.mjs';
 import { createSyncProvider } from './sync-provider.mjs';
@@ -1458,11 +1458,14 @@ function App() {
   const removeActiveProfile = async () => {
     if (activeSession?.kind !== 'account' || !localProfile?.id) return;
     if (hasUnsavedWork) { setProfileMenuMessage('Download your unsaved work before removing this profile.'); return; }
-    if (!window.confirm('Remove this local profile and its saved view from this browser? This cannot be undone.')) return;
+    if (!window.confirm('Remove this local profile, its saved view and its jobs from this browser? This cannot be undone.')) return;
     const id = localProfile.id;
     const epoch = authEpochRef.current;
     try { await removeLocalProfile(id, { isCurrent: () => authEpochRef.current === epoch && activeSession?.kind === 'account' && activeSession.userId === id }); }
     catch (cause) { setProfileMenuMessage(cause?.message || 'Could not remove this local profile.'); return; }
+    const scope = `profile:${id}`;
+    if (jobsStoreRef.current?.scope === scope) { jobsStoreRef.current.store.close(); jobsStoreRef.current = null; } // an open connection would block the delete
+    await deleteJobsDb(scope);
     if (authEpochRef.current !== epoch) return;
     announceLocalLogout({ userId: id });
     logout();
@@ -2231,7 +2234,7 @@ function ProfileMenu({ isCurrent, session, profile, currentSample, savedContext,
         {hasUnacknowledgedOutput && <><p className="profile-menu-message" role="alert">This tab has work that is not saved yet. Download it before you log out.</p>{unsavedControl}</>}
         {savedContextError && <p className="profile-menu-message" role="alert">{savedContextError}</p>}
         {message && <p className="profile-menu-message" role="status">{message}</p>}
-        <button type="button" className="profile-logout" disabled={hasUnacknowledgedOutput} onClick={onLogout}>Log out</button><button type="button" className="profile-remove" disabled={hasUnacknowledgedOutput} onClick={onRemoveProfile}>Remove local profile and saved view</button>
+        <button type="button" className="profile-logout" disabled={hasUnacknowledgedOutput} onClick={onLogout}>Log out</button><button type="button" className="profile-remove" disabled={hasUnacknowledgedOutput} onClick={onRemoveProfile}>Remove local profile, saved view and jobs</button>
       </> : <>
         <button type="button" onClick={() => onNavigateAuth('login')}>Use a local profile</button>
         <button type="button" onClick={() => onNavigateAuth('signup')}>Create a local profile</button>
