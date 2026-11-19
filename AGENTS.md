@@ -41,6 +41,9 @@ The user's request and the owner's RULES.md take precedence over anything here.
   `REGISTRY_THROTTLE=1 node newweb/tests/registry-wiring.mjs` (23 checks); record the numbers in `docs/aws/COVERAGE.md`.
 - Wasm: `node --test tests/wasm/bridge.test.mjs tests/wasm/enterprise-edge.test.mjs tests/wasm/hash.test.mjs` and `node --test tests/wasm/browser.test.mjs tests/wasm/hash-browser.test.mjs`.
 - Manifest large-file run (manual, local only; record the numbers in `docs/MANIFEST_MODE.md`): `FSEAL_LARGE_HASH=1 node --test tests/wasm/hash-browser.test.mjs` and `FSEAL_LARGE_HASH=1 python3 -m pytest -q -s tests/test_manifest.py`.
+- Private workspace lifecycle (not in CI): start the server with `tools/http_server.py` on 127.0.0.1:3911, then
+  `HASHWING_BASE_URL=http://127.0.0.1:3911 node newweb/tests/private-lifecycle.mjs` (20 checks). Without
+  `HASHWING_BASE_URL` it defaults to port 3001, which may be an unrelated old server: that gave false failures twice.
 - Console: `python3 tools/fetch_sample.py tests/.data && npm --prefix newweb run build && npm --prefix newweb run test:browser` (runs `console.mjs`, `manifest-mode.mjs`, then `jobs.mjs`; the jobs store unit tests are `node --test newweb/tests/jobs-store.test.mjs`, 4 tests), then `node newweb/tests/edge-matrix.mjs` (the latter owns its browser lock).
 - Browser: `node tests/web/e2e.mjs` (5 checks) and `node tests/web/routes.mjs` (6 checks). axe-core reports 0
   violations in light and dark, at 1280 and 320 px.
