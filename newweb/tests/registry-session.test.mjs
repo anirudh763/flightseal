@@ -15,7 +15,10 @@ globalThis.sessionStorage = { getItem: (k) => store.get(k) ?? null, setItem: (k,
 globalThis.addEventListener ??= () => {};
 globalThis.localStorage ??= { getItem: () => null, setItem: () => {}, removeItem: () => {} };
 globalThis.removeEventListener ??= () => {};
-globalThis.fetch = async () => { throw new TypeError('offline in this test'); };
+// The registry client keeps the fetch it was created with, so swap the handler behind it rather than globalThis.fetch.
+const offlineFetch = async () => { throw new TypeError('offline in this test'); };
+let fetchHandler = offlineFetch;
+globalThis.fetch = (...args) => fetchHandler(...args);
 globalThis.__REGISTRY_URL__ = URL_;
 // One process is one "tab": a fake channel records what this tab posts and lets a test deliver another tab's message.
 const channels = [];
@@ -277,4 +280,33 @@ test('a registry panel that throws while rendering shows one notice instead of b
   const notice = boundary.render();
   assert.equal(notice.props.role, 'alert');
   assert.match(notice.props.children, /couldn't be shown\. Sealing and checking still work/);
+});
+
+test('a proof held because the queue was full is sent when the queue gains room', async () => {
+  const r = getRegistry();
+  await r.setScope('profile:room');
+  assert.ok(await r.signIn(tokenFor('room1')));
+  for (let i = 0; i < 200; i++) await r.sealed(receipt(5000 + i)); // fill this owner's queue (offline: nothing sent)
+  const held = receipt(6000);
+  await r.sealed(held, 'room-flight.ulg'); // queue full: held
+  assert.deepEqual(r.snapshot().pending.map((p) => p.receipt), [held]);
+  let n = 0;
+  fetchHandler = async (url) => { // a registry that acks everything
+    const path = new globalThis.URL(url).pathname;
+    if (path === '/v1/epoch') return Response.json({ epoch: 0 });
+    if (path === '/v1/envelopes') return Response.json({ envelope_id: 'e'.repeat(32), expires_at: new Date(Date.now() + 864e5).toISOString(), epoch: 0 }, { status: 201 });
+    n += 1;
+    return Response.json({ registration_id: n.toString(16).padStart(32, '0'), received_at: new Date().toISOString(), count: 1, head: 'h', key_fingerprint: 'f', disposition: 'active' }, { status: 201 });
+  };
+  try {
+    await r.snapshot().outbox.retryNow();
+    const end = Date.now() + 15000;
+    while (Date.now() < end && (r.snapshot().pending.length || !(await r.snapshot().outbox.list()).some((row) => row.receipt === held))) await new Promise((done) => setTimeout(done, 20));
+    assert.deepEqual(r.snapshot().pending, [], 'nothing is held any more');
+    assert.ok((await r.snapshot().outbox.list()).some((row) => row.receipt === held), 'the held proof is in the outbox');
+  } finally {
+    fetchHandler = offlineFetch;
+    r.logout();
+    await r.setScope('guest');
+  }
 });

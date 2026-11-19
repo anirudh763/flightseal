@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { webcrypto } from 'node:crypto';
 import {
-  APP_ID, PBKDF2_ITERATIONS, authenticateLocalProfile, createLocalProfile, getLocalSession,
+  APP_ID, PBKDF2_ITERATIONS, announceLocalLogout, authenticateLocalProfile, createLocalProfile, dropRevokedLocalSession, getLocalSession,
   listLocalProfiles, localAuthStorageKeys, readWorkspaceContext, removeLocalProfile,
   removeWorkspaceContext, saveWorkspaceContext, setLocalSession,
 } from '../src/local-auth.mjs';
@@ -127,4 +127,35 @@ test('conflicting current and legacy profile registries fail safely and profiles
   await removeLocalProfile(current.id, { storage });
   assert.deepEqual(listLocalProfiles({ storage }), []);
   assert.equal(readWorkspaceContext(current.id, { storage }), null);
+});
+
+test('a logout reaches a tab restored with its old session: marked, revoked, a later login survives, other profiles unaffected', async () => {
+  const storage = new MemoryStorage();
+  const [tabA, tabB, tabC] = [new MemoryStorage(), new MemoryStorage(), new MemoryStorage()];
+  const p = await createLocalProfile('pilot@example.test', 'correct horse battery staple', { storage, cryptoObject: webcrypto });
+  const q = await createLocalProfile('reviewer@example.test', 'battery staple correct horse', { storage, cryptoObject: webcrypto });
+  setLocalSession({ kind: 'account', userId: p.id }, { storage: tabA, cryptoObject: webcrypto });
+  setLocalSession({ kind: 'account', userId: p.id }, { storage: tabB, cryptoObject: webcrypto });
+  setLocalSession({ kind: 'account', userId: q.id }, { storage: tabC, cryptoObject: webcrypto });
+  const snapshot = tabB.getItem(localAuthStorageKeys.session);
+  await new Promise((r) => setTimeout(r, 2));
+  announceLocalLogout({ userId: p.id, storage, sessionStorage: tabA, cryptoObject: webcrypto });
+  assert.ok(Number.isFinite(JSON.parse(storage.getItem('flightseal_logouts_v1'))[p.id]), 'the logout is marked');
+  const restored = new MemoryStorage();
+  restored.setItem(localAuthStorageKeys.session, snapshot);
+  assert.equal(getLocalSession({ storage: restored, profileStorage: storage }), null, 'a restored session from before the logout is revoked');
+  assert.equal(dropRevokedLocalSession({ storage: restored, profileStorage: storage }), true);
+  assert.equal(restored.getItem(localAuthStorageKeys.session), null, 'and cleared');
+  assert.equal(dropRevokedLocalSession({ storage: restored, profileStorage: storage }), false);
+  const legacy = new MemoryStorage(); // a session saved before logouts were marked has no start time
+  legacy.setItem(localAuthStorageKeys.session, JSON.stringify({ app: APP_ID, schema: 1, kind: 'account', userId: p.id }));
+  assert.equal(dropRevokedLocalSession({ storage: legacy, profileStorage: storage }), true);
+  assert.equal(dropRevokedLocalSession({ storage: tabC, profileStorage: storage }), false, 'another profile is unaffected');
+  assert.deepEqual(getLocalSession({ storage: tabC, profileStorage: storage }), { app: APP_ID, schema: 1, kind: 'account', userId: q.id });
+  await new Promise((r) => setTimeout(r, 2));
+  setLocalSession({ kind: 'account', userId: p.id }, { storage: restored, cryptoObject: webcrypto });
+  assert.equal(dropRevokedLocalSession({ storage: restored, profileStorage: storage }), false, 'a later login survives');
+  assert.deepEqual(getLocalSession({ storage: restored, profileStorage: storage }), { app: APP_ID, schema: 1, kind: 'account', userId: p.id });
+  for (let i = 0; i < 60; i += 1) announceLocalLogout({ userId: i.toString(16).padStart(32, '0'), storage, sessionStorage: new MemoryStorage(), cryptoObject: webcrypto });
+  assert.equal(Object.keys(JSON.parse(storage.getItem('flightseal_logouts_v1'))).length, 50, 'at most 50 marks are kept');
 });

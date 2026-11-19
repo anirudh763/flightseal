@@ -12,6 +12,10 @@ export const MAX_SAVED_CONTEXT_BYTES = 2048;
 const PROFILE_KEY = 'flightseal_profiles_v1';
 const SESSION_KEY = 'flightseal_session_v1';
 const LOGOUT_SIGNAL_KEY = 'flightseal_logout_v1';
+// When each profile last logged out ({userId: ms}, newest 50): a tab that missed the message (frozen, discarded,
+// restored with its old sessionStorage) drops a session started before it.
+const LOGOUTS_KEY = 'flightseal_logouts_v1';
+const MAX_LOGOUT_MARKS = 50;
 const LEGACY_PROFILE_KEY = 'hashwing:local-profiles:v1';
 const LEGACY_SESSION_KEY = 'hashwing:active-session:v1';
 const LEGACY_LOGOUT_SIGNAL_KEY = 'hashwing:logout-signal:v1';
@@ -220,7 +224,7 @@ export function listLocalProfiles({ storage = globalThis.localStorage } = {}) {
 
 export function setLocalSession(session, { storage = globalThis.sessionStorage, cryptoObject = globalThis.crypto } = {}) {
   const value = session?.kind === 'account'
-    ? { app: APP_ID, schema: SESSION_SCHEMA, kind: 'account', userId: session.userId }
+    ? { app: APP_ID, schema: SESSION_SCHEMA, kind: 'account', userId: session.userId, at: Date.now() }
     : { app: APP_ID, schema: SESSION_SCHEMA, kind: 'guest', userId: randomId(cryptoObject) };
   if (value.kind === 'account' && !/^[a-f0-9]{32}$/.test(value.userId || '')) throw new Error('The local profile ID is invalid.');
   try {
@@ -229,7 +233,44 @@ export function setLocalSession(session, { storage = globalThis.sessionStorage, 
     store.removeItem(LEGACY_SESSION_KEY);
   }
   catch { throw new Error('This tab could not save its local session. Check browser storage and try again.'); }
-  return value;
+  const { at, ...shown } = value;
+  return shown;
+}
+
+function readLogoutMarks(storage) {
+  try {
+    const value = JSON.parse(storage?.getItem(LOGOUTS_KEY) || '{}');
+    return value && typeof value === 'object' && !Array.isArray(value) ? value : {};
+  } catch { return {}; }
+}
+
+function recordLogoutMark(userId, storage) {
+  try {
+    const marks = Object.entries({ ...readLogoutMarks(storage), [userId]: Date.now() })
+      .filter(([, t]) => Number.isFinite(t)).sort((a, b) => b[1] - a[1]).slice(0, MAX_LOGOUT_MARKS);
+    storage?.setItem(LOGOUTS_KEY, JSON.stringify(Object.fromEntries(marks)));
+  } catch { /* the BroadcastChannel and storage event still reach open tabs */ }
+}
+
+// An account session started before its profile's last logout (in any tab).
+function isRevoked(value, profileStorage) {
+  if (value?.kind !== 'account') return false;
+  const mark = readLogoutMarks(profileStorage)[value.userId];
+  return Number.isFinite(mark) && !(Number(value.at) > mark);
+}
+
+function readStoredSession(storage) {
+  try { return JSON.parse(storage?.getItem(SESSION_KEY) || storage?.getItem(LEGACY_SESSION_KEY) || 'null'); } catch { return null; }
+}
+
+// true (after clearing it) when this tab's saved account session predates its profile's last logout elsewhere.
+export function dropRevokedLocalSession(options = {}) {
+  try { // the storage getters throw when site storage is blocked: then there is no saved session to drop
+    const { storage = globalThis.sessionStorage, profileStorage = globalThis.localStorage } = options;
+    if (!isRevoked(readStoredSession(storage), profileStorage)) return false;
+    clearLocalSession({ storage });
+    return true;
+  } catch { return false; }
 }
 
 export function getLocalSession({ storage = globalThis.sessionStorage, profileStorage = globalThis.localStorage } = {}) {
@@ -240,7 +281,9 @@ export function getLocalSession({ storage = globalThis.sessionStorage, profileSt
     const value = JSON.parse(raw);
     if (!['flightseal', 'hashwing'].includes(value?.app) || value?.schema !== SESSION_SCHEMA || !['account', 'guest'].includes(value.kind) || !/^[a-f0-9]{32}$/.test(value.userId || '')) return null;
     if (value.kind === 'account' && !listLocalProfiles({ storage: profileStorage }).some((profile) => profile.id === value.userId)) return null;
-    return { ...value, app: APP_ID };
+    if (isRevoked(value, profileStorage)) return null;
+    const { at, ...shown } = value;
+    return { ...shown, app: APP_ID };
   } catch { return null; }
 }
 
@@ -318,6 +361,7 @@ export function removeLocalProfile(userId, { storage = globalThis.localStorage, 
 
 export function announceLocalLogout({ userId = null, storage = globalThis.localStorage, sessionStorage = globalThis.sessionStorage, windowObject = globalThis, cryptoObject = globalThis.crypto } = {}) {
   clearLocalSession({ storage: sessionStorage });
+  if (typeof userId === 'string' && /^[a-f0-9]{32}$/.test(userId)) recordLogoutMark(userId, storage);
   const nonce = cryptoObject?.getRandomValues ? randomId(cryptoObject) : String(Date.now());
   const message = { type: 'logout', app: APP_ID, schema: SESSION_SCHEMA, userId: typeof userId === 'string' ? userId : null, nonce };
   const legacyMessage = { ...message, app: 'hashwing' };

@@ -975,6 +975,41 @@ try {
     } finally { await c.close(); }
   });
 
+  await check('zip fails on #/login: a large-file result downloads file by file, then "I saved" unlocks Log in', async () => {
+    const c = await newContext();
+    try {
+      const a = watch(await c.newPage(), 'login-per-file');
+      await a.addInitScript(() => { // force the per-file path: the one-zip download cannot start
+        const make = URL.createObjectURL.bind(URL);
+        URL.createObjectURL = (blob) => { if (blob?.type === 'application/zip') throw new Error('blocked in this test'); return make(blob); };
+      });
+      await a.goto(`${flagOn.url}#/app/protect`);
+      await a.locator('#page-protect').waitFor();
+      await a.getByLabel('Large files: fingerprint only, files stay where they are').check();
+      await a.locator('#manifest-files').setInputFiles([{ name: 'z1.mp4', mimeType: 'video/mp4', buffer: Buffer.from(`z1 ${Date.now()}`) }]);
+      await a.getByRole('button', { name: 'Seal the list', exact: true }).click();
+      await a.locator('#manifest-handover-text').waitFor({ timeout: 60000 });
+      await a.evaluate(() => { location.hash = '/login'; });
+      const auth = a.locator('#auth-main');
+      await auth.waitFor();
+      assert.equal(await auth.getByRole('button', { name: 'Log in', exact: true }).isDisabled(), true, 'sign-in waits');
+      await auth.getByRole('button', { name: 'Download unsaved work' }).click();
+      await auth.getByText(/Couldn't make one download \(blocked in this test\)\. Your work is still here, so download each file on its own\./).waitFor();
+      const names = await auth.locator('.unsaved-download .actions-row button').allTextContents();
+      assert.ok(names.some((n) => /^hashwing-\d{8}-\d{6}\.manifest\.fseal$/.test(n)) && names.some((n) => /^hashwing-\d{8}-\d{6}\.receipt\.txt$/.test(n)), `per-file buttons: ${names}`);
+      for (const [i, name] of names.entries()) {
+        await Promise.all([a.waitForEvent('download'), auth.getByRole('button', { name, exact: true }).click()]);
+        if (i < names.length - 1) await auth.getByText(`Download started for ${i + 1} of ${names.length} files. Download the rest.`).waitFor();
+      }
+      await auth.getByText(`Download started for ${names.length} of ${names.length} files. Did they save?`).waitFor();
+      assert.equal(await auth.getByRole('button', { name: 'Log in', exact: true }).isDisabled(), true, 'a started download alone does not unlock Log in');
+      await auth.getByRole('button', { name: names.length > 2 ? 'I saved them' : 'I saved both' }).click();
+      await a.waitForFunction(() => !document.querySelector('.auth-output-warning'));
+      assert.equal(await auth.getByRole('button', { name: 'Log in', exact: true }).isDisabled(), false, 'Log in is unlocked');
+      assert.equal(await reloadWarns(a), false);
+    } finally { await c.close(); }
+  });
+
   await check('a frozen tab that missed the sign-out, and a restored tab with an older saved token, stay signed out', async () => {
     const c = await newContext();
     try {
@@ -999,6 +1034,53 @@ try {
       await d.locator('#registry-token').waitFor({ timeout: 10000 });
       await sleep(500);
       assert.equal(await d.locator('#company-registry').getByText('Signed in to the company registry').count(), 0, 'an older saved token is not used after a sign-out');
+    } finally { await c.close(); }
+  });
+
+  await check('a restored tab of a logged-out profile stays logged out and signed out of the registry (simulated discard)', async () => {
+    const c = await newContext();
+    try {
+      const a = watch(await c.newPage(), 'discard-a'), b = watch(await c.newPage(), 'discard-b');
+      await profileIn(a, 'discard@example.test');
+      await profileIn(b, 'discard@example.test', 'login');
+      await signIn(b, 'discard-pilot', 'pilot');
+      const snapshot = await b.evaluate(() => JSON.stringify(Object.fromEntries(Object.keys(sessionStorage).map((k) => [k, sessionStorage.getItem(k)]))));
+      assert.ok(JSON.parse(snapshot)['hashwing-registry-token'], 'the snapshot holds the registry sign-in');
+      await b.close(); // discarded
+      await appLogout(a);
+      const d = watch(await c.newPage(), 'discard-d');
+      await d.addInitScript((saved) => { // the browser restores the discarded tab's sessionStorage, once
+        if (sessionStorage.getItem('__restored')) return;
+        for (const [k, v] of Object.entries(JSON.parse(saved))) sessionStorage.setItem(k, v);
+        sessionStorage.setItem('__restored', '1');
+      }, snapshot);
+      await d.goto(`${flagOn.url}#/`);
+      await d.locator('#main').waitFor();
+      await sleep(500);
+      assert.equal(await d.evaluate(() => location.hash), '#/', 'the front door');
+      assert.equal(await d.evaluate(() => sessionStorage.getItem('flightseal_session_v1')), null, 'no active profile');
+      assert.equal(await d.evaluate(() => sessionStorage.getItem('hashwing-registry-token')), null, 'no registry token');
+      await go(d, 'help');
+      await d.locator('#registry-token').waitFor({ timeout: 10000 });
+      assert.equal(await d.locator('#company-registry').getByText('Signed in to the company registry').count(), 0, 'no registry sign-in');
+      // Control: logging in again later, and signing in to the registry, survive a reload.
+      await profileIn(d, 'discard@example.test', 'login');
+      await signIn(d, 'discard-pilot', 'pilot');
+      await d.reload();
+      await d.locator('#page-help').waitFor();
+      await d.locator('#company-registry').getByText('Signed in to the company registry as discard-pilot').waitFor({ timeout: 10000 });
+      assert.equal(await d.evaluate(() => JSON.parse(sessionStorage.getItem('flightseal_session_v1') || 'null')?.kind), 'account', 'still logged in');
+      // A tab that missed the logout message (frozen, or hidden) logs out when it is shown again: only the shared mark is
+      // written here, with no storage event or broadcast reaching this tab, then the tab gets focus.
+      await d.evaluate(() => {
+        const { userId } = JSON.parse(sessionStorage.getItem('flightseal_session_v1'));
+        localStorage.setItem('flightseal_logouts_v1', JSON.stringify({ [userId]: Date.now() + 1 }));
+      });
+      await sleep(10);
+      await d.evaluate(() => window.dispatchEvent(new Event('focus')));
+      await d.waitForFunction(() => location.hash === '#/', null, { timeout: 10000 });
+      assert.equal(await d.evaluate(() => sessionStorage.getItem('flightseal_session_v1')), null, 'woken tab: logged out');
+      assert.equal(await d.evaluate(() => sessionStorage.getItem('hashwing-registry-token')), null, 'woken tab: registry token dropped');
     } finally { await c.close(); }
   });
 
