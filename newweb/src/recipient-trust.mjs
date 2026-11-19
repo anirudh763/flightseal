@@ -137,6 +137,25 @@ export function verdict({ signed, reason = '', trust, items = [], extras = [], c
   return { key: 'verified', headline: 'Verified', kind: 'ok', sentence: status === 'trusted' ? 'Every file matches what was sealed, signed by a company you trust.' : 'Every file matches what was sealed.', next: { text: 'Download report', action: 'report' } };
 }
 
+/**
+ * AC-37 (design §7.1): the share link's registry record against the checked receipt, run after verdict(). It can only
+ * lower a result: a mismatch turns Verified into "Files match · doesn't match the link"; every other result, a match
+ * and an unavailable record leave the result as it was. record: { head, count, key_fingerprint } or null when the link
+ * was withdrawn or couldn't be checked; receipt: { head, count (decimal string), fingerprint } of the receipt line the
+ * registry got, or null. Returns { result, line: { label, value, kind } }. Called only from registry-on code, so the
+ * flag-off build drops it and its strings.
+ */
+export function applyRegistryRecord(result, record, receipt) {
+  const label = 'Registry record';
+  if (!record) return { result, line: { label, value: "This link was withdrawn or couldn't be checked", kind: 'info' } };
+  let same = false;
+  try { same = !!receipt && record.head === receipt.head && record.key_fingerprint === receipt.fingerprint && BigInt(record.count) === BigInt(receipt.count); } catch { same = false; }
+  if (same) return { result, line: { label, value: "Matches the registry's record", kind: 'ok' } };
+  const line = { label, value: "Doesn't match the registry's record for this link", kind: 'warn' };
+  if (result?.key !== 'verified') return { result, line };
+  return { result: { key: 'link-mismatch', headline: "Files match · doesn't match the link", kind: 'warn', sentence: "The files match what was sealed, but not the registry's record for the link you opened. The link may belong to other files.", next: { text: 'Ask the sender for the right link', action: null } }, line };
+}
+
 /** The original file is offered only when the signer is acceptable: never under compromised, Not verified or a company mismatch. */
 export const offersOriginal = (result) => !!result && !['compromised', 'not-verified'].includes(result.key);
 
@@ -178,9 +197,12 @@ export function pairFiles(manifest, locals) {
 }
 
 /** Report for a verified manifest check. items: compareFiles items; locals: hashed local files. */
-export function manifestReport({ sealedName = '', trust, sources = {}, keyFingerprint = '', head = '', sealedAt = '', items = [], extras = [], locals = [], registry = null }) {
-  const result = verdict({ signed: true, trust, items, extras });
+/** applyRecord: optional (result) => applyRegistryRecord(...) closure, built only in registry-on code. */
+export function manifestReport({ sealedName = '', trust, sources = {}, keyFingerprint = '', head = '', sealedAt = '', items = [], extras = [], locals = [], registry = null, applyRecord = null }) {
+  const checked = verdict({ signed: true, trust, items, extras });
+  const { result, line: record } = applyRecord ? applyRecord(checked) : { result: checked, line: null };
   const resultLine = `Result: ${result.headline}. ${result.sentence}`;
+  const recordLines = record ? [`${record.label}: ${record.value}`] : [];
   const parsed = items.map((item) => ({ ...item, ...parseNote(item.note) }));
   const landings = [...new Set(parsed.map((item) => item.landing).filter(Boolean))];
   const fields = timeFields({ landing: landings.length === 1 ? landings[0] : landings.length ? 'Differs by item (see items)' : '', landingSigned: true, sealedAt, registry });
@@ -202,6 +224,7 @@ export function manifestReport({ sealedName = '', trust, sources = {}, keyFinger
   const extraLines = extras.map((extra) => `${NOT_IN_LIST}: ${extra.name} (${extra.bytes} bytes, SHA-256 ${extra.sha256})`);
   const text = [ // every report starts with the Result line, the same words as the headline on screen
     resultLine,
+    ...recordLines,
     `HashWing manifest check report: ${sealedName}`,
     'Manifest: verified (signature checked)',
     `Key trust: ${line}`,
@@ -218,13 +241,13 @@ export function manifestReport({ sealedName = '', trust, sources = {}, keyFinger
     '',
     'Names, sizes and digests come from the signed manifest. Operator notes and times are what the operator entered; HashWing did not measure them.',
   ].join('\n') + '\n';
-  const markdown = `${resultLine}\n\n# HashWing manifest check report\n\n${[
+  const markdown = `${[resultLine, ...recordLines].join('\n\n')}\n\n# HashWing manifest check report\n\n${[
     `- Sealed list: ${sealedName}`, '- Manifest: verified (signature checked)', `- Key trust: ${line}`,
     ...(entry ? [`- Key source: ${sources[entry.source] || entry.source}`] : []), `- Key fingerprint: \`SHA-256 ${groups(keyFingerprint)}\``, `- Chain head: \`${head}\``,
   ].join('\n')}\n\n## Times\n\n${fields.map((field) => `- ${field.label}: ${field.value} (${field.basis})`).join('\n')}\n\n## Files\n\n${[...itemLines, ...extraLines].map((l) => (l.startsWith('  ') ? `  - ${l.trim()}` : `- ${l}`)).join('\n')}\n${differs ? `\n## ${BYTES_DIFFER.title}\n\n${BYTES_DIFFER.text}\n` : ''}`;
   const keyTrust = { status: trust?.status || 'untrusted', line, company: entry?.name ?? null, source: entry?.source ?? null, sourceLabel: entry ? (sources[entry.source] || entry.source) : null, addedAt: entry?.addedAt || null, confirmedAt: entry?.confirmedAt || null, replacedAt: entry?.replacedAt || null, compromisedAt: entry?.compromisedAt || null, fingerprint: keyFingerprint || null };
   const json = JSON.stringify({
-    result: resultLine, kind: 'hashwing-manifest-check', sealedFile: sealedName, verdict: { key: result.key, headline: result.headline, sentence: result.sentence }, manifestVerified: true, head, keyTrust,
+    result: resultLine, kind: 'hashwing-manifest-check', sealedFile: sealedName, verdict: { key: result.key, headline: result.headline, sentence: result.sentence }, ...(record ? { record } : {}), manifestVerified: true, head, keyTrust,
     timeProvenance: { fields, intervalMs: reportedInterval(landings.length === 1 ? landings[0] : '', sealedAt).ms },
     fileComparison: {
       items: parsed.map((item) => ({ id: item.id, status: item.status, statusLabel: STATUS[item.status], name: item.name, bytes: item.bytes, sha256: item.sha256, localName: item.local == null ? null : locals[item.local]?.name ?? null, localSha256: item.local == null ? null : locals[item.local]?.sha256 ?? null, reportedLanding: item.landing || null, derivedFrom: item.derivedFrom || null, note: item.note })),
@@ -234,7 +257,7 @@ export function manifestReport({ sealedName = '', trust, sources = {}, keyFinger
     report: text,
   }, null, 2);
   const pdfLines = [
-    resultLine, `Sealed list: ${sealedName}`, 'Manifest: verified (signature checked)', `Key trust: ${line}`,
+    resultLine, ...recordLines, `Sealed list: ${sealedName}`, 'Manifest: verified (signature checked)', `Key trust: ${line}`,
     ...(entry ? [`Key source: ${sources[entry.source] || entry.source}`] : []), `Key fingerprint: SHA-256 ${groups(keyFingerprint)}`, `Chain head: ${head}`,
     '## Times', ...fields.map((field) => `${field.label}: ${field.value} (${field.basis})`),
     '## Files', ...itemLines.map((l) => l.trim()), ...extraLines,

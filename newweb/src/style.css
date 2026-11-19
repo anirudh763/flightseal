@@ -1238,7 +1238,7 @@ input[type=datetime-local] { width: 100%; max-width: 320px; min-width: 0; min-he
   .button.primary:disabled { forced-color-adjust: auto; color: GrayText; border-color: GrayText; }
 }
 /* A disabled main action looks disabled: muted fill, no brand colour, no hover lift. */
-.button.primary:disabled, .button.primary:disabled:hover { background: #dfe5e1; border-color: #c4cdc7; color: #5d6b63; box-shadow: none; transform: none; cursor: not-allowed; }
+.button.primary:disabled, .button.primary:disabled:hover { background: #dfe5e1; border-color: #c4cdc7; color: #56645c; box-shadow: none; transform: none; cursor: not-allowed; }
 .verdict-downloads { width: 100%; }
 .verdict-downloads > summary { justify-content: flex-start; width: fit-content; border: 1px solid var(--line); border-radius: 8px; padding: 0 14px; background: var(--surface); }
 .verdict-downloads > .actions-row { padding-top: 8px; }
