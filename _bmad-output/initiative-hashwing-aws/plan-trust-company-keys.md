@@ -3,14 +3,14 @@ title: 'Trust: Your company''s keys (design PR 1 browser half, Option A)'
 type: feature
 ticket: ''
 created: '2026-11-19'
-status: in-progress
+status: built
 baseline_revision: '467cd919cab54beefc4f3828b01b3d80b799779b'
 route: full
 route_source: auto
 risk: high
-review: ''
-review_source: ''
-lenses_ran: []
+review: quick
+review_source: pinned
+lenses_ran: [quick]
 review_loop_iteration: 0
 followup_review_recommended: false
 context:
@@ -18,7 +18,14 @@ context:
   - '/private/tmp/claude-501/-Users-anirudhyadav/d85e4c7d-ebdd-49d1-8c47-0eace70cc60c/scratchpad/wt-trust-keys/.agents/skills/enterprise-ui-polish/SKILL.md'
   - '/private/tmp/claude-501/-Users-anirudhyadav/d85e4c7d-ebdd-49d1-8c47-0eace70cc60c/scratchpad/wt-trust-keys/_bmad-output/initiative-hashwing-aws/design-key-enrollment-option-b.md'
 warnings: [multiple-goals]
-deferred: []
+deferred:
+  - summary: >-
+      The flag-off sentence "Company sign-in isn't part of this copy of HashWing." (design §6, AC-50) is not added.
+    evidence: |-
+      The task forbids any flag-off behaviour change; logged in deferred-work.md.
+    location: >-
+      newweb/src/main.jsx Trust and limits
+    severity: low
 ---
 
 <intent-contract>
@@ -126,6 +133,17 @@ deferred: []
 
 ## Review Triage Log
 
+### 2026-11-19 — Review pass
+- verdicts: 6 findings — high 0, medium 2, low 4, false 0, maybe-false 0
+- findings:
+  - `[low]` `[patch]` Success note stayed on screen after the loaded key changed — fixed in c69d3dd: the `[signingKey]` effect clears the note.
+  - `[medium]` `[patch]` Dialog focus fell to <body> (409 confirm_required with no trigger; trigger removed by the reload) — fixed in c69d3dd: focus returns to the trigger if connected, else the section heading (tabIndex -1).
+  - `[medium]` `[patch]` Primary button disabled with no reason when the loaded PEM can't be read for its public key — fixed in c69d3dd: "This key can't be used for enrollment in this browser." (The missing-org half is false: `signIn` refuses a token without an org via `tokenOwner`.)
+  - `[low]` `[patch]` EXPERIENCE build-status paragraph still listed AC-38..40 under "Still to build" — fixed; totals line marked as predating this change.
+  - `[low]` `[patch]` AC-59 evidence claimed a one-primary count in the Enroll state that no test made — added the assertion in the admin enroll check.
+  - `[low]` `[patch]` Offline notice shown to admins only — now shown to every signed-in user.
+- Also patched (found by the orchestrator while reading the diff): the compromise dialog said "Older proofs from it will show a warning", which is untrue (Verify never reads the registry); reworded to "…once the people who check them mark it compromised too."
+
 ## Design Notes
 
 The browser builder is a second, independent copy of the challenge format, never the server's `message`. Without it, a hostile registry could get the company key to sign a receipt. The enroll flow takes an injected `sign` function so a test can prove zero signatures on a mismatch.
@@ -139,3 +157,12 @@ The browser builder is a second, independent copy of the challenge format, never
 - `npm --prefix newweb run test:browser` -- expected: 0 failed
 - `node newweb/tests/profiles.mjs` -- expected: 8/8
 - `REGISTRY_DEV_URL=http://127.0.0.1:8797 node newweb/tests/registry-wiring.mjs` (dev server started from the worktree on 8797, then stopped) -- expected: all checks pass
+
+## Auto Run Result
+
+- **Summary:** Trust gains "Your company's keys" (flag-on builds only): key list with plain state labels, admin Enroll / Replace / Mark compromised signed in the browser over locally built challenge bytes, member read-only, offline / registry-down / signed-out states, and the R71 Option A note.
+- **Files:** `newweb/src/company-keys.mjs` (pure flow), `newweb/src/company-keys.jsx` (panel), `newweb/src/registry-client.mjs` (4 key calls), `newweb/src/registry-ui.jsx` (export `useRegistry`), `newweb/src/main.jsx` (one insertion), `newweb/tests/company-keys.test.mjs` (10 tests), `tests/web/verifier.test.mjs` (cross-format), `newweb/tests/registry-wiring.mjs` (9 checks + forbidden strings), docs/console rebuild, AGENTS.md counts, EXPERIENCE, ledger R24/R33/R71, AD-21, RUNBOOK, deferred-work.
+- **Review:** 6 patched (2 medium, 4 low) plus 1 copy fix; 0 rejected; 1 deferred (flag-off AC-50 sentence).
+- **Follow-up review recommended:** false. Two mediums were patched but both are verified by the re-run browser suite (focus and reason lines); no unverified risk can be named.
+- **Verification (orchestrator, on c69d3dd):** `node --test newweb/tests/*.test.mjs` 150/150; `node --test tests/web/*.test.mjs` 147/147; build + greps (one hash-worker file, no hashwing-pending, docs/console unchanged); `npm --prefix newweb run test:browser` 64 ok, 0 failed; `node newweb/tests/profiles.mjs` 8/8; `REGISTRY_DEV_URL=http://127.0.0.1:8797 node newweb/tests/registry-wiring.mjs` 43/43.
+- **Residual risks:** a first-run axe colour-contrast hit on the primary button at 320px was attributed to a hover transition and not reproduced; C++/pytest/infra/wasm/edge-matrix not run (no changes there).
