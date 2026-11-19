@@ -116,7 +116,7 @@ try {
     assert.deepEqual(await primaries(page), ['Download'], 'one primary after sealing');
     await page.getByRole('button', { name: 'Seal more files' }).click();
     await page.locator('.confirm-box').getByRole('button', { name: 'Discard it' }).click();
-    await sealLarge(page, 'J-2000');
+    await sealLarge(page, ''); // no job reference: the 320px check below needs an empty job-ref cell
     await recent.locator('li').nth(1).waitFor();
     const names = await recent.locator('.jobs-name').allInnerTexts();
     assert.equal(names.length, 2);
@@ -132,8 +132,11 @@ try {
     assert.equal(await page.getByLabel(/Status/).count(), 0, 'flag off: no status filter');
     await layout(page, 'jobs list', [320, 390, 768, 1440]);
     await page.setViewportSize({ width: 320, height: 900 }); await frame(page);
-    const order = await page.locator('.jobs-table tbody tr').first().evaluate((tr) => ['.jobs-name', '.jobs-ref', '.jobs-status', '.jobs-when', '.jobs-actions'].map((c) => tr.querySelector(c).getBoundingClientRect().top));
+    const order = await page.locator('.jobs-table tbody tr').first().evaluate((tr) => ['.jobs-name', '.jobs-ref', '.jobs-status', '.jobs-when', '.jobs-actions'].map((c) => tr.querySelector(c)).filter((el) => !el.classList.contains('jobs-ref-empty')).map((el) => el.getBoundingClientRect().top));
     assert.deepEqual([...order].sort((x, y) => x - y), order, `320px: package, job ref, status, time, actions (${order})`);
+    const empty = page.locator('.jobs-table .jobs-ref-empty');
+    assert.ok(await empty.count(), 'the list has a job without a job reference');
+    assert.deepEqual(await empty.evaluateAll((cells) => cells.map((c) => [getComputedStyle(c).display !== 'none', c.getBoundingClientRect().height <= 1, c.parentElement.cells.length])), (await empty.evaluateAll((c) => c.map(() => [true, true, 5]))), '320px: an empty job ref is hidden visually but stays a cell, so screen readers keep five cells under five headers');
     await page.setViewportSize({ width: 1440, height: 900 });
   });
 
@@ -245,7 +248,7 @@ try {
     await page.goto(`${url}#/app/jobs?page=9`); // out of range: settles on the last page, replacing the URL
     await page.waitForFunction(() => location.hash === '#/app/jobs?page=3');
     assert.equal(await page.locator('.jobs-table caption').innerText(), 'Showing 51–61 of 61');
-    await page.goto(`${url}#/app/jobs?q=J-20`);
+    await page.goto(`${url}#/app/jobs?q=manifest`);
     await page.waitForFunction(() => document.querySelector('.jobs-table caption')?.textContent === '1 job matches');
     await search.fill('zzz');
     await page.getByText('No jobs match "zzz".').waitFor();
