@@ -6,6 +6,7 @@ import { createRegistryClient, tokenOwner } from './registry-client.mjs';
 import { attentionMessage, openOutbox, stateLabel } from './outbox.mjs';
 import { openPendingStore } from './pending-store.mjs';
 import { fingerprintHex, formatFingerprint } from './trusted-keys.mjs';
+import { applyRegistryRecord } from './recipient-trust.mjs';
 
 const TOKEN_KEY = 'hashwing-registry-token';
 const SHARE_TOKEN = /^[A-Za-z0-9_-]{43}$/;
@@ -308,14 +309,14 @@ const REGISTERED_BASIS = "the registry's clock; the registry's statement, not pr
 export function useRegistryTimeField(receipts, options) { return registryTimeField(useRegistry()[1], receipts, options); }
 /** The same row from a session snapshot (pure, for tests). fromLink: a share link is open on Verify (a client, who needs no account). */
 export function registryTimeField(s, receipts, { fromLink = false } = {}) {
-  const lines = new Set(String(receipts || '').split('\n').map((line) => line.trim()).filter(Boolean));
-  if (!lines.size) return null;
-  const row = s.rows.find((r) => lines.has(r.receipt));
+  if (!String(receipts || '').trim()) return null;
+  const line = registryLine(receipts); // only the line the registry got, never an earlier receipt line of the message
+  const row = line ? s.rows.find((r) => r.receipt === line) : undefined;
   if (row?.state === 'registered' && row.disposition === 'deleted') return { value: 'Registered, later deleted', basis: "the registry's statement, not proof of the files; its hosted record was deleted" };
   if (row?.state === 'registered') return { value: `Registered at ${row.received_at}`, basis: REGISTERED_BASIS };
   if (row?.state === 'needs_attention') return { value: 'Needs attention', basis: attentionMessage(row) ?? (REASONS[row.reason] ?? REFUSED)[0] };
   if (row) return { value: 'Not yet registered', basis: `this device's list: ${s.online || row.state !== 'sealed_local' ? row.label : stateLabel('waiting_for_connection')}` };
-  if (s.pending.some((p) => lines.has(p.receipt))) return { value: 'Not yet registered', basis: "this device's list: Sealed locally" };
+  if (line && s.pending.some((p) => p.receipt === line)) return { value: 'Not yet registered', basis: "this device's list: Sealed locally" };
   if (!s.owner && fromLink) return { value: 'No account needed', basis: "not needed to check files from a share link" };
   if (!s.owner) return { value: 'Not signed in', basis: "sign in to the company registry to see this device's record" };
   if (!s.outbox || !s.listed) return { value: 'Not available yet', basis: "this device's registry list isn't open yet" };
@@ -648,22 +649,57 @@ export class RegistryBoundary extends React.Component {
 
 // ------------------------------------------------------------------ Verify: the recipient's share view
 
-export function ShareRecordPanel({ token }) {
-  const [view, setView] = useState({ state: 'loading' });
+/** The one share fetch, made at App level so the record panel and the Verify verdict read the same answer. null: no link. */
+export function useShareRecord(token) {
+  const [view, setView] = useState(null);
   useEffect(() => {
     let live = true;
-    if (!SHARE_TOKEN.test(token || '')) { setView({ state: 'error', message: LINK_DEAD }); return undefined; }
-    setView({ state: 'loading' });
+    if (!token) { setView(null); return undefined; }
+    if (!SHARE_TOKEN.test(token)) { setView({ token, state: 'error', message: LINK_DEAD }); return undefined; }
+    setView({ token, state: 'loading' });
     createRegistryClient({ baseUrl: __REGISTRY_URL__ }).getShare(token).then((res) => {
       if (!live) return;
       const record = res.ok ? shareRecord(res.data) : null;
-      if (record) setView({ state: 'ok', data: record });
-      else if (res.kind === 'network' || res.kind === 'timeout') setView({ state: 'error', message: "You're offline. Opening a link needs a connection. You can still check files." });
-      else if (res.ok || res.status === 503 || res.status === 429) setView({ state: 'error', message: UNAVAILABLE });
-      else setView({ state: 'error', message: LINK_DEAD });
-    });
+      if (record) setView({ token, state: 'ok', data: record });
+      else if (res.kind === 'network' || res.kind === 'timeout') setView({ token, state: 'error', message: "You're offline. Opening a link needs a connection. You can still check files." });
+      else if (res.ok || res.status === 503 || res.status === 429) setView({ token, state: 'error', message: UNAVAILABLE });
+      else setView({ token, state: 'error', message: LINK_DEAD });
+    }); // getShare never rejects (registry-client.mjs: every call resolves)
     return () => { live = false; };
   }, [token]);
+  // Until the effect runs for a new token, the old answer is never shown for it.
+  return !token ? null : view?.token === token ? view : { token, state: 'loading' };
+}
+
+const RECEIPT_LINE = /^fseal-receipt v1 count=([0-9]{1,20}) head=([0-9a-f]{64}) key=([0-9a-f]{64}) sig=[0-9a-f]{128}$/; // as outbox.mjs
+/**
+ * AC-37: compares the share record (view, from useShareRecord) with the receipt line the registry got from these
+ * receipts. null: no link, so nothing is applied. { pending: true } while the record or the key fingerprint loads, so
+ * the verdict waits instead of showing Verified and then dropping. Otherwise { apply(result) → { result, line } }.
+ */
+export function useRegistryRecordCheck(view, receipts) {
+  const m = RECEIPT_LINE.exec(registryLine(receipts) || '');
+  const key = m ? m[3] : '';
+  const [fp, setFp] = useState({ key: '', value: '' });
+  useEffect(() => {
+    let live = true;
+    if (key) fingerprintHex(key).then((value) => { if (live) setFp({ key, value }); }, () => { if (live) setFp({ key, value: '' }); });
+    return () => { live = false; };
+  }, [key]);
+  const state = view?.state;
+  const record = state === 'ok' ? view.data : null;
+  const head = m?.[2], count = m?.[1], fingerprint = fp.key === key ? fp.value : '';
+  return useMemo(() => {
+    if (!state) return null;
+    if (state === 'loading' || (key && fp.key !== key)) return { pending: true };
+    // No receipt line or no fingerprint: compared as a mismatch, never as a match.
+    const receipt = key && fingerprint ? { head, count, fingerprint } : null;
+    return { apply: (result) => applyRegistryRecord(result, record, receipt) };
+  }, [state, record, key, fp.key, head, count, fingerprint]);
+}
+
+export function ShareRecordPanel({ view }) {
+  if (!view) return null;
   const d = view.data;
   return <section className="panel registry-record" aria-labelledby="registry-record-title"><div className="panel-head"><Cloud aria-hidden="true" size={18} /><h2 id="registry-record-title">The registry's record</h2></div><div className="panel-body">
     {view.state === 'loading' && <p role="status">Checking the link…</p>}
