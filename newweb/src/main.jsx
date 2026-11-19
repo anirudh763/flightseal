@@ -7,7 +7,7 @@ import { WEAK_KEY_MESSAGE, blobSource, checkReceipts, decodeReceipts, parseHex, 
 import { mutateFile, readIndexedRecords, recordAt } from '../../docs/records.mjs';
 import { parseLocation, parseRouteHash, productHref, routeHash, safeReturnRoute } from './routes.mjs';
 import {
-  announceLocalLogout, authenticateLocalProfile, clearLocalSession, createLocalProfile, getLocalSession,
+  announceLocalLogout, authenticateLocalProfile, clearLocalSession, createLocalProfile, dropRevokedLocalSession, getLocalSession,
   listLocalProfiles, readWorkspaceContext, removeLocalProfile, removeWorkspaceContext, saveWorkspaceContext, setLocalSession,
   subscribeToLocalLogout,
 } from './local-auth.mjs';
@@ -1404,6 +1404,16 @@ function App() {
     setRoute(parseRouteHash('#/'));
   };
   useEffect(() => subscribeToLocalLogout(logoutFromAnotherTab), [activeSession?.userId, route.kind]);
+  // A tab that was frozen or hidden when its profile logged out elsewhere may have missed the message.
+  useEffect(() => {
+    const check = () => {
+      if (document.visibilityState === 'hidden' || activeSession?.kind !== 'account') return;
+      if (dropRevokedLocalSession()) logoutFromAnotherTab({ type: 'logout', userId: activeSession.userId });
+    };
+    const events = ['pageshow', 'focus', 'resume', 'visibilitychange'];
+    for (const name of events) (name === 'pageshow' || name === 'focus' ? window : document).addEventListener(name, check);
+    return () => { for (const name of events) (name === 'pageshow' || name === 'focus' ? window : document).removeEventListener(name, check); };
+  }, [activeSession?.userId, route.kind]);
 
   const finishAuthentication = async (profile, requestedRoute, importGuest, submittedEpoch) => {
     if (submittedEpoch !== authEpochRef.current) return { error: 'This sign-in was canceled because the local session changed. Try again.' };
@@ -2401,20 +2411,32 @@ function ResultPanel({ result, resultTitle, reportText, onDownloadText, onDownlo
 
 // Large files (fingerprint only): originals stay on the operator's storage. State here never enters
 // runVerify/result, so "Save current run" cannot upload it, and no file bytes, names or digests leave this device.
-async function hashAll(files, signal, onProgress) {
+const couldNotRead = (file) => `Could not read ${file.name}. It may have been moved, changed or deleted after you chose it. Choose the files again and retry.`;
+// kept (optional): a WeakMap of File -> digest, filled as each file finishes, so Seal after a Cancel does not hash those again.
+async function hashAll(files, signal, onProgress, kept) {
   const out = [];
   for (let index = 0; index < files.length; index++) {
     const file = files[index];
     const started = performance.now();
+    const prior = kept?.get(file);
+    if (prior) { // shown as done (the next file starting) before any await, so the label never names it as being sealed
+      const last = index === files.length - 1;
+      onProgress({ index: last ? index : index + 1, done: last ? file.size : 0, started });
+      try { await file.slice(0, 1).arrayBuffer(); } catch { kept.delete(file); throw new Error(couldNotRead(file)); }
+      out.push(prior);
+      continue;
+    }
     onProgress({ index, done: 0, started });
     let r;
     try { r = await hashFile(file, { signal, onProgress: (done) => onProgress({ index, done, started }) }); }
     catch (cause) {
       if (cause?.name === 'AbortError') throw cause;
-      if (/could not be read|NotReadable|the file changed or became unreadable/i.test(cause?.message || '')) throw new Error(`Could not read ${file.name}. It may have been moved, changed or deleted after you chose it. Choose the files again and retry.`);
+      if (/could not be read|NotReadable|the file changed or became unreadable/i.test(cause?.message || '')) throw new Error(couldNotRead(file));
       throw new Error(`${cause?.message || 'Hashing failed'}. Reload the page and try again.`);
     }
-    out.push({ name: file.name, bytes: r.bytes, sha256: r.sha256 });
+    const entry = { name: file.name, bytes: r.bytes, sha256: r.sha256 };
+    kept?.set(file, entry);
+    out.push(entry);
   }
   return out;
 }
@@ -2458,6 +2480,7 @@ function ManifestSeal({ hidden, output, setOutput, carry, common, jobRef, signin
   const [copyStatus, setCopyStatus] = useState('');
   const [error, setError] = useState('');
   const controllerRef = useRef(null);
+  const keptRef = useRef(new WeakMap()); // digests finished before a Cancel; a new selection is new File objects
   const headingRef = useRef(null);
   const carriedRef = useRef(false);
   useEffect(() => () => controllerRef.current?.abort(), []);
@@ -2499,7 +2522,8 @@ function ManifestSeal({ hidden, output, setOutput, carry, common, jobRef, signin
     const scope = jobScope; // the job belongs to whoever was signed in when sealing began
     setPhase('hashing');
     try {
-      const hashed = await hashAll(files, controller.signal, setProgress);
+      const hashed = await hashAll(files, controller.signal, setProgress, keptRef.current);
+      keptRef.current = new WeakMap(); // kept only across a Cancel or a failure: a later Seal reads the files again
       const items = itemsFor(hashed);
       const payload = encodeManifest({ salt: newSalt(), items });
       setPhase('sealing'); setProgress(null);
@@ -2527,7 +2551,7 @@ function ManifestSeal({ hidden, output, setOutput, carry, common, jobRef, signin
       setMessage(`Sealed ${items.length} file${items.length === 1 ? '' : 's'}.`);
       onSealed?.(sealed.receipts, `${items.length} file${items.length === 1 ? '' : 's'}`, sealStart);
     } catch (cause) {
-      if (cause?.name === 'AbortError') { setMessage('Sealing cancelled. Your files are still chosen.'); requestAnimationFrame(() => document.getElementById('manifest-seal')?.focus()); }
+      if (cause?.name === 'AbortError') { setMessage(`Sealing cancelled. Your files are still chosen.${files.some((file) => keptRef.current.has(file)) ? ' Files already read are reused; choose them again to re-read everything.' : ''}`); requestAnimationFrame(() => document.getElementById('manifest-seal')?.focus()); }
       else fail(cause?.message || 'Something went wrong. Press Seal the list again.');
     } finally { if (controllerRef.current === controller) { controllerRef.current = null; setPhase(''); setProgress(null); } }
   };
@@ -2707,4 +2731,6 @@ function ManifestCheck({ sealed, text, fromLink, recordCheck, anchor, keyConflic
   </>;
 }
 
+// A tab restored (after a discard) with the sessionStorage of a profile that logged out meanwhile starts logged out.
+if (dropRevokedLocalSession() && __REGISTRY_URL__) registryLogout();
 createRoot(document.getElementById('root')).render(<App />);

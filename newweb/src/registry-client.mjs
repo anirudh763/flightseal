@@ -57,7 +57,9 @@ export function createRegistryClient({ baseUrl = '', getToken, fetch: doFetch = 
         if (!data || typeof data !== 'object' || Array.isArray(data)) return { ok: false, kind: 'http', status: res.status, code: 'bad_response' };
         return { ok: true, status: res.status, data };
       }
-      return { ok: false, kind: 'http', status: res.status, code: (data && typeof data.error === 'string') ? data.error : `http_${res.status}` };
+      const retryAfter = res.headers?.get?.('retry-after') ?? null; // readable cross-origin only if the server exposes it
+      return { ok: false, kind: 'http', status: res.status, code: (data && typeof data.error === 'string') ? data.error : `http_${res.status}`,
+        ...(retryAfter === null ? {} : { retryAfter }) };
     } catch {
       if (timedOut) return { ok: false, kind: 'timeout', status: 0, code: 'timeout' };
       if (signal?.aborted) return { ok: false, kind: 'aborted', status: 0, code: 'aborted' };

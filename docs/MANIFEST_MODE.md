@@ -138,6 +138,7 @@ backup" are explained in a "What is this?" disclosure.
 - **Steps**: a step list (Choose files, Seal, Send) marks the current step with `aria-current="step"`.
 - **Progress**: each file has its own progress bar with percent and MB/s (10^6 bytes per second), and Cancel on the
   file being read.
+  After Cancel, files already fingerprinted are reused if their size and modified time are unchanged; an edit that keeps both is not detected — seal again from a fresh file pick to re-read everything. The message after Cancel says so when it applies: "Files already read are reused; choose them again to re-read everything."
 - **More options** (hidden until opened): include file names, operator notes, and the receipt interval and
   signing-key details.
 - **Result chips**: Matches is green (circle); Bytes differ, Missing and Not in the list are amber (warn shape).
