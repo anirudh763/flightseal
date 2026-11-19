@@ -2,7 +2,7 @@
 // missing and one extra; refuse without a trusted key; Cancel stops hashing; no request body carries file bytes;
 // axe 0 violations and no horizontal scroll at 320/768/1440. Run after `npm --prefix newweb run build`.
 import { createRequire } from 'node:module';
-import { mkdirSync, mkdtempSync, writeFileSync, readFileSync, rmSync, openSync, ftruncateSync, closeSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, writeFileSync, readFileSync, rmSync, openSync, ftruncateSync, closeSync, writeSync, utimesSync } from 'node:fs';
 import { createHash, randomBytes } from 'node:crypto';
 import { tmpdir } from 'node:os';
 import { join, resolve, dirname } from 'node:path';
@@ -250,6 +250,26 @@ try {
     const at = (digest) => Math.max(sealed.indexOf(digest), sealed.indexOf(Buffer.from(digest.toString('hex'))));
     const [d1, d2] = [at(zerosDigest(256 * 2 ** 20)), at(zerosDigest(2 ** 30))];
     assert.ok(d1 >= 0 && d2 > d1, `the first item's digest is the 256 MiB file's (${d1}, ${d2})`);
+  });
+
+  await check('a kept file changed on disk after Cancel is refused, not sealed with its old fingerprint', async () => {
+    const sparse = (name, size) => { const p = join(dir, name); const fd = openSync(p, 'w'); ftruncateSync(fd, size); closeSync(fd); return p; };
+    const first = sparse('edited-first.bin', 64 * 2 ** 20), second = sparse('edited-second.bin', 2 ** 30);
+    try {
+      await page.locator('#manifest-files').setInputFiles([first, second]);
+      await page.getByRole('button', { name: 'Seal the list', exact: true }).click();
+      await page.waitForFunction(() => Number(document.querySelector('#manifest-seal-progress-1')?.value) > 0, null, { timeout: 60000 });
+      await page.getByRole('button', { name: 'Cancel' }).click();
+      await page.waitForFunction(() => [...document.querySelectorAll('[role=status]')].some((n) => n.textContent === 'Sealing cancelled. Your files are still chosen.'));
+      const fd = openSync(first, 'r+'); writeSync(fd, Buffer.from('edited'), 0, 6, 0); closeSync(fd); // same size, new bytes
+      const later = new Date(Date.now() + 60000); utimesSync(first, later, later);
+      await page.getByRole('button', { name: 'Seal the list', exact: true }).click();
+      await page.locator('#manifest-error').getByText('Could not read edited-first.bin.', { exact: false }).waitFor({ timeout: 30000 });
+      assert.equal(await page.locator('#manifest-handover-text').count(), 0, 'nothing was sealed');
+    } finally {
+      await page.locator('#manifest-files').setInputFiles([]); // clear the selection for the next checks
+      rmSync(first); rmSync(second);
+    }
   });
 
   // Trusted companies live in Settings; a second page in the same context shares this browser's local list.
