@@ -118,6 +118,9 @@ class MemoryTable:
         return [copy.deepcopy(v) for (pk, _), v in sorted(self.items.items()) if pk.startswith(pk_prefix)]
 
     def transact(self, ops):
+        keys = [_op_key(op) for op in ops]
+        if len(set(keys)) != len(keys):  # DynamoDB rejects a transaction that names one item twice
+            raise ValueError("transaction names an item more than once")
         for op in ops:
             self._check("transact", *_op_key(op))
         reasons = [None if _cond_ok(self.items.get(_op_key(op)), op.get("cond")) else "ConditionalCheckFailed"

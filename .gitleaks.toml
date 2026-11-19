@@ -52,3 +52,14 @@ condition = "AND"
 paths = ['''^newweb/tests/registry-wiring\.mjs$''']
 regexTarget = "match"
 regexes = ['''^[-]{5}BEGIN PRIVATE KEY[-]{5}\\n\$\{Buffer\.concat\(\[Buffer\.from\('302e020100300506032b657004220420', 'hex'\), Buffer\.from\(\[\.\.\.Array\(32\)\.keys\(\)\]\)\]\)\.toString\('base64'\)\}\\n[-]{5}END PRIVATE KEY[-]{5}$''']
+
+# Option B shared vectors: public Ed25519 test keys (seeds are bytes 0..31, 1..32, 2..33, as in registry/tests) named
+# pilot_key or company_key, as JSON fields or inside the public signed statements. Only that one generated file, and
+# only a 64-hex value under those two names; any other credential-shaped value in it still fails.
+[[allowlists]]
+description = "Public pilot-authorization test vectors (tests/fixtures/pilot-authorization.json); no secret material"
+targetRules = ["generic-api-key"]
+condition = "AND"
+paths = ['''^tests/fixtures/pilot-authorization\.json$''']
+regexTarget = "match"
+regexes = ['''^n?(pilot_key|company_key)(=|": ")[0-9a-fA-F]{64}("|\\n)?$''']

@@ -133,11 +133,13 @@ def test_list_keys_says_which_is_active_and_who_enrolled_without_a_sub():
     enroll(app, clock, seed=SEED_B, confirm=True)
     for tok, mine in ((token(clock), False), (_admin(clock), True)):
         s, out, _ = call(app, "GET", "/v1/keys", tok)
-        assert s == 200 and set(out) == {"keys", "active_key", "next_cursor"}
+        assert s == 200 and set(out) == {"keys", "active_key", "next_cursor", "pilot_keys"}
+        assert out["pilot_keys"] is False  # PILOT_KEYS_ORGS unset
         assert out["active_key"] == FP_B and out["next_cursor"] is None
         assert {k["key_fingerprint"]: k["state"] for k in out["keys"]} == {FP_A: "rotated", FP_B: "active"}
         for row in out["keys"]:
-            assert set(row) == {"key_fingerprint", "state", "enrolled_at", "changed_at", "enrolled_by_me"}
+            assert set(row) == {"key_fingerprint", "kind", "state", "enrolled_at", "changed_at", "enrolled_by_me"}
+            assert row["kind"] == "company"
             assert row["enrolled_by_me"] is mine
         assert "admin-1" not in json.dumps(out) and "pilot-1" not in json.dumps(out)
 
@@ -166,7 +168,7 @@ def test_list_keys_exactly_full_page_may_return_a_cursor_to_an_empty_page():
     page1 = call(app, "GET", "/v1/keys", token(clock))[1]
     assert len(page1["keys"]) == 50 and page1["next_cursor"]
     page2 = call(app, "GET", "/v1/keys", token(clock), query={"cursor": page1["next_cursor"]})[1]
-    assert page2 == {"keys": [], "active_key": None, "next_cursor": None}
+    assert page2 == {"keys": [], "active_key": None, "next_cursor": None, "pilot_keys": False}
 
 
 @pytest.mark.parametrize("cursor", ["", "ab" * 31, "AB" * 32, "ab" * 32 + "0", "g" * 64, "KEY#" + "a" * 60])
