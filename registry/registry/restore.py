@@ -11,6 +11,12 @@ refuses every route while RESTORED_FROM is set and no marker names its own TABLE
 import argparse
 import time
 
+RANK = ("active", "rotated", "retired", "compromised")  # most revoked wins (AD-20)
+
+
+def _is_pilot(item, kind_field):
+    return item.get(kind_field) == "pilot" or "company_fp" in item or "not_after" in item
+
 
 def apply_tombstones(source, target, source_name, target_name, restore_id, served, clock=time.time):
     """Replay `source`'s tombstones into `target`, then write the marker naming this target and restore.
@@ -45,12 +51,22 @@ def apply_tombstones(source, target, source_name, target_name, restore_id, serve
                     stub["rid"] = t["rid"]
                 target.put(stub)
         elif t["kind"] == "key":
+            # The key's own kind is `key_kind` on a tombstone (`kind` is the tombstone's); missing means company.
             pk, state = f"ORG#{t['org']}", t.get("state", "compromised")
             key_orgs.add(pk)
-            if target.get(pk, "KEY#" + t["ref"]) is not None:
-                target.update(pk, "KEY#" + t["ref"], set={"state": state, "changed_at": t["at"]})
+            pilot = _is_pilot(t, "key_kind")
+            fields = {"kind": "pilot" if pilot else "company"}
+            fields.update({f: t[f] for f in ("company_fp", "not_after") if f in t})
+            cur = target.get(pk, "KEY#" + t["ref"])
+            if cur is not None:
+                if _is_pilot(cur, "kind") != pilot:  # raises before the marker: the app stays closed
+                    raise ValueError(f"key {t['ref']} in {t['org']}: tombstone and key item disagree on kind")
+                if RANK.index(state) >= RANK.index(cur.get("state", "active")):
+                    target.update(pk, "KEY#" + t["ref"], set={**fields, "state": state, "changed_at": t["at"]})
+                else:  # the restored item is already more revoked: keep its state and date
+                    target.update(pk, "KEY#" + t["ref"], set=fields)
             else:  # enrolled after the backup: bring it back in its latest state
-                target.put({"PK": pk, "SK": "KEY#" + t["ref"], "state": state,
+                target.put({"PK": pk, "SK": "KEY#" + t["ref"], **fields, "state": state,
                             "enrolled_at": t.get("enrolled_at", t["at"]), "enrolled_by": t.get("enrolled_by", "restore"),
                             "changed_at": t["at"]})
         elif t["kind"] == "epoch":
@@ -65,14 +81,18 @@ def apply_tombstones(source, target, source_name, target_name, restore_id, serve
 
 
 def _recompute_active_key(table, pk):
-    """ACTIVE_KEY follows the replayed key states: the most recently changed active key, or none."""
+    """ACTIVE_KEY follows the replayed company key states: the most recently changed active company key, or none.
+    Pilot keys never become ACTIVE_KEY and are never demoted here; PILOT_COUNT is recounted from the active ones."""
     keys, cursor = [], None
     while True:
         page, cursor = table.query(pk, "KEY#", 50, cursor)
         keys += page
         if not cursor:
             break
-    active = sorted((k for k in keys if k.get("state") == "active"), key=lambda k: k["changed_at"])
+    pilots = [k for k in keys if _is_pilot(k, "kind")]
+    table.put({"PK": pk, "SK": "PILOT_COUNT", "n": sum(1 for k in pilots if k.get("state") == "active")})
+    active = sorted((k for k in keys if k.get("state") == "active" and not _is_pilot(k, "kind")),
+                    key=lambda k: k["changed_at"])
     for k in active[:-1]:  # more than one can only come from inconsistent history: keep only the newest
         table.update(pk, k["SK"], set={"state": "rotated"})
     if active:
