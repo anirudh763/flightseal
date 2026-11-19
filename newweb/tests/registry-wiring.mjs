@@ -33,6 +33,7 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const checks = [];
 const errors = [];
 let base, devServer, lock, browser, flagOff, flagOn;
+let flightA = null; // the registered small-file seal and its receipt message, for the client's check
 let offline = false; // while a check holds the context offline, no-SW static loads (the icon) fail too
 
 async function check(name, fn) {
@@ -116,6 +117,7 @@ async function axe(page, label) {
   const results = await page.evaluate(() => window.axe.run(document, { runOnly: { type: 'tag', values: ['wcag2a', 'wcag2aa', 'wcag21a', 'wcag21aa', 'wcag22aa', 'best-practice'] } }));
   assert.equal(results.violations.length, 0, `${label}: ${results.violations.map((v) => `${v.id}: ${v.nodes.map((n) => n.target.join(' ')).join('; ')}`).join(' | ')}`);
 }
+const CLIENT_BASIS = "not needed to check files from a share link";
 const REGISTERED_BASIS = "the registry's clock; the registry's statement, not proof of the files";
 // A downloaded export, with no registry token, JWT or share token in it.
 async function exportOf(page, button, token, scope = page.locator('main')) {
@@ -349,6 +351,7 @@ try {
     const receivedAt = /Registered at (\d{4}-\d\d-\d\d) (\d\d:\d\d:\d\d) UTC/.exec(await row.locator('.registry-detail').innerText()).slice(1).join('T') + 'Z';
     const value = `Registered at ${receivedAt}`;
     assert.deepEqual(await registryLineOfLastSeal(page, 'flight-a.fseal', new RegExp(`^${value}$`)), [value, REGISTERED_BASIS]);
+    flightA = { path: join(OUT, 'flight-a.fseal'), handover: await page.locator('#check-text').inputValue() };
     const token = await page.evaluate(() => sessionStorage.getItem('hashwing-registry-token'));
     const line = `Registry acceptance: ${value} (${REGISTERED_BASIS})`;
     const outs = { text: await exportOf(page, 'Download text report', token), markdown: await exportOf(page, 'Download Markdown report', token) };
@@ -463,6 +466,21 @@ try {
     await reviewer.getByText('Link record kept for comparison').waitFor();
     assert.equal(await reviewer.locator('.registry-record').count(), 1);
     await reviewer.locator('#check-file').waitFor(); // file checking stays available
+    // The client has no account: the result's registry line says so calmly, on its own line; the verdict ignores it.
+    await reviewer.locator('#check-file').setInputFiles(flightA.path);
+    await reviewer.locator('#check-text').fill(flightA.handover);
+    await reviewer.getByRole('button', { name: 'Check files' }).click();
+    await reviewer.waitForFunction(() => document.querySelector('#verdict-heading')?.textContent === 'Files match · signer not confirmed', null, { timeout: 60000 });
+    await reviewer.waitForFunction(() => /Registry\s+No account needed/.test(document.querySelector('.verdict-lines')?.innerText || ''), null, { timeout: 30000 })
+      .catch(async () => assert.fail(`verdict lines: ${await reviewer.locator('.verdict-lines').innerText()}`));
+    const clientTime = reviewer.locator('[aria-labelledby="check-title"] .time-fields > div', { has: reviewer.locator('dt', { hasText: 'Registry acceptance' }) });
+    assert.deepEqual([await clientTime.locator('dd span').innerText(), await clientTime.locator('dd small').innerText()], ['No account needed', CLIENT_BASIS]);
+    assert.ok(!(await reviewer.locator('main').innerText()).includes('Not signed in'), 'the client never reads "Not signed in"');
+    for (const width of [320, 1440]) {
+      await reviewer.setViewportSize({ width, height: 900 });
+      await reviewer.locator('.verdict').screenshot({ path: join(OUT, `client-result-${width}.png`) });
+    }
+    await reviewer.setViewportSize({ width: 1440, height: 900 });
     for (const width of [320, 768, 1440]) {
       await reviewer.setViewportSize({ width, height: 900 });
       const overflow = await reviewer.evaluate(() => document.documentElement.scrollWidth - innerWidth);
@@ -858,6 +876,21 @@ try {
       assert.equal(await barLink.innerText(), 'Company registry');
       assert.match(await barLink.getAttribute('aria-label'), /^Company registry \(.+\)$/, 'the org id stays in the accessible name');
       assert.equal(await d.locator('.commandbar .registry-signin, .commandbar #company-registry').count(), 0, 'no company sign-in controls in the bar');
+      // At 320px the whole label fits (it wraps, never cut off), the profile menu stays on screen, and the page doesn't scroll sideways.
+      for (const width of [320, 768, 1440]) {
+        await d.setViewportSize({ width, height: 900 });
+        const fit = await barLink.evaluate((a) => { const r = a.getBoundingClientRect(), m = document.querySelector('.commandbar .profile-menu > summary')?.getBoundingClientRect();
+          // Sub-pixel exact (scrollWidth rounds a 0.3px overflow away while the ellipsis still shows): every line of the label fits its box.
+          const cs = getComputedStyle(a), box = r.width - parseFloat(cs.paddingLeft) - parseFloat(cs.paddingRight);
+          a.style.textOverflow = 'clip'; const words = document.createRange(); words.selectNodeContents(a);
+          const cut = Math.max(...[...words.getClientRects()].map((line) => line.width)) - box; a.style.textOverflow = '';
+          return { cut, height: r.height, menuRight: m ? m.right : 0, page: document.documentElement.scrollWidth - innerWidth }; });
+        assert.ok(fit.cut <= 0.01, `bar link cut off at ${width}: ${JSON.stringify(fit)}`);
+        assert.ok(fit.height >= 44, `bar link target at ${width}: ${JSON.stringify(fit)}`);
+        assert.ok(fit.menuRight <= width && fit.page <= 0, `bar at ${width}: ${JSON.stringify(fit)}`);
+        await d.locator('.commandbar').screenshot({ path: join(OUT, `bar-link-${width}.png`) });
+      }
+      await d.setViewportSize({ width: 1440, height: 900 });
     } finally { await c.close(); }
   });
 
