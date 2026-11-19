@@ -79,7 +79,7 @@ One table, string keys `PK`/`SK`:
 | `ORG#o / QUOTA#YYYYMM` | registrations this month (default limit 2000, `REG_QUOTA_PER_MONTH`) |
 | `ORG#o / REG#<rid>` | fp, head, count, received_at, state, up to 10 share hashes |
 | `ORG#o / IDEM#<key>` | payload hash, rid, received_at, expiry (`DEDUPE_SECONDS`, default 7 days) |
-| `SHARE#<sha256(token)> / SHARE` | org, rid, state, expiry (default 30 days, at most 365) |
+| `SHARE#<sha256(token)> / SHARE` | org, rid, state, expiry (default 30 days, 7 offered, at most 30) |
 | `ORG#o / SIDEM#<key>` | share idempotency: rid, token hash, the share's expiry, and its own expiry (`DEDUPE_SECONDS`) |
 | `TOMB#<org>#<id> / TOMB` | a withdrawal, deletion, key-compromise or epoch record, never expired |
 

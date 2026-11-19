@@ -550,7 +550,7 @@ function ShareLinks({ row, client }) {
       <div className="actions-row"><button type="button" className="button secondary" disabled={busy} onClick={make}><Link2 aria-hidden="true" size={16} />Make a share link</button></div>
       <details className="report-details registry-tech" onKeyDown={closeDisclosure}><summary>More options <ChevronDown size={17} aria-hidden="true" /></summary>
         <label className="field-label" htmlFor={`${id}-days`}>Link lasts</label>
-        <select id={`${id}-days`} value={days} onChange={(e) => { setDays(Number(e.target.value)); setRetryShare(null); }}>{[7, 30, 90, 365].map((d) => <option key={d} value={d}>{d} days</option>)}</select>
+        <select id={`${id}-days`} value={days} onChange={(e) => { setDays(Number(e.target.value)); setRetryShare(null); }}>{[7, 30].map((d) => <option key={d} value={d}>{d} days</option>)}</select>
       </details>
     </>}
     {error && <p className="field-hint receipt-error" role="alert">{error}</p>}

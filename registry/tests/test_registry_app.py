@@ -5,6 +5,7 @@ import json
 from registry_helpers import (SEED_A, SEED_B, call, enroll, envelope, line, make_app, register, share, token)
 
 from registry import ed25519, receipt
+from registry.app import DAY, _iso
 from registry.store import MemoryTable
 
 ACK = {"registration_id", "received_at", "count", "head", "key_fingerprint", "disposition"}
@@ -396,3 +397,14 @@ def test_deleting_a_registration_whose_share_record_is_gone_leaves_a_withdrawn_s
     assert call(app, "DELETE", f"/v1/registrations/{reg['registration_id']}", token(clock, role="admin"))[0] == 200
     assert table.items[key]["state"] == "withdrawn" and "ttl" not in table.items[key]  # a permanent claim on the hash
     assert call(app, "GET", share["path"])[0] == 404
+
+
+def test_share_lifetime_is_at_most_30_days():
+    app, table, clock, pilot = setup()
+    _, reg, _ = register(app, pilot, line(SEED_A, 5))
+    rid = reg["registration_id"]
+    assert _share(app, pilot, rid, expires_days=31)[0] == 400
+    assert _share(app, pilot, rid, expires_days=365)[0] == 400
+    for d in (7, 30):
+        s, out, _ = _share(app, pilot, rid, expires_days=d)
+        assert s == 201 and out["expires_at"] == _iso(app.now() + d * DAY)
