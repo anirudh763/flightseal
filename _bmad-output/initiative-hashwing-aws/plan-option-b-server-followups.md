@@ -3,14 +3,14 @@ title: 'Option B server follow-ups: usable-key pilot slots, retire never blocked
 type: bugfix
 ticket: ''
 created: '2026-11-19'
-status: in-progress
+status: built
 baseline_revision: 'ce751bad4671c8839c5cc6374411e7e4b4e5ea48'
 route: full
 route_source: auto
 risk: high
-review: ''
-review_source: ''
-lenses_ran: []
+review: quick
+review_source: pinned
+lenses_ran: [quick]
 review_loop_iteration: 0
 followup_review_recommended: false
 context:
@@ -105,6 +105,15 @@ All paths relative to the worktree.
 
 ## Review Triage Log
 
+### 2026-11-19 — Review pass
+- verdicts: 5 findings — high 0, medium 1, low 4, false 0, maybe-false 0
+- findings:
+  - `[low]` `[patch]` `infra/lib/stack.ts` pilot-route comment still said every pilot route answers `pilot_keys_off` — rewritten: challenge/enroll gated, retire never.
+  - `[low]` `[patch]` `pilot_enroll` docstring omitted the cap reclaim and retry — one sentence added.
+  - `[medium]` `[patch]` leading-space vector had `reason: null`, the same as valid cases, so a JS consumer reading only `reason` would fail open — reason is now `no_line` (registry_error null), `how_to_evaluate` says never treat it as valid, test asserts `no_line` iff `found` is false; JSON regenerated.
+  - `[low]` `[patch]` OUTBOX said "every 503 (30)" without naming `identity_unavailable` — wording now names it (a configuration error the wait won't fix).
+  - `[low]` `[reject]` e2e `pilot_steps` doesn't check the challenge status — not silent: `main` wraps the run in `except Exception` and records a `run` `blocked` step, and the committed evidence shows all five pilot steps passing.
+
 ## Design Notes
 
 Reclaim sketch (shape only):
@@ -131,3 +140,11 @@ def _reclaim_pilot_slots(self, pk, now):  # ponytail: pages every KEY# item of t
 - `cd <wt> && python3 tests/fixtures/make_pilot_authorization.py && git diff --exit-code tests/fixtures/pilot-authorization.json` (after committing) -- expected: no diff
 - `cd <wt> && python3 tools/check_receipt_allowlist.py` and `gitleaks detect --no-banner --config .gitleaks.toml` (if gitleaks installed) -- expected: clean
 - `cd <wt> && uv run --no-project --with boto3==1.43.123 python registry/localstack/e2e.py > .test-logs/e2e.log 2>&1` -- expected: pilot steps pass; only the two persistence steps fail
+
+## Auto Run Result
+
+- Summary: pilot slots held only by usable keys (lazy reclaim = retire, only when an enroll hits the cap, then one retry); retire works whatever `PILOT_KEYS_ORGS` says; pilot compromise retries once if a retire/reclaim races it; `Retry-After` on 429/503 plus `access-control-expose-headers: retry-after` in the app and API Gateway CORS; legacy (pre-#60) restore tests; leading-space vector (`no_line`); LocalStack pilot steps.
+- Files: `registry/registry/app.py` (reclaim, ungated retire, compromise retry, Retry-After/expose), `registry/tests/test_registry_pilot_keys.py` (slots, races, switch off, legacy restore), `registry/tests/test_registry_contract_fixes.py` (Retry-After), `registry/tests/test_pilot_authorization.py` + `tests/fixtures/make_pilot_authorization.py` + `pilot-authorization.json` (27 cases), `registry/localstack/e2e.py` + evidence JSON, `infra/lib/stack.ts` + test, docs (ARCHITECTURE_AWS, RUNBOOK_AWS, THREAT_MODEL, OUTBOX, design note, spine AD-23, ledger R65/R71/R74, AGENTS.md).
+- Review: 4 patches (1 medium, 3 low), 0 deferred, 1 rejected (e2e robustness: failures already recorded as `run` blocked). Follow-up review recommended: false (one medium patched, no high).
+- Verification: ctest 5/5; `registry/tests` 301 passed, 0 skipped; root pytest 364 passed, 30 skipped; infra 19/19; vectors regenerate byte-equal; `check_receipt_allowlist.py` with gitleaks 0; gitleaks on 126858d..HEAD clean; LocalStack e2e 24 pass / 2 fail (known persistence-after-restart community gap) / 2 blocked (apigatewayv2, cognito-idp), all five pilot steps pass.
+- Residual risks: reclaim and compromise retry only exercised on MemoryTable (LocalStack never reaches the cap); reclaim scans all KEY# items of the org (bounded by keys ever enrolled); PR #64 edits the same R74 row and OUTBOX paragraph (merge conflict expected).

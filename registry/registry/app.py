@@ -511,7 +511,8 @@ class App:
 
     def pilot_enroll(self, ident, body, _query):
         """Option B: a pilot enrolls their own key with an authorization signed by the org's active company key.
-        Order: schema, challenge signature, authorization, company key active, key_exists, then one transaction."""
+        Order: schema, challenge signature, authorization, company key active, key_exists, then one transaction. If
+        that fails only on the 50-key cap, unusable pilot keys are retired (`_reclaim_pilot_slots`) and it is sent once more."""
         self._fields(body, required=("public_key", "nonce", "signature", "authorization", "authorization_sig"))
         pub = bytes.fromhex(self._str(body, "public_key", HEX64))
         nonce = self._str(body, "nonce", HEX32)

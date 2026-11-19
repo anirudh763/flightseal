@@ -41,15 +41,15 @@ def test_vector_constants():
     assert (VECTORS["pilot_key_cap"], VECTORS["recipient_compromised_cap"]) == (50, 500)
     assert [r["reason"] for r in VECTORS["reasons"]] == list(pa.REGISTRY_ERROR)
     reasons = {c["reason"] for c in VECTORS["cases"]}
-    assert reasons == set(pa.REGISTRY_ERROR) | {None}  # every reason has a vector
+    assert reasons == set(pa.REGISTRY_ERROR) | {None, "no_line"}  # every reason has a vector
 
 
 @pytest.mark.parametrize("case", VECTORS["cases"], ids=lambda c: c["name"])
 def test_vector(case):
     result = evaluate(case)
     assert (result is not NOT_FOUND) is case["found"]
-    if case["found"]:
-        assert result == case["reason"]
+    assert result == (case["reason"] if case["found"] else NOT_FOUND)
+    assert (case["reason"] == "no_line") is (not case["found"])  # a missing line never reads as valid (reason None)
     assert pa.REGISTRY_ERROR.get(case["reason"]) == case["registry_error"]
 
 

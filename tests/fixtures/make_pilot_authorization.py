@@ -26,8 +26,8 @@ DEFAULT = NOW + pa.DEFAULT_DAYS * pa.DAY
 
 HOW = ("For each case: find the lines of `line` that start with `line_prefix` without its trailing space, at the very "
        "first character of the line (no trimming: a line with any character before it, even a space, is not an "
-       "authorization line). None: no authorization, so `found` is false and nothing is authorized (signer not "
-       "confirmed); `found` is true otherwise. More than one, or one not exactly `line_prefix` + base64url + '.' + sig: reason malformed. "
+       "authorization line). None: no authorization, so `found` is false, reason is no_line and nothing is authorized "
+       "(signer not confirmed; never treat it as valid); `found` is true otherwise. More than one, or one not exactly `line_prefix` + base64url + '.' + sig: reason malformed. "
        "Otherwise check the base64url and sig against `pilot_key` (the key being authorized), `company_key` (the "
        "expected company key) and `now` (the checker's own clock, epoch seconds), testing `reasons` in order: "
        "malformed unless the authorization is base64url without padding that decodes to exactly the four canonical "
@@ -96,7 +96,7 @@ def cases():
         case("pilot key not a curve point", "weak_pilot_key", pilot=OFF_CURVE, expect_pilot=OFF_CURVE),
         case("pilot key equals company key", "same_key", pilot=C, expect_pilot=C),
         case("two authorization lines in one message", "malformed", text=good, sig=good_sig, line=two + "\n" + two),
-        case("leading space before the line", None, line=" " + two, found=False),
+        case("leading space before the line", "no_line", line=" " + two, found=False),
     ]
 
 
