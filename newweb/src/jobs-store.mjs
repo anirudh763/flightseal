@@ -79,3 +79,14 @@ export async function openJobsStore(scope, { indexedDB = globalThis.indexedDB } 
     return memoryStore(scope);
   }
 }
+
+/** Delete the jobs of one local scope (a removed profile). Always resolves: an error or a blocked delete (another tab
+ * still has it open; the browser finishes the delete once that tab closes it) never fails the caller. */
+export async function deleteJobsDb(scope, { indexedDB = globalThis.indexedDB } = {}) {
+  memory.delete(scope);
+  try {
+    if (!indexedDB) return;
+    const name = await jobsDbName(scope);
+    await new Promise((resolve) => { const r = indexedDB.deleteDatabase(name); r.onsuccess = r.onerror = r.onblocked = () => resolve(); });
+  } catch { /* the profile is already removed; leftover jobs are not worth failing that */ }
+}
