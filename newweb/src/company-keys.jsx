@@ -13,12 +13,13 @@ export function CompanyKeysPanel({ signingKey }) {
   const [r, s] = useRegistry();
   const [list, setList] = useState({ status: 'idle', keys: [] }); // idle | loading | ok | error
   const [loaded, setLoaded] = useState(null); // { pub, fp } of the key loaded under Your signing key
+  const [unreadable, setUnreadable] = useState(false); // a key is loaded but this browser couldn't read its public key
   const [busy, setBusy] = useState(false);
   const [note, setNote] = useState(null); // { text, code?, alert? }
   const [target, setTarget] = useState(''); // the fingerprint the compromise dialog is about
   const replaceRef = useRef(null), keepCurrentRef = useRef(null);
   const compromiseRef = useRef(null), keepItRef = useRef(null);
-  const triggerRef = useRef(null);
+  const triggerRef = useRef(null), headingRef = useRef(null);
   const seq = useRef(0);
   const owner = s.claims ? s.owner : null;
 
@@ -36,16 +37,22 @@ export function CompanyKeysPanel({ signingKey }) {
   }, [owner, load]);
   useEffect(() => {
     let live = true;
-    setLoaded(null);
+    setLoaded(null); setUnreadable(false); setNote(null); // a message about the last key never sits next to this one
     const pem = signingKey?.privateKeyPem;
     if (pem) publicKeyHexFromPem(pem) // generated or imported: the same path, from the PEM itself
       .then(async (pub) => ({ pub, fp: await fingerprintHex(pub) }))
-      .then((v) => { if (live) setLoaded(v); }, () => {});
+      .then((v) => { if (live) setLoaded(v); }, () => { if (live) setUnreadable(true); });
     return () => { live = false; };
   }, [signingKey]);
 
   const openDialog = (ref, safeRef, event) => { triggerRef.current = event?.currentTarget || null; ref.current?.showModal(); safeRef.current?.focus(); };
   const closeDialog = (ref) => ref.current?.close();
+  // Focus goes back to the button that opened a dialog, or to the heading when that button is gone (or there was none).
+  const restoreFocus = () => { const t = triggerRef.current; (t?.isConnected ? t : headingRef.current)?.focus(); };
+  useEffect(() => { // a reload after an action can remove the button that had the focus
+    const t = triggerRef.current;
+    if (t && !t.isConnected && (!document.activeElement || document.activeElement === document.body)) { triggerRef.current = null; headingRef.current?.focus(); }
+  }, [list]);
   const fail = (res) => {
     setNote({ text: errorLine(res), code: res.code, alert: true });
     if (res.code === 'conflict' || res.status === 404) load();
@@ -91,13 +98,14 @@ export function CompanyKeysPanel({ signingKey }) {
     else actions = <>
       <div className="actions-row"><button type="button" className="button primary" disabled={!loaded || !online || busy} aria-describedby={!signingKey ? 'company-keys-load-hint' : undefined}
         onClick={(e) => (replacing ? openDialog(replaceRef, keepCurrentRef, e) : press(false))}>{replacing ? 'Replace with this key' : 'Enroll this key'}</button></div>
+      {signingKey && unreadable && <p className="field-hint">This key can't be used for enrollment in this browser.</p>}
       {!signingKey && <p id="company-keys-load-hint" className="field-hint">Load your company's signing key under Your signing key first.</p>}
     </>;
   }
 
-  return <section className="panel trust-wide" id="company-keys" aria-labelledby="company-keys-title"><div className="panel-head"><Fingerprint aria-hidden="true" size={18} /><h2 id="company-keys-title">Your company's keys</h2></div><div className="panel-body">
+  return <section className="panel trust-wide" id="company-keys" aria-labelledby="company-keys-title"><div className="panel-head"><Fingerprint aria-hidden="true" size={18} /><h2 id="company-keys-title" ref={headingRef} tabIndex={-1}>Your company's keys</h2></div><div className="panel-body">
     {!owner ? <p>Sign in under Company registry to see your company's keys.</p> : <>
-      {admin && !online && <p className="registry-notice">You're offline. Key changes need a connection.</p>}
+      {!online && <p className="registry-notice">You're offline. Key changes need a connection.</p>}
       {list.status === 'error' && <div className="registry-notice" role="alert"><p>{down ? DOWN : errorLine(list.res)}</p><button type="button" className="button secondary" onClick={load}>Try again</button></div>}
       {(list.status === 'loading' || list.status === 'idle') && !keys.length && <p role="status">Loading your company's keys…</p>}
       {list.status === 'ok' && !keys.length && <p>No company key enrolled yet.</p>}
@@ -117,14 +125,14 @@ export function CompanyKeysPanel({ signingKey }) {
         {note.code && <details className="report-details"><summary>More options <ChevronDown size={17} aria-hidden="true" /></summary><p className="field-hint">Technical details: {note.code}</p></details>}</div>
         : <p className="field-hint" role="status">{note?.text || ''}</p>}
     </>}
-    <dialog ref={replaceRef} className="registry-dialog" aria-labelledby="company-keys-replace-title" onClose={() => triggerRef.current?.focus()}>
+    <dialog ref={replaceRef} className="registry-dialog" aria-labelledby="company-keys-replace-title" onClose={restoreFocus}>
       <h2 id="company-keys-replace-title">Replace your company's key?</h2>
       <p>The key loaded here becomes your company's key. New receipts signed with the current key will be refused.</p>
       <div className="actions-row"><button type="button" className="button secondary" disabled={busy} onClick={() => { closeDialog(replaceRef); press(true); }}>Replace key</button><button ref={keepCurrentRef} type="button" className="button secondary" onClick={() => closeDialog(replaceRef)}>Keep the current key</button></div>
     </dialog>
-    <dialog ref={compromiseRef} className="registry-dialog" aria-labelledby="company-keys-compromise-title" onClose={() => triggerRef.current?.focus()}>
+    <dialog ref={compromiseRef} className="registry-dialog" aria-labelledby="company-keys-compromise-title" onClose={restoreFocus}>
       <h2 id="company-keys-compromise-title">Mark this key compromised?</h2>
-      <p>New receipts signed with it will be refused. Older proofs from it will show a warning.</p>
+      <p>New receipts signed with it will be refused. Older proofs from it show a warning once the people who check them mark it compromised too.</p>
       {target && <p><code className="wrap fingerprint">{formatFingerprint(target)}</code></p>}
       <div className="actions-row"><button type="button" className="button registry-bad" disabled={busy} onClick={compromise}>Mark compromised</button><button ref={keepItRef} type="button" className="button secondary" onClick={() => closeDialog(compromiseRef)}>Keep it</button></div>
     </dialog>

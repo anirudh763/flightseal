@@ -32,5 +32,5 @@
   summary: The flag-off Trust and limits sentence "Company sign-in isn't part of this copy of HashWing." (AC-50, design §6) is not added: it changes flag-off text, which the plan keeps unchanged.
   evidence: plan "Never" list; `newweb/tests/registry-wiring.mjs` flag-off check asserts the Trust headings only.
 - source_plan: `_bmad-output/initiative-hashwing-aws/plan-trust-company-keys.md`
-  summary: The compromise dialog says "Older proofs from it will show a warning." (plan copy). Verify does not read registry key state, so a recipient sees that warning only after marking the key compromised in their own Trusted companies list (R35, design PR 2).
+  summary: RESOLVED by rewording: the compromise dialog now says "Older proofs from it show a warning once the people who check them mark it compromised too." It used to say "Older proofs from it will show a warning." (plan copy), but Verify does not read registry key state, so a recipient sees that warning only after marking the key compromised in their own Trusted companies list (R35, design PR 2).
   evidence: `newweb/src/company-keys.jsx` compromise dialog; `recipient-trust.mjs` and `trusted-keys.mjs` unchanged.

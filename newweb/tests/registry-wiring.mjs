@@ -1202,6 +1202,7 @@ try {
         await go(kp, 'help');
         await enrollButton.waitFor();
         assert.equal(await enrollButton.isDisabled(), false);
+        assert.equal(await panel.locator('.button.primary').count(), 1, 'one primary button: Enroll this key');
         await enrollButton.click();
         await waitRows((rows) => rows.length === 1 && new RegExp(`Active Enrolled ${DAY} by you`).test(rows[0]), 'enrolled row');
         await panel.getByText("This key is now your company's active key.").waitFor();
@@ -1266,7 +1267,7 @@ try {
         const trigger = replaced.getByRole('button', { name: 'Mark compromised' });
         await trigger.click();
         const dialog = panel.locator('dialog[open]');
-        await dialog.getByText('New receipts signed with it will be refused. Older proofs from it will show a warning.').waitFor();
+        await dialog.getByText('New receipts signed with it will be refused. Older proofs from it show a warning once the people who check them mark it compromised too.').waitFor();
         assert.equal(await kp.evaluate(() => document.activeElement?.textContent), 'Keep it');
         await axe(kp, 'compromise dialog open');
         await kp.keyboard.press('Escape');
