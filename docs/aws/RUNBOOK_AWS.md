@@ -98,10 +98,13 @@ below.
   the person checking the file is told the signature is valid but the key is not in their trusted list, so the
   signer is not confirmed.
 
-First steps for a company: an admin calls `GET /v1/keys/challenge`. The client builds the bytes
-`hashwing-key-enroll v1\n<org>\n<nonce>` itself and signs them with the sealer's Ed25519 key only if the server's
-`message` is byte-equal to them (`registry/registry/enroll_challenge.py`); otherwise it signs nothing. It then posts
-`{public_key, nonce, signature}` to `POST /v1/keys`.
+First steps for a company: on the signing computer, an admin loads the company key under Trust → Your signing key,
+signs in under Company registry, and presses **Enroll this key** (or **Replace with this key**) under Your company's
+keys. The console calls `GET /v1/keys/challenge`, builds the bytes `hashwing-key-enroll v1\n<org>\n<nonce>` itself
+and signs them in the browser only if the server's `message` is byte-equal to them (`newweb/src/company-keys.mjs`;
+the Python client is `registry/registry/enroll_challenge.py`); otherwise it signs nothing. It then posts
+`{public_key, nonce, signature}` (plus `confirm_replace` on replace) to `POST /v1/keys`. Only flag-on builds have
+this section; the public Pages build does not.
 
 ### Pilot keys (Option B)
 
