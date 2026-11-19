@@ -173,4 +173,4 @@ Task packets, their order and the tests that change on purpose are in [plan-ui-b
 - #50 empty job-ref cell kept for screen readers on phones (94aaf6c): CSS reviewed at 984a636; the test follow-up (the check now runs) was checked by the advisor.
 - #51 ledger review record (1a6f8d6): reviewed at 558d196; wording follow-ups checked by the advisor.
 - #52 Privacy and Security pages say what Jobs keeps (099e0a2): reviewed at 77b586d; wording follow-ups were the reviewer's own and checked by the advisor.
-- Correction: `newweb/tests/private-lifecycle.mjs` passes 20/20 against the right server. The reported 19/20 came from running it without `HASHWING_BASE_URL`, which made it test an old local Docker build on port 3001 that predates the rescue notice. AGENTS.md now gives the exact command.
+- Correction: `newweb/tests/private-lifecycle.mjs` passes 20/20 against the right server (measured at 1a6f8d6). The latest reported 19/20 came from running it without `HASHWING_BASE_URL`, which made it test an old local Docker build on port 3001 that predates the rescue notice; the earlier 19/20 was very likely the same. AGENTS.md now gives the full server and test commands.
