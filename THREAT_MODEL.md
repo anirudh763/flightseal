@@ -54,6 +54,13 @@ The records written after sealing starts: their contents, their order and their 
   that key would then read as trusted. It can also delete a compromised mark, and a compromised entry that is
   corrupted (for example, its date is missing) is dropped like any malformed entry. The mitigation is a dedicated
   origin for the console (deferred).
+- Jobs (the "Sealed on this device" list and the Jobs page) live in IndexedDB on the same shared origin. A job holds
+  the job reference, package name, file count and size, receipt message (which includes the public key and, for one
+  file, its name, size and SHA-256) and sealed time; never file contents or private keys. A sibling site could read or
+  change them. The console drops malformed rows on read but cannot detect a well-formed altered one (for example, a
+  receipt message carrying a different public key), and Export and Resume return whatever is stored. The evidence is
+  the package downloaded at sealing time, not the job row, and Verify never reads jobs. Jobs sealed without a local profile belong to one shared guest scope, so anyone
+  using the browser without a profile sees them. Removing a local profile does not yet delete its jobs database.
 - Receipts reach the witness promptly. The gap between receipts is the window an attacker can rewrite, so a
   deployment chooses `--every N` to match how much of a flight it can afford to leave unprotected.
 
