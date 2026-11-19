@@ -3,7 +3,7 @@ title: 'Jobs: registry status per row, status filter and row detail (flag on)'
 type: feature
 ticket: ''
 created: '2026-11-19'
-status: in-progress
+status: built
 baseline_revision: '56fc2192098eefae77ce2e578cd43c32e237ccbd'
 route: full
 route_source: auto

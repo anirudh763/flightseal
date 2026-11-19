@@ -29,6 +29,7 @@ const REMOVE_FAILED = "Couldn't remove this job. Try again, or reload the page."
 export function JobsPage({ rows, loaded, storage, error, q, page, onUrl, onResume, resumeBlocked, onRemove, onDownload, sealHref, onSeal, statusOf, filters = [], status: rawStatus, detailLabel = 'Status' }) {
   const [exportError, setExportError] = useState('');
   const [removeError, setRemoveError] = useState('');
+  const [copyError, setCopyError] = useState('');
   const [announce, setAnnounce] = useState('');
   const [removing, setRemoving] = useState(null);
   const [openId, setOpenId] = useState(null);
@@ -71,8 +72,8 @@ export function JobsPage({ rows, loaded, storage, error, q, page, onUrl, onResum
   const goPage = (n) => { focusCaptionRef.current = true; onUrl({ q, status, page: n }, 'push'); };
   const filter = (value) => onUrl({ q, status: value, page: 1 }, 'push');
   const copyReceipt = async (job) => {
-    try { await navigator.clipboard.writeText(job.receipt); setAnnounce('Receipt message copied.'); }
-    catch { setAnnounce(COPY_FAILED); }
+    try { await navigator.clipboard.writeText(job.receipt); setCopyError(''); setAnnounce('Receipt message copied.'); }
+    catch { setCopyError(COPY_FAILED); }
   };
   const exportJob = (job) => {
     try { const out = jobExport(job); onDownload(out.name, out.text); setExportError(''); }
@@ -94,6 +95,7 @@ export function JobsPage({ rows, loaded, storage, error, q, page, onUrl, onResum
     {error && <p className="jobs-notice" role="alert">{error}</p>}
     {exportError && <p className="jobs-notice receipt-error" role="alert">{exportError}</p>}
     {removeError && <p className="jobs-notice receipt-error" role="alert">{removeError}</p>}
+    {copyError && <p className="jobs-notice receipt-error" role="alert">{copyError}</p>}
     {resumeBlocked && rows.length > 0 && <p className="jobs-notice" id="jobs-resume-blocked">{SEAL_RUNNING}</p>}
     {!rows.length ? <div className="jobs-empty"><p>Nothing sealed in this browser yet.</p><a href={sealHref} onClick={onSeal}>Seal files</a></div> : <>
       <div className="jobs-search">
