@@ -53,10 +53,10 @@ What the console does with the flag on:
   "Export pending proofs" at once.
 - Before anything unsaved is lost, the app asks first. Reloading or closing the tab warns while a Seal & send result,
   a large-file result, a workbench output or a memory-only pending proof is not saved yet. Logging out, switching
-  account, signing in or starting the demo waits until "Download unsaved work" (one zip) has saved them and the user
-  answers "Yes, saved" to "Did the download finish?" (a cancelled or blocked download changes nothing). If the zip cannot be made, each file gets its own button,
-  and a result counts as saved only once every one of its files was downloaded; the page says "N of M files
-  downloaded" until then. Confirming only ever saves the exact results that were downloaded, never a newer one. A logout this
+  account, signing in or starting the demo waits until "Download unsaved work" (one zip) has been started and the user
+  confirms with "I saved it" ("I saved both", "I saved them" or "I saved these" for several files) (a started download is not treated as saved; a cancelled or blocked one changes nothing). If the zip cannot be made, each file gets its own button,
+  and a result counts as saved only once every one of its files' downloads was started and then confirmed; the page says "Download started for N of M
+  files" until then. Confirming only ever saves the exact results that were downloaded, never a newer one. A logout this
   tab did not choose (the same profile logged out in another tab, or the workspace server signed out) keeps that work
   in tab memory and offers it as one download; "Discard" first says it deletes the only copy; this tab is signed out of the registry at once. After a
   reload, a file that was chosen but not sealed is no longer selected, and the page says to choose it again. Rows in
