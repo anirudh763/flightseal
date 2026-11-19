@@ -158,6 +158,9 @@ int verify(const std::string& log, const std::vector<std::pair<std::string, std:
     return 2;
   }
   std::vector<Receipt> list;
+  // A pilot key authorization line (signing Option B) is skipped and never checked, so it can't change the result: a
+  // pilot-signed receipt stays UNVERIFIED against the company key. Same predicate as docs/verifier.js parseReceiptFile.
+  bool pilot_authorization = false;
   if (!receipts.empty()) {
     std::ifstream in(receipts);
     if (!in) {
@@ -166,6 +169,10 @@ int verify(const std::string& log, const std::vector<std::pair<std::string, std:
     }
     std::string line;
     for (int n = 1; std::getline(in, line); ++n) {
+      if (line.rfind("Authorized by company key:", 0) == 0) {
+        pilot_authorization = true;
+        continue;
+      }
       Receipt r;
       if (!parse_line(line, &r)) {
         std::cerr << receipts << ":" << n << ": not a receipt\n";
@@ -231,6 +238,7 @@ int verify(const std::string& log, const std::vector<std::pair<std::string, std:
     std::cout << "\n";
     bad = bad || failed > 0;
   }
+  if (pilot_authorization) std::cout << "  note         Pilot authorization not checked by this verifier\n";
   if (!bad && untrusted) {  // exit status 3: nothing wrong was proved, but the receipts prove nothing either
     std::cout << "RESULT: UNVERIFIED (receipts not validly signed by the key you trust)\n";
     return 3;

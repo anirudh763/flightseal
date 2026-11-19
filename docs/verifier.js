@@ -343,6 +343,26 @@ export function parseReceipts(text) {
   return { receipts, error: null };
 }
 
+// A pilot key authorization line (Option B) in a receipts file: `fseal verify` and this verifier skip it, don't check
+// it and say so. Same predicate as src/main.cpp: the line starts at column 0 with this text.
+export const AUTHORIZATION_LINE = "Authorized by company key:";
+export const AUTHORIZATION_NOTE = "  note         Pilot authorization not checked by this verifier";
+
+/**
+ * parseReceipts for a receipts file that may carry authorization lines: they are dropped before parsing (line numbers
+ * in an error still count them, like the CLI), and `pilotAuthorization` says whether there was one. They are never
+ * checked here, so they can't change a result: a pilot-signed receipt stays UNVERIFIED against the company key.
+ */
+export function parseReceiptFile(text) {
+  const all = text.split("\n");
+  const kept = all.flatMap((line, i) => (line.startsWith(AUTHORIZATION_LINE) ? [] : [i])); // original index of each kept line
+  const parsed = parseReceipts(kept.map((i) => all[i]).join("\n"));
+  const pilotAuthorization = kept.length !== all.length;
+  return parsed.error
+    ? { ...parsed, error: { ...parsed.error, line: kept[parsed.error.line - 1] + 1 }, pilotAuthorization }
+    : { ...parsed, pilotAuthorization };
+}
+
 let ed25519Probe;
 /** True if this runtime's WebCrypto can verify Ed25519 signatures. */
 export function ed25519Supported() {
@@ -507,7 +527,7 @@ export function summarize(scan, receiptCheck) {
  * Text identical to `fseal verify LOG [--receipts R --pubkey K]` stdout whenever signatures were checked; the
  * cross-check tests compare it byte for byte. When they could not be checked it says so and never says INTACT.
  */
-export function cliReport(path, scan, receiptCheck) {
+export function cliReport(path, scan, receiptCheck, { pilotAuthorization = false } = {}) {
   const s = summarize(scan, receiptCheck);
   const out = [];
   out.push(`FlightSeal verify: ${path}`);
@@ -541,6 +561,7 @@ export function cliReport(path, scan, receiptCheck) {
       ? "UNVERIFIED (receipts not validly signed by the key you trust)"
       : "UNVERIFIED (hash chain intact; receipt signatures NOT CHECKED; run fseal verify)",
   };
+  if (pilotAuthorization) out.push(AUTHORIZATION_NOTE);
   out.push(`RESULT: ${why[s.result] || s.result}`);
   return out.join("\n") + "\n";
 }

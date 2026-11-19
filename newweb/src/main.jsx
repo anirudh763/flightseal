@@ -30,10 +30,10 @@ import { deleteJobsDb, openJobsStore } from './jobs-store.mjs';
 import { LinkStep, VERIFY_OPENS_ON, VerifyChooser } from './verify-start.jsx';
 import { createEncryptedProfileBackup, inspectEncryptedProfileBackup, commitBackupRestore, previewBackupRestore } from './profile-backup.mjs';
 import { createSyncProvider } from './sync-provider.mjs';
-import { CONFIRM_MESSAGE, PINS_CHANGED, SOURCES, addTrustedCompany, fingerprintHex, formatFingerprint, listTrustedHistory, listTrustedKeys, markCompromised, pinTrustedKey, removeTrustedKey, trustForKey } from './trusted-keys.mjs';
+import { CONFIRM_MESSAGE, PINS_CHANGED, SOURCES, addTrustedCompany, fingerprintHex, formatFingerprint, listTrustedHistory, listTrustedKeys, markCompromised, pinTrustedKey, removeTrustedKey, trustForKey, trustForProof } from './trusted-keys.mjs';
 import { RegistryBarLink, RegistryBoundary, RegistryPanel, RegistryShareNote, RegistrySigningLine, SealedOnDevice, ShareRecordPanel, getRegistry, useRegistryRecordCheck, useShareRecord, useJobsRegistry, registryLogout, registryScope, registrySealStart, registrySealed, useRegistryTimeField, useRegistryUnsent } from './registry-ui.jsx';
 import { CompanyKeysPanel } from './company-keys.jsx';
-import { BYTES_DIFFER, TRUST_KIND, composeNote, countsLine, offersOriginal, pairFiles, verdict, landingLine, manifestReport, parseLandingLine, parseNote, parseSealedLine, timeFields, toIsoFromLocal, trustLine } from './recipient-trust.mjs';
+import { BYTES_DIFFER, PILOT_AUTHORIZATION_ACCEPTED, TRUST_KIND, composeNote, countsLine, offersOriginal, pairFiles, verdict, landingLine, manifestReport, parseLandingLine, parseNote, parseSealedLine, timeFields, toIsoFromLocal, trustLine } from './recipient-trust.mjs';
 
 const syncProvider = createSyncProvider({ supabaseUrl: import.meta.env.VITE_SUPABASE_URL, supabaseAnonKey: import.meta.env.VITE_SUPABASE_ANON_KEY });
 
@@ -607,7 +607,7 @@ function App() {
     catch (cause) { setError(cause?.message || 'Could not remove the previous temporary import output.'); }
   };
 
-  const runVerify = useCallback(async (file, receipts = '', trustedKey = '', label = file?.name || 'local file', source = null, onError = setError) => {
+  const runVerify = useCallback(async (file, receipts = '', trustedKey = '', label = file?.name || 'local file', source = null, onError = setError, message = '') => {
     if (receiptInvalidRef.current) {
       onError(receiptInvalidMessageRef.current || 'Remove the invalid receipts file or choose a valid one before checking.');
       return null;
@@ -667,6 +667,7 @@ function App() {
         overallVerdict,
         receiptCoverage: needsTrustedKey ? { covered: '0', uncovered: String(native.records) } : { covered: native.covered, uncovered: native.uncovered },
         needsTrustedKey,
+        ...(PILOT_AUTHORIZATION_ACCEPTED ? { message } : {}), // the raw receipt message, for trustForProof
       };
       setResult(completed);
       const rowCount = Number(native.records) + Number(!!indexed.problem && indexed.problem.record === Number(native.records));
@@ -1278,7 +1279,7 @@ function App() {
     const anchor = checkAnchorKey(publicKey);
     const expected = companyFingerprint();
     const mismatch = expected && (await fingerprintHex(anchor).catch(() => '')) !== expected;
-    const verified = await runVerify(checkFile, receipts, anchor, checkFile.name, null, (message) => failCheck('check-file', message));
+    const verified = await runVerify(checkFile, receipts, anchor, checkFile.name, null, (message) => failCheck('check-file', message), PILOT_AUTHORIZATION_ACCEPTED ? checkText : '');
     if (!verified) return;
     if (mismatch) { setCompanyMismatch({ for: verified, name: checkCompany }); setProtectTimes({ for: verified, sealedAt: parseSealedLine(checkText), landing: parseLandingLine(checkText) }); setProtectResult(verified); return; } // never offers the original for another company's key
     const op = runRef.current;
@@ -1512,7 +1513,7 @@ function App() {
     if (checks.includes('wrong-key')) { setKeyTrust({ for: result, status: 'wrong-key' }); return undefined; }
     if (!checks.every((check) => check === 'ok')) return undefined;
     let live = true;
-    trustForKey(result.key).then((trust) => { if (live) setKeyTrust({ ...trust, for: result }); }, () => {});
+    (PILOT_AUTHORIZATION_ACCEPTED ? trustForProof(result.key, result.message) : trustForKey(result.key)).then((trust) => { if (live) setKeyTrust({ ...trust, for: result }); }, () => {});
     return () => { live = false; };
   }, [result, pinsVersion]);
   const protectView = !!result && result === protectResult;
@@ -2648,7 +2649,7 @@ function ManifestCheck({ sealed, text, fromLink, recordCheck, anchor, keyConflic
     if (!outcome?.verified || outcome.pinsVersion === pinsVersion) return undefined;
     let live = true;
     const seen = pinsVersion;
-    trustForKey(outcome.publicKey).catch(() => ({ status: 'untrusted' })).then((trust) => {
+    (PILOT_AUTHORIZATION_ACCEPTED ? trustForProof(outcome.publicKey, text) : trustForKey(outcome.publicKey)).catch(() => ({ status: 'untrusted' })).then((trust) => {
       if (live) setOutcome((current) => current === outcome ? { ...current, trust, pinsVersion: seen, report: reportFor(trust, current) } : current);
     });
     return () => { live = false; };
@@ -2665,7 +2666,7 @@ function ManifestCheck({ sealed, text, fromLink, recordCheck, anchor, keyConflic
       if (!verified.verified) { setOutcome({ verified: false, reason: verified.reason, run: revision, focus: {} }); return; }
       const fingerprint = await fingerprintHex(verified.publicKey);
       if (companyFingerprint && fingerprint !== companyFingerprint) { // never falls back to another key; a compromised signer still reads compromised
-        const trust = await trustForKey(verified.publicKey).catch(() => ({ status: 'untrusted' }));
+        const trust = await (PILOT_AUTHORIZATION_ACCEPTED ? trustForProof(verified.publicKey, text) : trustForKey(verified.publicKey)).catch(() => ({ status: 'untrusted' }));
         if (revision === revisionRef.current) setOutcome({ verified: false, mismatch: company, trust, run: revision, focus: {} });
         return;
       }
@@ -2674,7 +2675,7 @@ function ManifestCheck({ sealed, text, fromLink, recordCheck, anchor, keyConflic
       let comparison;
       try { comparison = pairFiles(verified.manifest, hashed); } catch (cause) { onFieldError('check-originals', cause.message); return; }
       const seenPins = pinsRef.current; // trust is read after hashing, so a pin changed meanwhile is never missed
-      const trust = await trustForKey(verified.publicKey).catch(() => ({ status: 'untrusted' }));
+      const trust = await (PILOT_AUTHORIZATION_ACCEPTED ? trustForProof(verified.publicKey, text) : trustForKey(verified.publicKey)).catch(() => ({ status: 'untrusted' }));
       if (revision !== revisionRef.current) return;
       const facts = { sealedName: sealed.name, fingerprint, head: verified.head, sealedAt: parseSealedLine(text), comparison, locals: hashed, publicKey: verified.publicKey };
       setOutcome({ verified: true, run: revision, focus: {}, ...facts, manifest: verified.manifest, trust, pinsVersion: seenPins, report: reportFor(trust, facts), base: sealed.name.replace(/\.manifest\.fseal$|\.fseal$/, '') || 'hashwing-manifest' });

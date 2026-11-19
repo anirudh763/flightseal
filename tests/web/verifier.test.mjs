@@ -9,7 +9,7 @@ import { tmpdir } from "node:os";
 import { join, dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { createHash } from "node:crypto";
-import { scanLog, parseReceipts, checkReceipts, cliReport, summarize, bytesSource, parseHex, hex, crc32, ed25519Supported, decodeReceipts } from "../../docs/verifier.js";
+import { scanLog, parseReceipts, parseReceiptFile, checkReceipts, cliReport, summarize, bytesSource, parseHex, hex, crc32, ed25519Supported, decodeReceipts } from "../../docs/verifier.js";
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
 const FSEAL = process.env.FSEAL_BIN || join(ROOT, "build", "fseal");
@@ -45,18 +45,19 @@ function fileSource(path) {
   };
 }
 
-async function js(c, mod = { scanLog, parseReceipts, checkReceipts, cliReport }) {
-  let receipts = [];
+async function js(c, mod = { scanLog, parseReceiptFile, checkReceipts, cliReport }) {
+  let receipts = [], pilotAuthorization = false;
   if (c.receipts) {
-    const parsed = mod.parseReceipts(decodeReceipts(readFileSync(c.receipts)));
+    const parsed = mod.parseReceiptFile(decodeReceipts(readFileSync(c.receipts)));
     if (parsed.error) return { error: parsed.error };
     receipts = parsed.receipts;
+    pilotAuthorization = parsed.pilotAuthorization;
   }
   const src = fileSource(c.log);
   try {
     const scan = await mod.scanLog(src, { linksAt: receipts.map((r) => r.count) });
     const check = c.receipts ? await mod.checkReceipts(receipts, parseHex(c.pubkey, 32), scan) : null;
-    const report = mod.cliReport(c.log, scan, check);
+    const report = mod.cliReport(c.log, scan, check, { pilotAuthorization });
     return { scan, check, report, code: report.includes("RESULT: INTACT") ? 0 : report.includes("RESULT: UNVERIFIED") ? 3 : 1 };
   } finally {
     src.close();
@@ -424,4 +425,61 @@ test("cross-format: a company-key signature over the key-enroll challenge never 
   const genuine = await checkReceipts([{ count: 0n, head, key, sig: receiptSig }], key, scan);
   assert.equal(genuine.results[0].result, "ok");
   assert.equal(genuine.results[0].sigChecked, true);
+});
+
+// Signing Option B: a receipts file may carry `Authorized by company key:` lines. The CLI and this verifier skip them,
+// never check them, and print one note line before RESULT; the RESULT and exit status are those of the file without them.
+const AUTH_LINE = JSON.parse(readFileSync(join(ROOT, "tests/fixtures/pilot-authorization.json"), "utf8")).cases.find((x) => x.name === "valid").line;
+const NOTE = "  note         Pilot authorization not checked by this verifier\n";
+function withLines(c, name, edit) {
+  const lines = readFileSync(c.receipts, "utf8").split("\n");
+  const path = join(dir, `${name}.receipts`);
+  writeFileSync(path, edit(lines).join("\n"));
+  return { ...c, name, receipts: path };
+}
+for (const name of ["clean+receipts", "receipts-from-another-key", "flip+receipts"]) {
+  test(`an authorization line changes no RESULT and no exit status, only adds the note (CLI = JS): ${name}`, async () => {
+    const c = cases.find((x) => x.name === name);
+    const plain = cli(c);
+    const edited = withLines(c, `${name}-auth`, (l) => [AUTH_LINE, l[0], AUTH_LINE, ...l.slice(1, -1), AUTH_LINE, l.at(-1)]);
+    const want = cli(edited);
+    assert.equal(want.code, plain.code, want.stderr);
+    assert.equal(want.stdout, plain.stdout.replace(/^RESULT: /m, `${NOTE}RESULT: `));
+    assert.equal(want.stdout.match(/^RESULT: .*$/m)[0], plain.stdout.match(/^RESULT: .*$/m)[0]);
+    const got = await js(edited);
+    assert.equal(got.report, want.stdout, "report differs from `fseal verify`");
+    assert.equal(got.code, want.code);
+    assert.equal((await js(c)).report, plain.stdout, "no note without the line");
+  });
+}
+
+test("a pilot-key receipt with its authorization stays UNVERIFIED (exit 3) against the company key", async () => {
+  const c = withLines(cases.find((x) => x.name === "receipts-from-another-key"), "pilot-signed-auth", (l) => [...l.slice(0, -1), AUTH_LINE, ""]);
+  const want = cli(c);
+  assert.equal(want.code, 3);
+  assert.match(want.stdout, /note {9}Pilot authorization not checked by this verifier\nRESULT: UNVERIFIED/);
+  assert.equal((await js(c)).report, want.stdout);
+});
+
+test("a receipts file with only authorization lines is refused like an empty one (exit 2)", async () => {
+  const c = withLines(cases.find((x) => x.name === "clean+receipts"), "auth-only", () => [AUTH_LINE, AUTH_LINE, ""]);
+  const r = cli(c);
+  assert.equal(r.code, 2);
+  assert.match(r.stderr, /contains no receipts/);
+  const parsed = parseReceiptFile(decodeReceipts(readFileSync(c.receipts)));
+  assert.deepEqual([parsed.receipts.length, parsed.error, parsed.pilotAuthorization], [0, null, true]);
+});
+
+test("line numbers in errors count the authorization lines; a leading space makes it not a receipt", async () => {
+  const base = cases.find((x) => x.name === "clean+receipts");
+  for (const [name, edit, line] of [
+    ["auth-then-blank", (l) => [AUTH_LINE, AUTH_LINE, l[0], "", ...l.slice(1)], 4],
+    ["auth-leading-space", (l) => [l[0], ` ${AUTH_LINE}`, ...l.slice(1)], 2],
+  ]) {
+    const c = withLines(base, name, edit);
+    const r = cli(c);
+    assert.equal(r.code, 2, name);
+    assert.match(r.stderr, new RegExp(`:${line}: not a receipt`), name);
+    assert.deepEqual((await js(c)).error, { line, message: "not a receipt" }, name);
+  }
 });
