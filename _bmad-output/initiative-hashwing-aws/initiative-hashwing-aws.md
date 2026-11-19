@@ -180,8 +180,8 @@ Task packets, their order and the tests that change on purpose are in [plan-ui-b
 - #55 share links last 7 or 30 days, at most 30 (3941644): reviewed at 406c413; follow-ups (doc fixes, expires_at assertion, main merge with fresh build) checked by the advisor; merged at head 25a7fee. R54 records it.
 
 **Open items, 2026-11-18 (#54 review and a demo walkthrough on main):**
-- A small seal that finishes during profile removal can recreate that profile's jobs database (narrow race, found in the #54 review).
+- Fixed (fix/walkthrough-rough-spots): a small seal that finishes during profile removal can recreate that profile's jobs database (narrow race, found in the #54 review).
 - Jobs shows "Sealed locally" for proofs the registry already has (flag-on builds).
-- The client's result shows "Registry: Not signed in".
-- The "Files differ" explanation appears twice.
-- At 320px the top bar truncates "Company registry".
+- Fixed (fix/walkthrough-rough-spots): the client's result shows "Registry: Not signed in" (now "No account needed" when a share link is open).
+- Fixed (fix/walkthrough-rough-spots): the "Files differ" explanation appears twice.
+- Fixed (fix/walkthrough-rough-spots): at 320px the top bar truncates "Company registry" (it wraps now).

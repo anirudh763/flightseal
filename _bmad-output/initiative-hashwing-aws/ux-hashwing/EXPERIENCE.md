@@ -187,7 +187,7 @@ These strings are binding. Existing strings are reused verbatim from `recipient-
     - Saved acknowledgement, record later deleted: "Registered, later deleted".
     - A row still waiting: "Not yet registered", with basis "this device's list: {row label}".
     - A row that needs attention: "Needs attention", with the row's message.
-    - No row: "Not signed in", "Not available yet" (the list isn't open yet) or "No registry record on this device".
+    - No row: "Not signed in" ("No account needed" for a client who opened a share link), "Not available yet" (the list isn't open yet) or "No registry record on this device".
 - **Key trust provenance (Existing, `trustLine()`).** The trusted, untrusted, replaced, compromised, wrong-key, invalid-signature and weak-key lines are reused verbatim. On the share-link page, add: "The registry checked that this key is enrolled for the company's account. It did not check who the company is. Compare the fingerprint with one you got from the company yourself." (New)
 - **Key state display (New).** The registry key states `active`, `rotated` and `compromised` display as "Active", "Replaced on {date}" and "Marked compromised on {date}". This matches the local pin wording in `historyStatus()`.
 - **Limits (Existing, Trust page).** Sealing shows that the file has not changed since it was sealed. It cannot show what happened before sealing. Nothing here claims legal admissibility, sensor truth or insurer acceptance.

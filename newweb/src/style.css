@@ -1116,7 +1116,8 @@ input[type=datetime-local] { width: 100%; max-width: 320px; min-width: 0; min-he
 /* The command bar holds only the title and the profile menu, so it stays one row at every width. */
 .app-shell:not(.canonical-page) .topbar.commandbar { flex-wrap: nowrap; }
 .app-shell:not(.canonical-page) .command-actions { display: flex; width: auto; justify-content: flex-end; }
-.registry-bar-link { display: inline-block; max-width: 40vw; line-height: 44px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+/* Wraps to two lines on a narrow bar instead of cutting the label off; still a 44px target. */
+.registry-bar-link { max-width: 40vw; line-height: 1.2; text-align: center; }
 @media (forced-colors: active) { .nav a[aria-current=page] { border-left: 4px solid Highlight; font-weight: 700; } }
 /* Seal & send: one step panel, then the handoff (EXPERIENCE.md "Release layout, locked"). */
 .seal-panel { max-width: 1040px; }

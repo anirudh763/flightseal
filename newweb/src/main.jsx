@@ -200,6 +200,7 @@ function App() {
   // Jobs (jobs-store.mjs) use the same local scope. Rows of another scope are never shown, even for one render (AC-57).
   const [jobsState, setJobsState] = useState({ scope: null, rows: [], storage: 'indexeddb', error: '' });
   const jobsStoreRef = useRef(null); // { scope, store } while that scope is the current one
+  const removedScopesRef = useRef(new Set()); // removed profiles: a seal finishing late never recreates their jobs
   const [jobsNotice, setJobsNotice] = useState('');
   const jobs = jobsState.scope === localScope ? jobsState : { rows: [], storage: 'indexeddb', error: '' };
   const reloadJobs = useCallback(async (held = jobsStoreRef.current) => {
@@ -216,11 +217,12 @@ function App() {
   }, [localScope, reloadJobs]);
   // A job is written to the scope that was current when sealing began; a failed write never fails the seal.
   const addJob = async (row, scope) => {
-    if (!scope) return;
+    if (!scope || removedScopesRef.current.has(scope)) return;
     let store;
     try {
       const held = jobsStoreRef.current;
       store = held?.scope === scope ? held.store : await openJobsStore(scope);
+      if (removedScopesRef.current.has(scope)) { store.close(); store = null; await deleteJobsDb(scope); return; } // removed while opening
       await store.put(row);
       setJobsNotice('');
     } catch (cause) {
@@ -1465,6 +1467,7 @@ function App() {
     try { await removeLocalProfile(id, { isCurrent: () => authEpochRef.current === epoch && activeSession?.kind === 'account' && activeSession.userId === id }); }
     catch (cause) { setProfileMenuMessage(cause?.message || 'Could not remove this local profile.'); return; }
     const scope = `profile:${id}`;
+    removedScopesRef.current.add(scope); // before the store closes: both seal paths write jobs through addJob
     if (jobsStoreRef.current?.scope === scope) { jobsStoreRef.current.store.close(); jobsStoreRef.current = null; } // an open connection would block the delete
     await deleteJobsDb(scope);
     if (authEpochRef.current !== epoch) return;
@@ -1502,7 +1505,7 @@ function App() {
     return () => { live = false; };
   }, [result, pinsVersion]);
   const protectView = !!result && result === protectResult;
-  const registryLine = __REGISTRY_URL__ ? useRegistryTimeField(protectView ? result.receipts : '') : null; // eslint-disable-line react-hooks/rules-of-hooks -- a build-time constant
+  const registryLine = __REGISTRY_URL__ ? useRegistryTimeField(protectView ? result.receipts : '', { fromLink: !!shareToken }) : null; // eslint-disable-line react-hooks/rules-of-hooks -- a build-time constant
   const resultTimes = protectView && protectTimes?.for === result ? timeFields({ landing: protectTimes.landing, landingSigned: false, sealedAt: protectTimes.sealedAt, registry: registryLine }) : null;
   // A just-sealed result is the sender's own key, so the recipient's trust line is not shown for it.
   const shownTrust = keyTrust?.for === result && !(protectView && !resultTimes) ? keyTrust : null;
@@ -1939,7 +1942,7 @@ function App() {
           {checkPins.length ? <><label className="field-label" htmlFor="check-company">Trusted company <span>(optional)</span></label>
             <select id="check-company" value={checkCompany} onChange={(e) => { invalidateCheck(); setProtectResult(null); setRestored(null); setCheckCompany(e.target.value); }}><option value="">Not chosen: look the key up in my list</option>{checkPins.map((pin) => <option key={pin.name} value={pin.name}>{pin.name}</option>)}</select></>
             : <><p className="field-label">Trusted company</p><p className="field-hint">No trusted companies yet. <a href={workspaceHref('help')} onClick={(e) => { if (e.button !== 0 || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return; e.preventDefault(); navigate('help'); }}>Add one on Trust</a></p></>}
-          {checkIsList ? <ManifestCheck sealed={checkFile} text={checkText} anchor={listKey.anchor} keyConflict={listKey.keyConflict} company={checkCompany} companyFingerprint={companyFingerprint()} options={checkOptions} fieldError={checkError} onFieldError={(field, message) => field ? failCheck(field, message) : setCheckError(null)} trustHref={workspaceHref('help')} onTrust={toTrust} onActiveChange={setManifestCheckActive} /> : <>
+          {checkIsList ? <ManifestCheck sealed={checkFile} text={checkText} fromLink={!!shareToken} anchor={listKey.anchor} keyConflict={listKey.keyConflict} company={checkCompany} companyFingerprint={companyFingerprint()} options={checkOptions} fieldError={checkError} onFieldError={(field, message) => field ? failCheck(field, message) : setCheckError(null)} trustHref={workspaceHref('help')} onTrust={toTrust} onActiveChange={setManifestCheckActive} /> : <>
             {checkOptions}
             <button className="button primary" type="button" disabled={!checkFile || !checkText.trim() || !!busy} aria-describedby={checkWhy ? 'check-why' : undefined} onClick={runProtectCheck}>Check files</button>
             {checkWhy && <p id="check-why" className="field-hint">{checkWhy}</p>}
@@ -1951,11 +1954,11 @@ function App() {
           {restored && restored !== 'none' && result === protectResult && <div className="restored">
             <h3>{restored.matches ? 'Original file recovered' : BYTES_DIFFER.title}</h3>
             <dl className="detail-grid"><dt>Name</dt><dd className="wrap">{restored.name}</dd><dt>Size</dt><dd>{fmtBytes(restored.bytes)}</dd><dt>SHA-256</dt><dd><code>{restored.actualSha256}</code></dd></dl>
-            {restored.matches ? offersOriginal(smallVerdict) && <button className="button secondary" type="button" onClick={() => download(restored.name, restored.data, 'application/octet-stream')}><Download aria-hidden="true" size={16} />Download original file</button> : <p>{BYTES_DIFFER.text}</p>}
+            {restored.matches ? offersOriginal(smallVerdict) && <button className="button secondary" type="button" onClick={() => download(restored.name, restored.data, 'application/octet-stream')}><Download aria-hidden="true" size={16} />Download original file</button> : smallVerdict && smallVerdict.key !== 'differ' && <p>{BYTES_DIFFER.text}</p>}
             <details className="report-details protect-options"><summary>More options <ChevronDown size={17} aria-hidden="true" /></summary><div className="manifest-options-body">
               <label className="field-label" htmlFor="compare-copy">Compare with a copy you have</label>
               <input id="compare-copy" type="file" onChange={(e) => compareCopy(e.target.files?.[0] || null)} />
-              {copyCompare?.for === result && <div className="compare-result" role="status"><span className={`status-label ${copyCompare.matches ? 'ok' : 'warn'}`}>{copyCompare.matches ? 'Matches' : BYTES_DIFFER.title}</span> <span className="wrap">{copyCompare.name} · {fmtBytes(copyCompare.bytes)}</span><code className="wrap">{copyCompare.sha256}</code>{!copyCompare.matches && <p>{BYTES_DIFFER.text}</p>}</div>}
+              {copyCompare?.for === result && <div className="compare-result" role="status"><span className={`status-label ${copyCompare.matches ? 'ok' : 'warn'}`}>{copyCompare.matches ? 'Matches' : BYTES_DIFFER.title}</span> <span className="wrap">{copyCompare.name} · {fmtBytes(copyCompare.bytes)}</span><code className="wrap">{copyCompare.sha256}</code>{!copyCompare.matches && smallVerdict && smallVerdict.key !== 'differ' && <p>{BYTES_DIFFER.text}</p>}</div>}
             </div></details>
           </div>}
           {restored === 'none' && result === protectResult && <p className="field-hint">This log holds decoded flight records rather than a whole sealed file, so there is no original file to download.</p>}
@@ -2569,7 +2572,7 @@ function ItemNote({ note, showLanding }) {
 }
 // The list (manifest) half of Verify's files form. The sealed file, message and key come from the form in App;
 // this holds the originals, the hashing and the result, and stays mounted so a running check survives navigation.
-function ManifestCheck({ sealed, text, anchor, keyConflict, company, companyFingerprint, options, fieldError, onFieldError, trustHref, onTrust, onActiveChange }) {
+function ManifestCheck({ sealed, text, fromLink, anchor, keyConflict, company, companyFingerprint, options, fieldError, onFieldError, trustHref, onTrust, onActiveChange }) {
   const [locals, setLocals] = useState([]);
   const [progress, setProgress] = useState(null);
   const [running, setRunning] = useState(false);
@@ -2586,7 +2589,7 @@ function ManifestCheck({ sealed, text, anchor, keyConflict, company, companyFing
   const pinsVersion = usePinsVersion();
   const pinsRef = useRef(pinsVersion); pinsRef.current = pinsVersion;
   const reportFor = (trust, o, registry = null) => manifestReport({ sealedName: o.sealedName, trust, sources: SOURCES, keyFingerprint: o.fingerprint, head: o.head, sealedAt: o.sealedAt, items: o.comparison.items, extras: o.comparison.extras, locals: o.locals, registry });
-  const registryLine = __REGISTRY_URL__ ? useRegistryTimeField(outcome?.verified ? parseHandover(text).receipts : '') : null; // eslint-disable-line react-hooks/rules-of-hooks -- a build-time constant
+  const registryLine = __REGISTRY_URL__ ? useRegistryTimeField(outcome?.verified ? parseHandover(text).receipts : '', { fromLink }) : null; // eslint-disable-line react-hooks/rules-of-hooks -- a build-time constant
   // The registry row follows this device's outbox live (queued, then Registered), so the report is rebuilt with it.
   const report = useMemo(() => (outcome?.verified && registryLine ? reportFor(outcome.trust, outcome, registryLine) : outcome?.report), [outcome, registryLine?.value, registryLine?.basis]); // eslint-disable-line react-hooks/exhaustive-deps
   // A pin may change (here, on Trust or in another tab) while files hash or after the result shows. Each result
@@ -2645,7 +2648,7 @@ function ManifestCheck({ sealed, text, anchor, keyConflict, company, companyFing
       const local = item.local == null ? null : outcome.locals[item.local];
       return { key: `item-${item.id}`, name: item.name || `Item ${item.id} (sealed without a name)`, status: item.status, bytes: item.status === 'missing' ? null : item.bytes, sha256: item.sha256,
         note: <><ItemNote note={item.note} showLanding={showLanding} />{local && local.name !== item.name && <span className="manifest-note">Your file: {local.name}</span>}</>,
-        extra: item.status === 'bytes-differ' && <span className="manifest-note">{BYTES_DIFFER.text}</span> };
+        extra: item.status === 'bytes-differ' && result?.key !== 'differ' && <span className="manifest-note">{BYTES_DIFFER.text}</span> }; // the Files differ verdict already says it
     }),
     ...comparison.extras.map((extra) => ({ key: `extra-${extra.local}`, name: extra.name, status: 'not-in-manifest', bytes: extra.bytes, sha256: extra.sha256 })),
   ] : [];

@@ -13,6 +13,7 @@ import { BYTES_DIFFER } from '../src/recipient-trust.mjs';
 import { pdfText } from './pdf-text.mjs';
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
+const differOnce = async (page) => (await page.locator('#main').innerText()).split(BYTES_DIFFER.text).length - 1;
 const EVIDENCE = join(process.env.REACT_CONSOLE_EVIDENCE || join(ROOT, '.test-artifacts'), 'manifest-mode');
 mkdirSync(EVIDENCE, { recursive: true });
 const require = createRequire(join(ROOT, 'package.json'));
@@ -170,7 +171,6 @@ try {
     const rows = await page.locator('.manifest-table tbody tr').evaluateAll((trs) => trs.map((tr) => [...tr.cells].map((td) => td.innerText.trim())));
     assert.deepEqual(rows.map((r) => [r[0].split('\n')[0], r[1], r[2].split('\n')[0]]), [['a.bin', '200,064', 'Bytes differ'], ['b.bin', '300,000', 'Matches'], ['c.bin', '—', 'Missing'], ['extra.bin', '77', 'Not in the list']]);
     assert.match(rows[1][0], /Operator note: Camera B, landed 14:02/);
-    assert.ok(rows[0][2].includes(BYTES_DIFFER.text), rows[0][2]);
     // EXPERIENCE.md "Verify verdicts": Files differ wins over Incomplete and Not in the list; focus is on the headline.
     assert.equal(await page.locator('#verdict-heading').innerText(), 'Files differ');
     assert.equal(await page.evaluate(() => document.activeElement?.id), 'verdict-heading');
@@ -182,6 +182,8 @@ try {
     const text = await page.locator('.manifest-outcome').innerText();
     assert.doesNotMatch(text, /tampered(?! )/i);
     await layout(page, 'manifest checked');
+    assert.ok(!rows[0][2].includes(BYTES_DIFFER.text), 'the row keeps its status; the verdict says why once');
+    assert.equal(await differOnce(page), 1, 'the Files differ explanation is shown once');
   });
 
   await check('Wrong key: Not verified and no item statuses; no key: the message\'s key checks it, signer not confirmed', async () => {
@@ -474,7 +476,7 @@ try {
     await page.waitForSelector('.manifest-table');
     const rows = await page.locator('.manifest-table tbody tr').evaluateAll((trs) => trs.map((tr) => [...tr.cells].map((td) => td.innerText.trim())));
     assert.deepEqual(rows.map((r) => [r[0].split('\n')[0], r[2].split('\n')[0]]), [['flight-notes.txt', 'Bytes differ'], ['flight-notes-cropped.txt', 'Matches']]);
-    assert.ok(rows[0][2].includes(BYTES_DIFFER.text));
+    assert.equal(await differOnce(page), 1, 'the Files differ explanation is shown once');
     assert.match(rows[1][0], /Edited copy of: item 1 \(operator-entered, signed\)/);
     assert.doesNotMatch(rows[1][0], /reported-landing|derived-from/);
     assert.equal(await trustText(), "Valid signature, but this key isn't in your trusted list — confirm its fingerprint through a channel you already know.");

@@ -336,6 +336,46 @@ try {
     assert.equal(await page.locator('.jobs-table caption').innerText(), 'Showing 1–25 of 61', 'the guest\'s jobs are untouched');
   });
 
+  await check('a small seal that finishes while its profile is being removed does not bring back that profile\'s jobs database', async () => {
+    const email = `race-${Date.now()}@example.test`, password = 'jobs browser password 123';
+    await go(page, 'jobs');
+    await page.locator('.profile-menu > summary').click();
+    await page.locator('.profile-menu').getByRole('button', { name: 'Create a local profile', exact: true }).click();
+    await page.locator('#auth-email').fill(email); await page.locator('#auth-password').fill(password); await page.locator('#auth-confirm').fill(password);
+    await page.getByRole('button', { name: 'Create account' }).click();
+    await page.waitForFunction(() => document.querySelector('.profile-menu > summary')?.textContent.includes('race-'));
+    const userId = await page.evaluate(() => Object.values(sessionStorage).map((v) => { try { return JSON.parse(v); } catch { return null; } }).find((v) => v?.kind === 'account')?.userId);
+    const profileDb = await page.evaluate(async (s) => `hashwing-jobs-v1-${[...new Uint8Array(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(s)))].map((b) => b.toString(16).padStart(2, '0')).join('')}`, `profile:${userId}`);
+    await go(page, 'protect');
+    await page.getByLabel(/^Small file/).check();
+    await page.locator('#job-ref').fill('RACE-1');
+    await page.locator('#protect-file').setInputFiles(smallFile);
+    // Hold the app between "jobs database deleted" and its logout, the window where a finishing seal used to recreate it.
+    await page.evaluate(() => {
+      const real = IDBFactory.prototype.deleteDatabase;
+      window.__released = new Promise((ok) => { window.__release = ok; });
+      IDBFactory.prototype.deleteDatabase = function (name) {
+        const held = {}; const r = real.call(this, name);
+        r.onsuccess = r.onerror = r.onblocked = () => { window.__deleted = true; window.__released.then(() => held.onsuccess?.()); };
+        return held;
+      };
+    });
+    page.once('dialog', (d) => d.accept());
+    await page.locator('.profile-menu > summary').click();
+    await page.getByRole('button', { name: 'Remove local profile, saved view and jobs', exact: true }).click();
+    await page.waitForFunction(() => window.__deleted === true);
+    await page.keyboard.press('Escape');
+    await page.getByRole('button', { name: 'Seal this file' }).click();
+    await page.locator('#handover-text').waitFor({ timeout: 60000 });
+    await page.waitForTimeout(500); // the seal's job write, if any, lands now
+    await page.evaluate(() => window.__release());
+    await page.waitForFunction(() => !document.querySelector('.profile-menu > summary')?.textContent.includes('race-'));
+    await page.waitForTimeout(500);
+    assert.ok(!(await dbNames(page)).includes(profileDb), 'the removed profile\'s jobs database stays gone');
+    await page.reload(); // drop the deleteDatabase hold
+    await page.locator('#main').waitFor();
+  });
+
   await check('flag off (AC-02, AC-60): no registry request, no outbox or pending database; jobs live in their own database', async () => {
     const names = await dbNames(page);
     assert.ok(names.some((n) => /^hashwing-jobs-v1-[0-9a-f]{64}$/.test(n)), names.join());
