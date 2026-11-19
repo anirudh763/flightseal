@@ -312,7 +312,7 @@ export function registryTimeField(s, receipts, { fromLink = false } = {}) {
   if (row?.state === 'needs_attention') return { value: 'Needs attention', basis: attentionMessage(row) ?? (REASONS[row.reason] ?? REFUSED)[0] };
   if (row) return { value: 'Not yet registered', basis: `this device's list: ${s.online || row.state !== 'sealed_local' ? row.label : stateLabel('waiting_for_connection')}` };
   if (s.pending.some((p) => lines.has(p.receipt))) return { value: 'Not yet registered', basis: "this device's list: Sealed locally" };
-  if (!s.owner && fromLink) return { value: 'No account needed', basis: "opened from a share link; not used in this check" };
+  if (!s.owner && fromLink) return { value: 'No account needed', basis: "not needed to check files from a share link" };
   if (!s.owner) return { value: 'Not signed in', basis: "sign in to the company registry to see this device's record" };
   if (!s.outbox || !s.listed) return { value: 'Not available yet', basis: "this device's registry list isn't open yet" };
   return { value: 'No registry record on this device', basis: 'this device has no registry record for this receipt' };

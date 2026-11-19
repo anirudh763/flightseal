@@ -117,7 +117,7 @@ async function axe(page, label) {
   const results = await page.evaluate(() => window.axe.run(document, { runOnly: { type: 'tag', values: ['wcag2a', 'wcag2aa', 'wcag21a', 'wcag21aa', 'wcag22aa', 'best-practice'] } }));
   assert.equal(results.violations.length, 0, `${label}: ${results.violations.map((v) => `${v.id}: ${v.nodes.map((n) => n.target.join(' ')).join('; ')}`).join(' | ')}`);
 }
-const CLIENT_BASIS = "opened from a share link; not used in this check";
+const CLIENT_BASIS = "not needed to check files from a share link";
 const REGISTERED_BASIS = "the registry's clock; the registry's statement, not proof of the files";
 // A downloaded export, with no registry token, JWT or share token in it.
 async function exportOf(page, button, token, scope = page.locator('main')) {

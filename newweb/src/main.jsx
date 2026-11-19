@@ -222,6 +222,7 @@ function App() {
     try {
       const held = jobsStoreRef.current;
       store = held?.scope === scope ? held.store : await openJobsStore(scope);
+      if (removedScopesRef.current.has(scope)) { store.close(); store = null; await deleteJobsDb(scope); return; } // removed while opening
       await store.put(row);
       setJobsNotice('');
     } catch (cause) {
