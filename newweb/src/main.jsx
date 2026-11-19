@@ -2150,7 +2150,7 @@ function TrustedCompanies() {
       <fieldset className="source-choice" ref={sourceChoice}><legend>Where did you get this fingerprint?</legend>
         {PICKABLE_SOURCES.map(([key, label]) => <label key={key} className="check-row"><input type="radio" name="tc-source" value={key} required checked={source === key} onChange={() => { setSource(key); setConfirmed(false); }} />{label}</label>)}
       </fieldset>
-      <label className="check-row" htmlFor="tc-confirmed"><input id="tc-confirmed" type="checkbox" checked={confirmed} aria-invalid={error === CONFIRM_MESSAGE || undefined} aria-describedby={error === CONFIRM_MESSAGE ? 'tc-error' : undefined} onChange={(event) => setConfirmed(event.target.checked)} />I confirmed this fingerprint through a channel I already knew</label>
+      <label className="check-row" htmlFor="tc-confirmed"><input id="tc-confirmed" type="checkbox" checked={confirmed} aria-invalid={error === CONFIRM_MESSAGE || undefined} aria-describedby={error === CONFIRM_MESSAGE ? 'tc-error' : undefined} onChange={(event) => { setConfirmed(event.target.checked); if (event.target.checked && error === CONFIRM_MESSAGE) setError(''); }} />I confirmed this fingerprint through a channel I already knew</label>
       <button className="button primary" type="submit">Add company</button>
     </form>
     {pending?.kind === 'replace' && <ConfirmBox text={pending.text} confirmLabel="Replace key" cancelLabel="Keep current key" onConfirm={() => add(true)} onCancel={() => setPending(null)} />}
