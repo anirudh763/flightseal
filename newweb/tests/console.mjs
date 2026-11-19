@@ -1079,7 +1079,8 @@ try {
       await page.waitForFunction((s) => document.querySelector('.compare-result .status-label')?.textContent === s, status, { timeout: 30000 });
     };
     await compare(copyPath, 'Bytes differ');
-    assert.match(await page.locator('.compare-result').innerText(), /not proof of tampering/);
+    await page.waitForFunction(() => document.querySelector('#verdict-heading')?.textContent === 'Files differ');
+    assert.equal((await page.locator('#main').innerText()).split('not proof of tampering').length - 1, 1, 'the Files differ explanation is shown once');
     await compare(ulg, 'Matches');
     const pinPage = await page.context().newPage();
     await pinPage.goto(`${url}#/app/settings`);

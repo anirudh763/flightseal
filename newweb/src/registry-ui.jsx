@@ -301,9 +301,9 @@ export function registrySealed(receipts, name, start) {
 // The "Registry acceptance" time row for a checked receipt message: this device's outbox row for one of its receipt
 // lines, matched on the stored receipt line. Only these strings reach the screen and the reports, never a row.
 const REGISTERED_BASIS = "the registry's clock; the registry's statement, not proof of the files";
-export function useRegistryTimeField(receipts) { return registryTimeField(useRegistry()[1], receipts); }
-/** The same row from a session snapshot (pure, for tests). */
-export function registryTimeField(s, receipts) {
+export function useRegistryTimeField(receipts, options) { return registryTimeField(useRegistry()[1], receipts, options); }
+/** The same row from a session snapshot (pure, for tests). fromLink: a share link is open on Verify (a client, who needs no account). */
+export function registryTimeField(s, receipts, { fromLink = false } = {}) {
   const lines = new Set(String(receipts || '').split('\n').map((line) => line.trim()).filter(Boolean));
   if (!lines.size) return null;
   const row = s.rows.find((r) => lines.has(r.receipt));
@@ -312,6 +312,7 @@ export function registryTimeField(s, receipts) {
   if (row?.state === 'needs_attention') return { value: 'Needs attention', basis: attentionMessage(row) ?? (REASONS[row.reason] ?? REFUSED)[0] };
   if (row) return { value: 'Not yet registered', basis: `this device's list: ${s.online || row.state !== 'sealed_local' ? row.label : stateLabel('waiting_for_connection')}` };
   if (s.pending.some((p) => lines.has(p.receipt))) return { value: 'Not yet registered', basis: "this device's list: Sealed locally" };
+  if (!s.owner && fromLink) return { value: 'No account needed', basis: "a share link shows the registry's record without signing in; this check of your files doesn't use it" };
   if (!s.owner) return { value: 'Not signed in', basis: "sign in to the company registry to see this device's record" };
   if (!s.outbox || !s.listed) return { value: 'Not available yet', basis: "this device's registry list isn't open yet" };
   return { value: 'No registry record on this device', basis: 'this device has no registry record for this receipt' };

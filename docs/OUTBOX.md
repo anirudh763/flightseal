@@ -26,7 +26,7 @@ What the console does with the flag on:
   JSON and PDF reports built from it, read this device's outbox row whose `receipt` equals one of the checked receipt
   lines: "Registered at `received_at`" (the registry's clock; the registry's statement, not proof of the files), "Not
   yet registered", "Registered, later deleted", or "Needs attention" with its message. With no matching row it says
-  this device has no registry record for the receipt ("Not signed in" while signed out, "Not available yet" until this
+  this device has no registry record for the receipt ("Not signed in" while signed out, or "No account needed" when a share link is open on Verify, "Not available yet" until this
   device's list has been read). With the flag off it stays
   "Not registered" / "no registry was used".
 - Sign-out, a token for another owner, and the app's logout paths close the outbox and forget the registry token.
