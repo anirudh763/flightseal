@@ -2234,7 +2234,7 @@ function ProfileMenu({ isCurrent, session, profile, currentSample, savedContext,
         {hasUnacknowledgedOutput && <><p className="profile-menu-message" role="alert">This tab has work that is not saved yet. Download it before you log out.</p>{unsavedControl}</>}
         {savedContextError && <p className="profile-menu-message" role="alert">{savedContextError}</p>}
         {message && <p className="profile-menu-message" role="status">{message}</p>}
-        <button type="button" className="profile-logout" disabled={hasUnacknowledgedOutput} onClick={onLogout}>Log out</button><button type="button" className="profile-remove" disabled={hasUnacknowledgedOutput} onClick={onRemoveProfile}>Remove local profile and saved view</button>
+        <button type="button" className="profile-logout" disabled={hasUnacknowledgedOutput} onClick={onLogout}>Log out</button><button type="button" className="profile-remove" disabled={hasUnacknowledgedOutput} onClick={onRemoveProfile}>Remove local profile, saved view and jobs</button>
       </> : <>
         <button type="button" onClick={() => onNavigateAuth('login')}>Use a local profile</button>
         <button type="button" onClick={() => onNavigateAuth('signup')}>Create a local profile</button>

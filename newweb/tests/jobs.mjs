@@ -324,7 +324,7 @@ try {
     assert.ok((await dbNames(page)).includes(profileDb), 'the profile has a jobs database before removal');
     page.once('dialog', (d) => d.accept());
     await page.locator('.profile-menu > summary').click();
-    await page.getByRole('button', { name: 'Remove local profile and saved view', exact: true }).click();
+    await page.getByRole('button', { name: 'Remove local profile, saved view and jobs', exact: true }).click();
     await page.waitForFunction(() => !document.querySelector('.profile-menu > summary')?.textContent.includes('jobs-'));
     let names = await dbNames(page);
     for (let i = 0; i < 50 && names.includes(profileDb); i += 1) { await page.waitForTimeout(100); names = await dbNames(page); }
