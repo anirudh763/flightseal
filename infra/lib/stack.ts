@@ -93,6 +93,11 @@ export const ROUTES: Array<[apigw.HttpMethod, string]> = [
   [apigw.HttpMethod.POST, '/v1/keys'],
   [apigw.HttpMethod.GET, '/v1/keys'],
   [apigw.HttpMethod.POST, '/v1/keys/{fp}/compromised'],
+  // Option B pilot keys: every org answers 403 pilot_keys_off unless PILOT_KEYS_ORGS names it, and this stack never
+  // sets PILOT_KEYS_ORGS.
+  [apigw.HttpMethod.GET, '/v1/pilot-keys/challenge'],
+  [apigw.HttpMethod.POST, '/v1/pilot-keys'],
+  [apigw.HttpMethod.POST, '/v1/pilot-keys/{fp}/retire'],
   [apigw.HttpMethod.POST, '/v1/epoch'],
   [apigw.HttpMethod.GET, '/v1/epoch'],
   [apigw.HttpMethod.POST, '/v1/shares'],

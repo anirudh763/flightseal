@@ -38,6 +38,9 @@ test('Lambda: python3.12, arm64, 128 MB, 5 s, cognito adapter, no DEV_ variables
   assert.deepEqual(Object.keys(fn.Properties.Environment.Variables).sort(),
     ['COGNITO_CLIENT_ID', 'COGNITO_ISSUER', 'IDENTITY_ADAPTER', 'TABLE_NAME']);
   assert.ok(!JSON.stringify(json).includes('DEV_'), 'no DEV_ setting anywhere in the template');
+  for (const stage of [json, Template.fromStack(new RegistryStack(new App(), 'ProdPilot', { stage: 'prod' })).toJSON()]) {
+    assert.ok(!JSON.stringify(stage).includes('PILOT_KEYS_ORGS'), 'Option B pilot keys stay off: the stack never sets the switch');
+  }
 });
 
 test('Lambda gets COGNITO_ISSUER and COGNITO_CLIENT_ID from the stack\'s own user pool and client, in both stages', () => {
@@ -149,7 +152,10 @@ test('HTTP API: default stage throttled at rate 2, burst 5 (sized for about 5 us
 
 test('every route has the JWT authorizer except GET /v1/shares/{token}', () => {
   const routes = resources('AWS::ApiGatewayV2::Route').map(([, r]) => r.Properties);
-  assert.equal(routes.length, 13);
+  assert.equal(routes.length, 16);
+  for (const key of ['GET /v1/pilot-keys/challenge', 'POST /v1/pilot-keys', 'POST /v1/pilot-keys/{fp}/retire']) {
+    assert.ok(routes.some((r) => r.RouteKey === key), key);
+  }
   for (const r of routes) {
     if (r.RouteKey === 'GET /v1/shares/{token}') {
       assert.ok(r.AuthorizationType === undefined || r.AuthorizationType === 'NONE');

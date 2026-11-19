@@ -9,7 +9,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / "registry"))
 
-from registry import ed25519, receipt  # noqa: E402
+from registry import ed25519, pilot_authorization, receipt  # noqa: E402
 from registry.app import App  # noqa: E402
 from registry.enroll_challenge import bytes_to_sign  # noqa: E402
 from registry.identity import make_dev_token  # noqa: E402
@@ -67,6 +67,26 @@ def enroll(app, clock, seed=SEED_A, org="orgA", confirm=None):
     if confirm is not None:
         body["confirm_replace"] = confirm
     return call(app, "POST", "/v1/keys", admin, body)
+
+
+def authorize(company_seed, pilot_pub, not_after):
+    """What the company computer hands back: (authorization base64url, signature hex) for one pilot key."""
+    text = pilot_authorization.statement(pilot_pub, ed25519.public_key(company_seed), not_after)
+    return pilot_authorization.encode(text), ed25519.sign(company_seed, text).hex()
+
+
+def pilot_enroll(app, clock, seed, company_seed=SEED_A, org="orgA", sub="pilot-1", days=14, auth=None, **override):
+    """POST /v1/pilot-keys as a pilot on their own device: pilot challenge, then key + authorization."""
+    tok = token(clock, org=org, sub=sub)
+    s, ch, _ = call(app, "GET", "/v1/pilot-keys/challenge", tok)
+    if s != 200:
+        return s, ch, None
+    pub = ed25519.public_key(seed)
+    a, a_sig = auth or authorize(company_seed, pub, clock.t + days * 86400)
+    body = {"public_key": pub.hex(), "nonce": ch["nonce"],
+            "signature": ed25519.sign(seed, bytes_to_sign(org, ch, "pilot")).hex(),
+            "authorization": a, "authorization_sig": a_sig, **override}
+    return call(app, "POST", "/v1/pilot-keys", tok, body)
 
 
 def envelope(app, tok):

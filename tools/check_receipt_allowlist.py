@@ -104,4 +104,26 @@ with tempfile.TemporaryDirectory(prefix="fseal-secret-check-") as directory:
     unrelated.write_text((root / 'newweb/src/signing-keys.mjs').read_text())
     code, findings = scan()
     assert code == 1 and len(findings) == 1 and findings[0]['RuleID'] == 'private-key', 'The template exception must stay path-scoped'
-print('Public receipts, exact serializers and the wiring test seed fixture allowed; API-shaped values, valid literal private keys in both paths, and unrelated paths detected')
+    # Option B vectors: public pilot_key/company_key values are allowed in that one file; any other credential-shaped
+    # value in it is still detected, and the same file elsewhere is not allowed.
+    unrelated.unlink()
+    report.unlink(missing_ok=True)
+    real = (root / 'tests/fixtures/pilot-authorization.json').read_text()
+    vectors = target / 'tests/fixtures/pilot-authorization.json'
+    vectors.parent.mkdir(parents=True, exist_ok=True)
+    vectors.write_text(real)
+    code, findings = scan()
+    assert code == 0 and not findings, 'The pilot-authorization vectors should be allowed'
+    report.unlink()
+    vectors.write_text(real + '\napi_key = "' + synthetic + '"\n')
+    code, findings = scan()
+    assert code == 1 and len(findings) == 1 and findings[0]['RuleID'] == 'generic-api-key', 'A credential line in the vectors must still be detected'
+    report.unlink()
+    vectors.unlink()
+    moved = target / 'tests/fixtures/other.json'
+    moved.write_text(real)
+    code, findings = scan()
+    assert code == 1 and findings, 'The vector exception must stay path-scoped'
+    moved.unlink()
+    report.unlink()
+print('Pilot-authorization vectors allowed only in their file; public receipts, exact serializers and the wiring test seed fixture allowed; API-shaped values, valid literal private keys in both paths, and unrelated paths detected')
