@@ -403,6 +403,7 @@ try {
   await check('share link: made in the fragment only; a fresh context opens the record without sign-in', async () => {
     await go(page, 'protect');
     const row = await openRow(page, 'flight-a.ulg');
+    assert.deepEqual(await row.locator('select[id$="-days"] option').evaluateAll((o) => o.map((x) => x.value)), ['7', '30'], 'share links offer 7 or 30 days only');
     await row.getByRole('button', { name: 'Make a share link' }).click();
     const field = row.getByLabel('Share link');
     await field.waitFor();
