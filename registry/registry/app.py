@@ -307,6 +307,7 @@ class App:
             {"op": "put", "item": idem_item, "cond": [("or", ("not_exists",), ("lt", "expires_at", now + 1))]},
             {"op": "update", "key": (pk, "QUOTA#" + month), "add": {"n": 1},
              "cond": [("or", ("missing", "n"), ("lt", "n", self.quota))]},
+            {"op": "check", "key": (pk, "KEY#" + fp), "cond": [("eq", "state", "active")]},  # a racing compromise wins
         ])
         if failed is None:
             return 201, self._ack(reg, now)
@@ -322,6 +323,8 @@ class App:
             if committed:
                 return committed
             raise StoreUnavailable("registration vanished")
+        if failed[3]:
+            raise HttpError(403, "key_not_active")
         raise HttpError(429, "quota_exceeded")
 
     def list_registrations(self, ident, _body, query):

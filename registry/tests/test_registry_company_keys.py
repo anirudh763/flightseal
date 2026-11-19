@@ -78,6 +78,23 @@ def test_racing_compromise_rereads_after_a_cancel(flip_to, expected):
     assert table.items[("ORG#orgA", "KEY#" + FP_A)]["state"] == flip_to  # the cancelled write left nothing
 
 
+def test_register_racing_a_compromise_is_refused_and_writes_nothing():
+    app, table, clock = make_app()
+    enroll(app, clock)
+    real = table.transact
+
+    def racing(ops):  # the key is marked compromised between register's key read and its write
+        if any(op["op"] == "put" and op["item"]["SK"].startswith("REG#") for op in ops):
+            table.items[("ORG#orgA", "KEY#" + FP_A)].update(state="compromised", changed_at=clock.t)
+            table.transact = real
+        return real(ops)
+
+    table.transact = racing
+    s, out, _ = register(app, token(clock), line(SEED_A, 1))
+    assert (s, out) == (403, {"error": "key_not_active"})
+    assert not any(sk.startswith("REG#") for (_, sk) in table.items)
+
+
 def test_compromise_of_an_unknown_or_other_orgs_key_is_404():
     app, _, clock = make_app()
     enroll(app, clock, seed=SEED_B, org="orgB")
