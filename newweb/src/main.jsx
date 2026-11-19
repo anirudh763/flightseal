@@ -26,7 +26,7 @@ import { FrontDoor, SkipLink } from './front-door.jsx';
 import { FileTotals, Handoff, SigningLine, exactBytes } from './seal-send.jsx';
 import { CompareTable, VerdictBlock } from './compare-table.jsx';
 import { JobsPage, SealedRecent } from './jobs.jsx';
-import { openJobsStore } from './jobs-store.mjs';
+import { deleteJobsDb, openJobsStore } from './jobs-store.mjs';
 import { LinkStep, VERIFY_OPENS_ON, VerifyChooser } from './verify-start.jsx';
 import { createEncryptedProfileBackup, inspectEncryptedProfileBackup, commitBackupRestore, previewBackupRestore } from './profile-backup.mjs';
 import { createSyncProvider } from './sync-provider.mjs';
@@ -1458,11 +1458,14 @@ function App() {
   const removeActiveProfile = async () => {
     if (activeSession?.kind !== 'account' || !localProfile?.id) return;
     if (hasUnsavedWork) { setProfileMenuMessage('Download your unsaved work before removing this profile.'); return; }
-    if (!window.confirm('Remove this local profile and its saved view from this browser? This cannot be undone.')) return;
+    if (!window.confirm('Remove this local profile, its saved view and its jobs from this browser? This cannot be undone.')) return;
     const id = localProfile.id;
     const epoch = authEpochRef.current;
     try { await removeLocalProfile(id, { isCurrent: () => authEpochRef.current === epoch && activeSession?.kind === 'account' && activeSession.userId === id }); }
     catch (cause) { setProfileMenuMessage(cause?.message || 'Could not remove this local profile.'); return; }
+    const scope = `profile:${id}`;
+    if (jobsStoreRef.current?.scope === scope) { jobsStoreRef.current.store.close(); jobsStoreRef.current = null; } // an open connection would block the delete
+    await deleteJobsDb(scope);
     if (authEpochRef.current !== epoch) return;
     announceLocalLogout({ userId: id });
     logout();
