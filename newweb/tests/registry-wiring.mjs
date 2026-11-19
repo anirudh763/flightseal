@@ -245,7 +245,7 @@ try {
     await page.getByRole('heading', { name: 'Your signing key' }).waitFor();
     assert.equal(await page.getByRole('heading', { name: 'Company registry' }).count(), 0);
     assert.equal(await page.getByRole('heading', { name: "Your company's keys" }).count(), 0);
-    assert.deepEqual(await page.locator('#page-help .panel-head h2').allInnerTexts(), ['Trusted companies', 'Your signing key', 'Trust and limits', 'Limits'], 'flag off: neither registry section');
+    assert.deepEqual(await page.locator('main .help-layout .panel-head h2').allInnerTexts(), ['Trusted companies', 'Your signing key', 'Trust and limits', 'Limits'], 'flag off: neither registry section');
     const dbs = await page.evaluate(async () => (await indexedDB.databases()).map((d) => d.name));
     assert.ok(!dbs.some((n) => n.startsWith('hashwing-outbox')), dbs.join());
     assert.deepEqual(foreign, []);
@@ -1163,12 +1163,12 @@ try {
     const kctx = await newContext();
     const kp = watch(await kctx.newPage(), 'company-keys');
     const panel = kp.locator('#company-keys');
-    const DAY = '\\d{4}-\\d\\d-\\d\\d';
+    const DAY = String.raw`\d{4}-\d\d-\d\d`;
     const keyRows = () => panel.locator('.company-keys > li');
     const rowsText = async () => (await keyRows().allInnerTexts()).map((t) => t.replace(/\s+/g, ' '));
-    const waitRows = async (pred, what) => {
-      try { await kp.waitForFunction((src) => { const rows = [...document.querySelectorAll('#company-keys .company-keys > li')].map((li) => li.innerText.replace(/\s+/g, ' ')); return new Function('rows', `return ${src}`)(rows); }, pred, { timeout: 15000 }); }
-      catch { assert.fail(`${what}: ${JSON.stringify(await rowsText())} / ${await panel.innerText()}`); }
+    const waitRows = async (pred, what) => { // polled here: the console's CSP has no 'unsafe-eval'
+      for (const end = Date.now() + 15000; Date.now() < end; await sleep(100)) if (pred(await rowsText())) return;
+      assert.fail(`${what}: ${JSON.stringify(await rowsText())} / ${await panel.innerText()}`);
     };
     const generate = async () => {
       await go(kp, 'help');
@@ -1183,7 +1183,7 @@ try {
       await check('AC-59 (flag on): Trust shows Trusted companies, Your signing key, Company registry, Your company\'s keys, then Trust and limits; signed out, the keys section asks to sign in', async () => {
         await kp.goto(`${flagOn.url}#/app/help`);
         await kp.locator('#page-help').waitFor();
-        assert.deepEqual(await kp.locator('#page-help .panel-head h2').allInnerTexts(), ['Trusted companies', 'Your signing key', 'Company registry', "Your company's keys", 'Trust and limits', 'Limits']);
+        assert.deepEqual(await kp.locator('main .help-layout .panel-head h2').allInnerTexts(), ['Trusted companies', 'Your signing key', 'Company registry', "Your company's keys", 'Trust and limits', 'Limits']);
         await panel.getByText("Sign in under Company registry to see your company's keys.").waitFor();
         assert.deepEqual(await shownButtons(), []);
       });
@@ -1203,7 +1203,7 @@ try {
         await enrollButton.waitFor();
         assert.equal(await enrollButton.isDisabled(), false);
         await enrollButton.click();
-        await waitRows(`rows.length === 1 && new RegExp('Active.*Enrolled ${DAY} by you').test(rows[0])`, 'enrolled row');
+        await waitRows((rows) => rows.length === 1 && new RegExp(`Active Enrolled ${DAY} by you`).test(rows[0]), 'enrolled row');
         await panel.getByText("This key is now your company's active key.").waitFor();
         assert.equal(keyPosts.length, 1);
         assert.deepEqual(Object.keys(keyPosts[0]).sort(), ['nonce', 'public_key', 'signature'], 'only the public key, the nonce and the signature leave the device');
@@ -1228,7 +1228,7 @@ try {
         assert.equal(keyPosts.length, 1, 'Escape sent nothing');
         await replace.click();
         await dialog.getByRole('button', { name: 'Replace key' }).click();
-        await waitRows(`rows.length === 2 && rows.some((r) => /Active.*by you/.test(r)) && rows.some((r) => new RegExp('Replaced on ${DAY}').test(r))`, 'replaced rows');
+        await waitRows((rows) => rows.length === 2 && rows.some((r) => /Active Enrolled .* by you/.test(r)) && rows.some((r) => new RegExp(`Replaced on ${DAY}`).test(r)), 'replaced rows');
         assert.equal(keyPosts[1].confirm_replace, true);
         const html = await kp.evaluate(() => ({ text: document.body.innerText, html: document.documentElement.outerHTML }));
         assert.ok(!/rotated/i.test(html.text) && !/rotated/i.test(html.html), '"rotated" never reaches the page');
@@ -1254,7 +1254,7 @@ try {
         await panel.getByRole('button', { name: 'Replace with this key' }).click();
         await panel.locator('dialog[open]').getByRole('button', { name: 'Replace key' }).click();
         await panel.getByText("This key is now your company's active key.").waitFor();
-        await waitRows(`rows.length === 3 && rows.filter((r) => /Active/.test(r)).length === 1 && rows.filter((r) => /Replaced on/.test(r)).length === 2`, 'after the lost response');
+        await waitRows((rows) => rows.length === 3 && rows.filter((r) => /Active/.test(r)).length === 1 && rows.filter((r) => /Replaced on/.test(r)).length === 2, 'after the lost response');
         const log = (await dev('log')).log.filter((e) => e.route === 'enroll' && e.org === 'orgK');
         assert.deepEqual(log.map((e) => e.status), [201, 201, 201, 409], 'the second press got key_exists');
         assert.equal(await panel.getByRole('button', { name: /^(Enroll|Replace) / }).count(), 0);
@@ -1283,7 +1283,7 @@ try {
         await kp.locator('#company-registry').getByRole('button', { name: 'Sign out' }).click();
         await panel.getByText("Sign in under Company registry to see your company's keys.").waitFor();
         await signIn(kp, 'keys-pilot', 'pilot', 3600, 'orgK');
-        await waitRows('rows.length === 3', 'member list');
+        await waitRows((rows) => rows.length === 3, 'member list');
         assert.ok(!(await panel.innerText()).includes('by you'), "the admin's rows aren't the member's");
         const buttons = await shownButtons();
         assert.deepEqual([...new Set(buttons)], ['Copy'], JSON.stringify(buttons));
@@ -1293,7 +1293,7 @@ try {
       await check('offline: key actions are disabled and the reason is shown', async () => {
         await kp.locator('#company-registry').getByRole('button', { name: 'Sign out' }).click();
         await signIn(kp, 'keys-admin', 'admin', 3600, 'orgK');
-        await waitRows('rows.length === 3', 'admin list');
+        await waitRows((rows) => rows.length === 3 && rows.some((r) => /by you/.test(r)), 'admin list');
         await generate();
         await panel.getByRole('button', { name: 'Replace with this key' }).waitFor();
         await kctx.setOffline(true); offline = true;
@@ -1318,7 +1318,7 @@ try {
           assert.equal(await panel.getByRole('button', { name: /^(Enroll|Replace) / }).count(), 0, 'no key action without the list');
         } finally { await kp.unroute(isList, abort); }
         await panel.getByRole('button', { name: 'Try again' }).click();
-        await waitRows('rows.length === 3', 'reloaded list');
+        await waitRows((rows) => rows.length === 3, 'reloaded list');
       });
 
       await check('company keys: axe 0 violations, no horizontal scroll and 44px buttons at 320/768/1440 with the list shown; Tab reaches the primary button; screenshots', async () => {
@@ -1331,6 +1331,7 @@ try {
           assert.ok(overflow <= 0, `company keys@${width}: horizontal scroll ${overflow}px`);
           const small = await panel.locator('button').evaluateAll((bs) => bs.filter((b) => b.offsetParent !== null).map((b) => [b.textContent, b.getBoundingClientRect().height]).filter(([, h]) => h < 44));
           assert.deepEqual(small, [], `company keys@${width}: buttons under 44px`);
+          await kp.mouse.move(0, 0); await sleep(300); // no hover or colour transition under the pointer while axe reads colours
           await axe(kp, `company keys@${width}`);
           await panel.scrollIntoViewIfNeeded();
           await kp.screenshot({ path: join(OUT, `company-keys-${width}.png`), fullPage: true });
