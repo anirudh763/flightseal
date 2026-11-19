@@ -103,3 +103,39 @@ test('a saved view of the user\'s own file (no bundled sample) on the Seal & sen
   await commitBackupRestore(await inspectEncryptedProfileBackup(backup, 'backup passphrase 123', { cryptoObject: webcrypto }), fresh);
   assert.deepEqual(readWorkspaceContext(profile.id, { storage: fresh }), { screen: 'protect', sample: null, record: 0 });
 });
+
+// R35: a compromised mark lives in the trusted-keys store, which a profile backup neither carries nor touches. Creating a
+// backup, restoring one, and a restore that rolls back all leave that store byte-identical and the key compromised.
+test('R35: profile backup create, restore and rolled-back restore keep a compromised mark', async () => {
+  const { addTrustedCompany, markCompromised, removeTrustedKey, trustForKey } = await import('../src/trusted-keys.mjs');
+  const PINS = 'flightseal_trusted_keys_v1';
+  const key = '01'.repeat(32);
+  const fp = Buffer.from(await webcrypto.subtle.digest('SHA-256', Buffer.from(key, 'hex'))).toString('hex');
+  const device = new MemoryStorage(); // this browser: its own profile plus the compromised mark
+  const own = await createLocalProfile('recipient@example.test', 'local profile password 123', { storage: device, cryptoObject: webcrypto });
+  await addTrustedCompany('Old Co', fp, { storage: device, cryptoObject: webcrypto, source: 'phone', confirmed: true });
+  markCompromised('Old Co', fp, { storage: device, now: '2026-06-01T00:00:00.000Z' });
+  removeTrustedKey('Old Co', { storage: device });
+  const pins = device.getItem(PINS);
+  const still = async (label) => {
+    assert.equal(device.getItem(PINS), pins, `${label}: pin store unchanged`);
+    assert.equal((await trustForKey(key, { storage: device, cryptoObject: webcrypto })).status, 'compromised', label);
+    await assert.rejects(addTrustedCompany('New Co', fp, { storage: device, cryptoObject: webcrypto, source: 'website', confirmed: true }), /marked as compromised/, label);
+  };
+  await createEncryptedProfileBackup(own.id, { storage: device, passphrase: 'backup passphrase 123', cryptoObject: webcrypto });
+  await still('after creating a backup');
+
+  // A backup made on another device (with a saved view, so the rolled-back write has something to fail on).
+  const other = new MemoryStorage();
+  const profile = await createLocalProfile('pilot@example.test', 'local profile password 123', { storage: other, cryptoObject: webcrypto });
+  await saveWorkspaceContext(profile.id, { screen: 'records', sample: 'intact', record: 4 }, { storage: other });
+  const payload = await inspectEncryptedProfileBackup(await createEncryptedProfileBackup(profile.id, { storage: other, passphrase: 'backup passphrase 123', cryptoObject: webcrypto }), 'backup passphrase 123', { cryptoObject: webcrypto });
+  const setItem = device.setItem;
+  device.setItem = function (k, v) { if (k.includes('_workspace_')) throw new Error('quota'); setItem.call(this, k, v); };
+  await assert.rejects(commitBackupRestore(payload, device), /could not be committed/);
+  device.setItem = setItem;
+  await still('after a restore that rolled back');
+  await commitBackupRestore(payload, device);
+  assert.equal(JSON.parse(device.getItem(localAuthStorageKeys.profile)).profiles.length, 2, 'the restore landed');
+  await still('after a restore');
+});

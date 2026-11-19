@@ -151,7 +151,7 @@ test('verdict: every row of the table, in order, with its exact words and one ne
   const extra = verdict({ signed: true, trust: TRUSTED, items: [m('match')], extras: [m('not-in-manifest'), m('not-in-manifest')] });
   assert.deepEqual([extra.headline, extra.kind, extra.sentence, extra.next.text], [NOT_IN_LIST, 'warn', "Every listed file matches. 2 other files you chose aren't in the list and were not checked.", "Remove files that aren't in the list"]);
   assert.equal(VERIFIED_NEEDS_TRUSTED_KEY, true, 'owner decision 1 (2026-11-18): strict');
-  for (const status of ['untrusted', 'replaced', undefined]) {
+  for (const status of ['untrusted', 'unconfirmed', 'replaced', undefined]) {
     const r = verdict({ signed: true, trust: status && { status }, items: [m('match')], coverage: { covered: 1, total: 1 } });
     assert.deepEqual([r.headline, r.kind, r.sentence, r.next.text], ['Files match · signer not confirmed', 'warn', "The files match what was sealed, but you haven't confirmed who sealed them.", "Confirm the company's fingerprint on Trust"]);
   }
@@ -220,4 +220,33 @@ test('manifestReport: every format starts with the Result line', () => {
   assert.ok(r.markdown.startsWith(first), r.markdown.split('\n')[0]);
   assert.ok(JSON.parse(r.json).result.startsWith(first));
   assert.ok(r.pdfLines[0].startsWith(first));
+});
+
+// R34: a saved company whose confirmation isn't recorded is neither trusted nor "not in your list".
+test('unconfirmed: names the company, says the confirmation isn\'t recorded, warns, and never reads Verified', () => {
+  const trust = { status: 'unconfirmed', entry: { name: 'Acme', source: 'not-recorded', addedAt: '' } };
+  assert.equal(trustLine(trust, SOURCES), "Signed by a key saved for Acme, but how you confirmed it isn't recorded. Confirm its fingerprint on Trust.");
+  assert.equal(trustModule.TRUST_KIND.unconfirmed, 'warn');
+  const r = verdict({ signed: true, trust, items: [m('match')] });
+  assert.deepEqual([r.key, r.headline], ['signer-not-confirmed', 'Files match · signer not confirmed']);
+  assert.equal(verdict({ signed: true, trust: { ...trust, status: 'trusted', entry: { ...trust.entry, confirmedAt: '2026-11-19T00:00:00.000Z' } }, items: [m('match')] }).headline, 'Verified');
+  const report = manifestReport({ sealedName: 'x', sources: SOURCES, trust, items: [{ id: 1, name: 'a', bytes: 1, sha256: 'a'.repeat(64), note: '', status: 'match', local: 0 }], locals: [{ name: 'a', sha256: 'a'.repeat(64) }] });
+  assert.ok(report.text.startsWith('Result: Files match · signer not confirmed. '));
+  const json = JSON.parse(report.json);
+  assert.deepEqual([json.keyTrust.status, json.keyTrust.confirmedAt], ['unconfirmed', null]);
+});
+
+// R75: no screen or report infers that a signature "predates" a compromise from the (unsigned) seal time.
+test('R75: a compromised key with an earlier seal time reads compromised, and no report puts before/after next to compromise', () => {
+  const near = /\b(before|after|predat\w*|prior to)\b\W+(?:\w+\W+){0,3}compromis|compromis\w*\W+(?:\w+\W+){0,3}(before|after|predat\w*|prior to)\b/i;
+  const trust = { status: 'compromised', entry: { name: 'Old Co', source: 'phone', addedAt: '2025-12-01T00:00:00.000Z', confirmedAt: '2025-12-01T00:00:00.000Z', status: 'compromised', compromisedAt: '2026-06-01T00:00:00.000Z' } };
+  const r = manifestReport({ sealedName: 'x.manifest.fseal', sources: SOURCES, keyFingerprint: 'ab'.repeat(32), head: 'cd'.repeat(32), sealedAt: '2026-01-01T00:00:00.000Z', trust, items: [{ id: 1, name: 'a', bytes: 1, sha256: 'a'.repeat(64), note: '', status: 'match', local: 0 }], locals: [{ name: 'a', sha256: 'a'.repeat(64) }] });
+  assert.ok(r.text.startsWith('Result: Signed by a key marked compromised. '));
+  assert.equal(JSON.parse(r.json).verdict.headline, 'Signed by a key marked compromised');
+  for (const [label, out] of [['text', r.text], ['markdown', r.markdown], ['json', r.json], ['pdf', r.pdfLines.join('\n')]]) {
+    assert.match(out, /compromised/, label);
+    assert.doesNotMatch(out, near, label);
+  }
+  assert.match('signed before the compromise', near, 'the guard regex catches the wording it forbids');
+  assert.match('compromised after it was sealed', near);
 });
