@@ -285,6 +285,14 @@ try {
     await addCompany('Acme Survey', 'ab'.repeat(32), 'company website you already knew', { tick: false });
     assert.equal(await settings.getByRole('alert').innerText(), 'Tick the box to confirm you checked this fingerprint yourself.');
     assert.equal(await settings.locator('.company-list').count(), 0, 'nothing saved without the tick');
+    const box = settings.locator('#tc-confirmed');
+    assert.equal(await settings.evaluate(() => document.activeElement?.id), 'tc-confirmed', 'focus lands on the box');
+    assert.equal(await box.getAttribute('aria-invalid'), 'true');
+    assert.equal(await box.getAttribute('aria-describedby'), 'tc-error');
+    await box.check(); // ticking it clears the error and the invalid state
+    assert.equal(await settings.locator('#tc-error').count(), 0);
+    assert.equal(await box.getAttribute('aria-invalid'), null);
+    assert.equal(await box.getAttribute('aria-describedby'), null);
     await addCompany('Acme Survey', 'zz', 'company website you already knew');
     assert.match(await settings.getByRole('alert').innerText(), /64 hexadecimal digits/);
     await addCompany('Acme Survey', 'ab'.repeat(32), 'company website you already knew');
