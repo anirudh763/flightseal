@@ -1,6 +1,6 @@
 // Receipt registry UI. main.jsx renders and calls everything here only behind `__REGISTRY_URL__`, so with the flag off
 // none of it ships. No top-level side effects: the session store is made by the first flag-guarded caller.
-import React, { useEffect, useRef, useState, useSyncExternalStore } from 'react';
+import React, { useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
 import { ChevronDown, Cloud, HardDrive, Link2 } from 'lucide-react';
 import { createRegistryClient, tokenOwner } from './registry-client.mjs';
 import { attentionMessage, openOutbox, stateLabel } from './outbox.mjs';
@@ -379,6 +379,51 @@ function chipOf(row) { // the outbox's own labels, verbatim
   return [row.label, row.state === 'registering' ? 'neutral registry-dots' : 'neutral'];
 }
 const utc = (iso) => String(iso || '').replace('T', ' ').replace(/Z$/, ' UTC');
+
+// Jobs (flag on): each job's status from this snapshot's outbox rows and pending proofs, matched on the receipt line.
+// No request. Labels are the outbox's own, as in the list below; no record reads "Sealed locally" and is in no filter.
+const JOB_FILTERS = [['waiting', 'Waiting to send'], ['registered', 'Registered'], ['problems', 'Needs attention']];
+const JOB_DETAIL = 'Registry status';
+function jobLine(row) { // the same sentences RegistryRow shows
+  if (isDeleted(row)) return "The registry's record of this receipt was deleted. Links to it no longer open.";
+  if (row.state === 'registered') return `Registered at ${utc(row.received_at)}. This is the registry's statement, not proof of the files.`;
+  if (row.state === 'needs_attention') return attentionMessage(row) ?? (REASONS[row.reason] ?? REFUSED)[0];
+  if (row.state === 'registering') return 'Sending the receipt to the registry…';
+  if (row.state === 'waiting_for_connection') return row.reason === 'unavailable' || row.reason === 'http_503' ? 'The registry is busy right now. It will try again by itself.' : "Saved on this device. It will register when you're back online. You can close this tab.";
+  return 'Sealed on this device. Not sent to the registry yet.';
+}
+/** Pure, for tests: receipt line -> { label, kind, group, line, at }. */
+export function jobsStatusMap(s) {
+  const map = new Map();
+  for (const raw of s.rows) {
+    const row = !s.online && raw.state === 'sealed_local' ? { ...raw, state: 'waiting_for_connection', label: stateLabel('waiting_for_connection') } : raw;
+    const [label, kind] = chipOf(row);
+    const group = row.state === 'registered' ? 'registered' : row.state === 'needs_attention' ? 'problems' : 'waiting';
+    map.set(row.receipt, { label, kind: kind.split(' ')[0], group, line: jobLine(row), at: row.updated_at ?? null });
+  }
+  for (const p of s.pending) {
+    if (map.has(p.receipt)) continue;
+    const line = !p.owner ? "Sealed while signed out, so it isn't assigned to a company yet. Assign it on Seal & send."
+      : s.owner && p.owner !== s.owner ? "Sealed under another registry sign-in, so it won't be sent under yours."
+      : 'Sealed on this device. Not sent to the registry yet.';
+    map.set(p.receipt, { label: 'Sealed locally', kind: 'neutral', group: 'waiting', line, at: p.at ?? null });
+  }
+  const none = { label: 'Sealed locally', kind: 'neutral', group: null, at: null,
+    line: !s.owner ? "Sign in to the company registry to see this job's registry status."
+      : s.listed ? 'This device has no registry record for this job under the current sign-in.' : "This device's registry list isn't open yet." };
+  return { map, none };
+}
+export function jobStatus({ map, none }, receipt) {
+  for (const line of String(receipt || '').split('\n')) { const hit = map.get(line.trim()); if (hit) return hit; }
+  return none;
+}
+export function useJobsRegistry() {
+  const [, s] = useRegistry();
+  const statusOf = useMemo(() => { const m = jobsStatusMap(s); return (job) => jobStatus(m, job.receipt); }, [s]);
+  // Wait for the outbox list (or a saved sign-in still resuming) before an out-of-range ?page settles on a real one.
+  const ready = s.listed || !!s.listError || (!s.owner && !storage.get().token);
+  return { statusOf, filters: JOB_FILTERS, detailLabel: JOB_DETAIL, ready };
+}
 
 export function SealedOnDevice({ onSignIn }) {
   const [r, s] = useRegistry();
