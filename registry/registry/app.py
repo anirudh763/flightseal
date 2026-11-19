@@ -5,6 +5,7 @@ Any store error while reading state fails closed with 503.
 """
 import base64
 import binascii
+import calendar
 import hashlib
 import json
 import re
@@ -49,7 +50,8 @@ ROUTES = [
     ("DELETE", r"/v1/shares/([A-Za-z0-9_-]{1,128})", "withdraw_share", ANY),
 ]
 ROUTES = [(m, re.compile(p), name, access) for m, p, name, access in ROUTES]
-PILOT_ROUTES = {"pilot_challenge", "pilot_enroll", "retire"}  # 403 pilot_keys_off unless the org is switched on
+# 403 pilot_keys_off unless the org is switched on. Retire is not here: revocation is never blocked by the switch.
+PILOT_ROUTES = {"pilot_challenge", "pilot_enroll"}
 CHALLENGE_PREFIX = {"company": b"hashwing-key-enroll v1", "pilot": b"hashwing-pilot-key-enroll v1"}
 # Any GET under /v1/shares/, routed or not: a malformed link must get the same 404 headers as an unknown one.
 SHARE_VIEW = re.compile(r"/v1/shares/.*", re.S)
@@ -59,6 +61,8 @@ CORS_ENTRY = re.compile(r"https?://[a-z0-9]([a-z0-9.-]*[a-z0-9])?(:([0-9]{1,5}|\
 CORS_PREFLIGHT = {"access-control-allow-methods": "GET,POST,DELETE",
                   "access-control-allow-headers": "authorization,content-type,idempotency-key",
                   "access-control-max-age": "600"}
+EXPOSE = {"access-control-expose-headers": "retry-after"}  # so a console on another origin can read Retry-After
+RETRY_503 = 30  # seconds
 
 
 def _cors_allowlist(value):
@@ -115,6 +119,12 @@ def _is_pilot(item, kind_field="kind"):
     return item.get(kind_field) == "pilot" or "company_fp" in item or "not_after" in item
 
 
+def _seconds_to_next_month(now):
+    """A quota 429 lasts until the next UTC month starts."""
+    y, m = time.gmtime(now)[:2]
+    return calendar.timegm((y + m // 12, m % 12 + 1, 1, 0, 0, 0)) - now
+
+
 def _event_parts(event):
     if "requestContext" in event and "http" in (event.get("requestContext") or {}):  # HTTP API v2
         method, path = event["requestContext"]["http"].get("method", ""), event.get("rawPath", "")
@@ -152,7 +162,7 @@ class App:
         origin = headers.get("origin", "")
         if method == "OPTIONS":  # CORS preflight: answered before identity, like API Gateway does
             if self._origin_ok(origin) and any(p.fullmatch(path) for _, p, _, _ in ROUTES):
-                cors = {"access-control-allow-origin": origin, "vary": "Origin", **CORS_PREFLIGHT}
+                cors = {"access-control-allow-origin": origin, "vary": "Origin", **CORS_PREFLIGHT, **EXPOSE}
                 print(json.dumps({"route": "preflight", "status": 204}), file=sys.stderr)
                 return {"statusCode": 204, "headers": {**HEADERS, **cors}, "body": ""}
             print(json.dumps({"route": "preflight", "status": 403}), file=sys.stderr)
@@ -193,10 +203,14 @@ class App:
             status, out = 409, {"error": "conflict"}
         print(json.dumps({"route": name, "status": status}), file=sys.stderr)
         out_headers = dict(HEADERS)
+        if status == 503:
+            out_headers["retry-after"] = str(RETRY_503)
+        elif status == 429:  # the only 429 the app sends is quota_exceeded (API Gateway's own throttling 429 has none)
+            out_headers["retry-after"] = str(_seconds_to_next_month(self.now()))
         if method == "GET" and SHARE_VIEW.fullmatch(path):
-            out_headers["access-control-allow-origin"] = "*"  # public and credential-free, for any recipient
+            out_headers.update({"access-control-allow-origin": "*", **EXPOSE})  # public, credential-free, any recipient
         elif self._origin_ok(origin):
-            out_headers.update({"access-control-allow-origin": origin, "vary": "Origin"})
+            out_headers.update({"access-control-allow-origin": origin, "vary": "Origin", **EXPOSE})
         return {"statusCode": status, "headers": out_headers, "body": json.dumps(out)}
 
     def _check_restore(self):
@@ -497,7 +511,8 @@ class App:
 
     def pilot_enroll(self, ident, body, _query):
         """Option B: a pilot enrolls their own key with an authorization signed by the org's active company key.
-        Order: schema, challenge signature, authorization, company key active, key_exists, then one transaction."""
+        Order: schema, challenge signature, authorization, company key active, key_exists, then one transaction. If
+        that fails only on the 50-key cap, unusable pilot keys are retired (`_reclaim_pilot_slots`) and it is sent once more."""
         self._fields(body, required=("public_key", "nonce", "signature", "authorization", "authorization_sig"))
         pub = bytes.fromhex(self._str(body, "public_key", HEX64))
         nonce = self._str(body, "nonce", HEX32)
@@ -517,7 +532,7 @@ class App:
         if self.t.get(pk, "KEY#" + fp) is not None:
             raise HttpError(409, "key_exists")
         not_after = parsed.not_after
-        failed = self._transact([
+        ops = [
             {"op": "delete", "key": (pk, "CHAL#" + nonce), "cond": self._chal_cond(ident, now, "pilot")},
             {"op": "put", "item": {"PK": pk, "SK": "KEY#" + fp, "kind": "pilot", "company_fp": company_fp,
                                    "not_after": not_after, "state": "active", "enrolled_at": now,
@@ -526,15 +541,22 @@ class App:
             {"op": "update", "key": (pk, "PILOT_COUNT"), "add": {"n": 1},
              "cond": [("or", ("missing", "n"), ("lt", "n", PILOT_CAP))]},
             {"op": "check", "key": (pk, "ACTIVE_KEY"), "cond": [("eq", "fp", company_fp)]},
-        ])
-        if failed:
+        ]
+        for attempt in (1, 2):
+            failed = self._transact(ops)
+            if not failed:
+                break
             if failed[0]:
                 raise HttpError(400, "bad_challenge")
             if failed[1]:
                 raise HttpError(409, "key_exists")
             if failed[4]:
                 raise HttpError(422, "company_key_not_active")
-            raise HttpError(409, "pilot_key_limit")
+            if attempt == 2:
+                raise HttpError(409, "pilot_key_limit")
+            # The cap was hit. The canceled transaction consumed nothing, so free the slots of pilot keys that can no
+            # longer be used (design §4.2 "Pilot slots") and try once more.
+            self._reclaim_pilot_slots(ident.org_id, pk, now)
         return 201, {"key_fingerprint": fp, "kind": "pilot", "state": "active", "company_fingerprint": company_fp,
                      "not_after": _iso(not_after)}
 
@@ -586,26 +608,58 @@ class App:
             return [{"op": "update", "key": (pk, "PILOT_COUNT"), "add": {"n": -1}}]
         return []
 
+    def _retire_ops(self, org, pk, fp, key, now):
+        """Retire an active pilot key: the same transaction for an admin retire and for a slot reclaim."""
+        return [{"op": "update", "key": (pk, "KEY#" + fp), "set": {"state": "retired", "changed_at": now},
+                 "cond": [("eq", "state", "active")]},
+                self._tomb_for(org, fp, key, "retired", now)] + self._decrement_pilots(pk, key)
+
+    def _reclaim_pilot_slots(self, org, pk, now):
+        """Retire every active pilot key that can no longer be used: its authorization ended by the registry clock, or
+        its parent company key is not active (replaced or compromised, which never reverts). One conditional
+        transaction per key; one that fails (a racing retire or compromise won) is skipped. Returns how many it freed."""
+        # ponytail: pages every KEY# item of the org (O(keys in org)), but only when an enroll hits the cap.
+        parents, freed, cursor = {}, 0, None
+        while True:
+            page, cursor = self.t.query(pk, "KEY#", PAGE, cursor)
+            for key in page:
+                if not _is_pilot(key) or key.get("state") != "active":
+                    continue
+                fp, parent, not_after = key["SK"][4:], key.get("company_fp"), key.get("not_after")
+                if isinstance(parent, str) and parent != fp and parent not in parents:
+                    parents[parent] = (self.t.get(pk, "KEY#" + parent) or {}).get("state")
+                usable = (isinstance(not_after, int) and not_after > now and isinstance(parent, str)
+                          and parent != fp and parents[parent] == "active")
+                if not usable and self._transact(self._retire_ops(org, pk, fp, key, now)) is None:
+                    freed += 1
+            if not cursor:
+                return freed
+
     def compromise(self, ident, body, _query, fp):
-        """Idempotent: a key already compromised keeps its first `changed_at`, and nothing is written."""
+        """Idempotent: a key already compromised keeps its first `changed_at`, and nothing is written. If a racing
+        retire or slot reclaim changes a pilot key first, it reads the key again and retries once, so it is never
+        refused for that race. A company key keeps its single attempt."""
         self._fields(body)
         pk, now = f"ORG#{ident.org_id}", self.now()
-        key = self.t.get(pk, "KEY#" + fp)
-        if key is None:
-            raise not_found()
-        if key["state"] == "compromised":
-            return self._compromised(fp, key)
-        ops = [{"op": "update", "key": (pk, "KEY#" + fp), "set": {"state": "compromised", "changed_at": now},
-                "cond": [("eq", "state", key["state"])]},
-               self._tomb_for(ident.org_id, fp, key, "compromised", now)] + self._decrement_pilots(pk, key)
-        if (self.t.get(pk, "ACTIVE_KEY") or {}).get("fp") == fp:
-            ops.append({"op": "delete", "key": (pk, "ACTIVE_KEY"), "cond": [("eq", "fp", fp)]})
-        if self._transact(ops):
+        for _ in (1, 2):
             key = self.t.get(pk, "KEY#" + fp)
-            if key and key["state"] == "compromised":  # a concurrent call won: report its date
+            if key is None:
+                raise not_found()
+            if key["state"] == "compromised":  # already, or a concurrent call won: report its date
                 return self._compromised(fp, key)
-            raise HttpError(409, "conflict")
-        return 200, {"key_fingerprint": fp, "state": "compromised", "changed_at": _iso(now)}
+            ops = [{"op": "update", "key": (pk, "KEY#" + fp), "set": {"state": "compromised", "changed_at": now},
+                    "cond": [("eq", "state", key["state"])]},
+                   self._tomb_for(ident.org_id, fp, key, "compromised", now)] + self._decrement_pilots(pk, key)
+            if (self.t.get(pk, "ACTIVE_KEY") or {}).get("fp") == fp:
+                ops.append({"op": "delete", "key": (pk, "ACTIVE_KEY"), "cond": [("eq", "fp", fp)]})
+            if self._transact(ops) is None:
+                return 200, {"key_fingerprint": fp, "state": "compromised", "changed_at": _iso(now)}
+            if not _is_pilot(key):
+                break
+        key = self.t.get(pk, "KEY#" + fp)
+        if key and key["state"] == "compromised":
+            return self._compromised(fp, key)
+        raise HttpError(409, "conflict")
 
     @staticmethod
     def _compromised(fp, key):
@@ -613,7 +667,8 @@ class App:
 
     def retire(self, ident, body, _query, fp):
         """Option B: an admin removes a pilot key. Idempotent: an already retired or compromised key answers its stored
-        state and date, and nothing is written. Company keys are not retired here (404): they rotate or are compromised."""
+        state and date, and nothing is written. Company keys are not retired here (404): they rotate or are compromised.
+        Works whatever PILOT_KEYS_ORGS says: revocation is never blocked by the switch."""
         self._fields(body)
         pk, now = f"ORG#{ident.org_id}", self.now()
         key = self.t.get(pk, "KEY#" + fp)
@@ -621,11 +676,7 @@ class App:
             raise not_found()
         if key["state"] in ("retired", "compromised"):
             return self._retired(fp, key)
-        failed = self._transact([
-            {"op": "update", "key": (pk, "KEY#" + fp), "set": {"state": "retired", "changed_at": now},
-             "cond": [("eq", "state", "active")]},
-            self._tomb_for(ident.org_id, fp, key, "retired", now),
-        ] + self._decrement_pilots(pk, key))
+        failed = self._transact(self._retire_ops(ident.org_id, pk, fp, key, now))
         if failed:
             key = self.t.get(pk, "KEY#" + fp)
             if key and key["state"] in ("retired", "compromised"):  # a concurrent retire or compromise won

@@ -37,7 +37,7 @@ import boto3  # noqa: E402
 
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / "registry"))
-from registry import ed25519, receipt  # noqa: E402
+from registry import ed25519, pilot_authorization, receipt  # noqa: E402
 from registry.enroll_challenge import bytes_to_sign  # noqa: E402
 from registry.identity import make_dev_token  # noqa: E402
 
@@ -145,7 +145,7 @@ def lambda_zip():
 
 def lambda_env(dev_secret):
     return {"TABLE_NAME": TABLE, "IDENTITY_ADAPTER": "dev-hs256", "DEV_TOKEN_SECRET": dev_secret,
-            "DEDUPE_SECONDS": str(DEDUPE_SECONDS)}
+            "DEDUPE_SECONDS": str(DEDUPE_SECONDS), "PILOT_KEYS_ORGS": "orgA"}  # Option B on for orgA, this test only
 
 
 def deploy(dev_secret):
@@ -311,6 +311,7 @@ def scenarios(url, tok, table, dedupe):
           f"{status} {status2}")
     status, keys = http("GET", url + "/v1/keys", pilot)
     check("list keys", status == 200 and [k["state"] for k in keys.get("keys", [])] == ["active"], f"{status}")
+    pilot_steps(url, admin, pilot, seed, envelope, register, dedupe is None)
     env_old = envelope(pilot)
     status, ep = http("POST", url + "/v1/epoch", admin, {})
     status2, out = register(pilot, receipt_line(seed, 400), "e2e-idem-0000000006", env_old)
@@ -319,6 +320,41 @@ def scenarios(url, tok, table, dedupe):
           f"epoch {status} {ep}, register {status2} {out}")
     return {"share_path": share2["path"], "rid": ack1["registration_id"], "pilot": pilot, "ack1": ack1,
             "withdrawn_paths": [share1["path"], share2["path"]], "rid2": ack2["registration_id"]}
+
+
+PILOT_STEPS = ("pilot key enroll (pilot challenge + company-key authorization)", "pilot key register",
+               "pilot key retire (admin)", "pilot key register after retire refused", "list keys shows the pilot key retired")
+
+
+def pilot_steps(url, admin, pilot, company_seed, envelope, register, api_url_mode):
+    """Option B through the API: a pilot enrolls their own key with an authorization signed by the company key,
+    registers with it, an admin retires it, and it is refused after that."""
+    if api_url_mode:
+        for name in PILOT_STEPS:
+            record(name, "skipped", "the stack never sets PILOT_KEYS_ORGS")
+        return
+    pilot_seed = secrets.token_bytes(32)
+    pub = ed25519.public_key(pilot_seed)
+    fp = receipt.fingerprint(pub)
+    _, ch = http("GET", url + "/v1/pilot-keys/challenge", pilot)
+    text = pilot_authorization.statement(pub, ed25519.public_key(company_seed), int(time.time()) + 14 * 86400)
+    status, out = http("POST", url + "/v1/pilot-keys", pilot, {
+        "public_key": pub.hex(), "nonce": ch.get("nonce"),
+        "signature": ed25519.sign(pilot_seed, bytes_to_sign("orgA", ch, "pilot")).hex(),
+        "authorization": pilot_authorization.encode(text),
+        "authorization_sig": ed25519.sign(company_seed, text).hex()})
+    check(PILOT_STEPS[0], status == 201 and out.get("kind") == "pilot" and out.get("key_fingerprint") == fp,
+          f"{status} {out.get('state', out)}")
+    status, ack = register(pilot, receipt_line(pilot_seed, 500), "e2e-idem-pilot-000001", envelope(pilot))
+    check(PILOT_STEPS[1], status == 201 and ack.get("key_fingerprint") == fp, f"{status} {ack.get('error', '')}")
+    status, out = http("POST", url + f"/v1/pilot-keys/{fp}/retire", admin, {})
+    check(PILOT_STEPS[2], status == 200 and out.get("state") == "retired", f"{status} {out.get('state', out)}")
+    status, out = register(pilot, receipt_line(pilot_seed, 501), "e2e-idem-pilot-000002", envelope(pilot))
+    check(PILOT_STEPS[3], (status, out.get("error")) == (403, "key_not_active"), f"{status} {out}")
+    status, keys = http("GET", url + "/v1/keys", pilot)
+    rows = {k["key_fingerprint"]: k for k in keys.get("keys", [])}
+    check(PILOT_STEPS[4], status == 200 and (rows.get(fp) or {}).get("state") == "retired"
+          and rows[fp].get("kind") == "pilot", f"{status}")
 
 
 def restore_drill(url, state, base_env):

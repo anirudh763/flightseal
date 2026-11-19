@@ -74,7 +74,7 @@ One table, string keys `PK`/`SK`:
 |---|---|
 | `ORG#o / KEY#<fp>` | `kind` (`company` or `pilot`; missing means `company`), key state (active, rotated, retired, compromised; `retired` is for pilot keys only), enrolled_at, enrolled_by (the enrolling admin's `sub`, copied from the key tombstone when a restore brings the key back, or the placeholder `restore` or `unknown` when none was recorded; never returned to a client), changed_at. Pilot keys also hold `company_fp` (the fingerprint of the company key that authorized them) and `not_after` (epoch seconds). An item with `company_fp` or `not_after` is a pilot key whatever `kind` says. `fp` is the SHA-256 of the raw 32-byte public key |
 | `ORG#o / ACTIVE_KEY` | the one active company fingerprint (a conditional pointer that keeps "at most one active company key" true under races); never a pilot key |
-| `ORG#o / PILOT_COUNT` | `n`, the number of active pilot keys (cap 50), changed only inside the transactions that enroll, retire or compromise a pilot key |
+| `ORG#o / PILOT_COUNT` | `n`, the number of active pilot keys (cap 50), changed only inside the transactions that enroll, retire (by an admin or by a slot reclaim) or compromise a pilot key |
 | `ORG#o / CHAL#<nonce>` | sub, `kind` (`company` or `pilot`; missing means `company`) and a 5-minute expiry; deleted when used |
 | `ORG#o / EPOCH`, `ENV#<id>` | the org epoch; envelopes with sub, epoch and expiry (default 7 days) |
 | `ORG#o / QUOTA#YYYYMM` | registrations this month (default limit 2000, `REG_QUOTA_PER_MONTH`) |
@@ -98,8 +98,9 @@ only here does a lookup of an already committed registration happen, so a retry 
 key state (403) → one transaction. The signature is checked before the envelope and before any existence lookup,
 so an unsigned request cannot learn whether a registration exists.
 
-The three pilot-key routes check the `PILOT_KEYS_ORGS` switch right after identity and role, before the body is
-parsed: an org not switched on gets 403 `pilot_keys_off` whatever it sends.
+The pilot challenge and enroll routes check the `PILOT_KEYS_ORGS` switch right after identity and role, before the
+body is parsed: an org not switched on gets 403 `pilot_keys_off` whatever it sends. Retire is not gated: revocation is
+never blocked by the switch.
 
 A pilot key (see Pilot keys) registers only when its org is in `PILOT_KEYS_ORGS`, its state is `active`, its
 `not_after` is after the registry clock, and its parent company KEY item is `active`; anything else is 403
@@ -160,8 +161,9 @@ pilot UI, Verify delegated path) is not. **Off everywhere by default.**
 - **Switch:** `PILOT_KEYS_ORGS`, an operator-set Lambda environment variable: a comma list of org ids. An entry
   counts only if it is exactly an org id (`[A-Za-z0-9_-]{1,64}`, no spaces trimmed, no wildcard), so unset, empty,
   whitespace, `*` and malformed entries switch nothing on. Read once when the function starts. No route can set it
-  and `infra/lib/stack.ts` never sets it (a synth test checks this). Off: the three routes below answer 403
-  `pilot_keys_off`, pilot keys answer 403 `key_not_active` on register, and the stored data is kept.
+  and `infra/lib/stack.ts` never sets it (a synth test checks this). Off: the challenge and enroll routes below answer
+  403 `pilot_keys_off`, pilot keys answer 403 `key_not_active` on register, and the stored data is kept. Retire and
+  compromise still work, so an admin can always revoke. Switching off frees no slots.
 - **Authorization** (`registry/registry/pilot_authorization.py`, vectors in `tests/fixtures/pilot-authorization.json`):
   the company key signs exactly `hashwing-pilot-authorization v1\npilot_key=<64 hex>\ncompany_key=<64 hex>\nnot_after=<YYYY-MM-DDTHH:MM:SSZ>`
   (no trailing newline). It travels as base64url without padding plus a 128-lowercase-hex signature; in a receipt
@@ -178,19 +180,29 @@ pilot UI, Verify delegated path) is not. **Off everywhere by default.**
   `company_key` is this org's `ACTIVE_KEY` (422 `company_key_not_active`) → fingerprint ever seen in this org, any
   state or kind (409 `key_exists`) → one transaction: delete the CHAL item (exists, same `sub`, unexpired,
   `kind: "pilot"`; else 400 `bad_challenge`), put the KEY item if absent, put its tombstone, add 1 to `PILOT_COUNT`
-  if `n` < 50 (else 409 `pilot_key_limit`), and check that `ACTIVE_KEY` still names the company key (else 422
-  `company_key_not_active`). Each enroll route accepts only its own challenge kind; `POST /v1/keys` accepts a
+  if `n` < 50, and check that `ACTIVE_KEY` still names the company key (else 422 `company_key_not_active`). If only
+  the counter condition failed, the registry reclaims slots (below) and sends the same transaction once more; if
+  that fails on the counter too, 409 `pilot_key_limit`. Each enroll route accepts only its own challenge kind; `POST /v1/keys` accepts a
   company challenge or one without `kind`. Pilot keys never go through `POST /v1/keys`, which rotates `ACTIVE_KEY`.
 - `POST /v1/pilot-keys/<fp>/retire` (admin) returns `{key_fingerprint, state: "retired", changed_at}`. An already
   retired or compromised key returns its stored state and date and writes nothing. Unknown, another org's, or a
   company key: 404. In one transaction: the KEY item (condition: state active), its tombstone, and `PILOT_COUNT` − 1.
+  It works whatever `PILOT_KEYS_ORGS` says.
 - `POST /v1/keys/<fp>/compromised` works for both kinds; for an active pilot key it also subtracts 1 from
-  `PILOT_COUNT`. The decrement has no floor condition, so the counter never blocks a revocation.
+  `PILOT_COUNT`. The decrement has no floor condition, so the counter never blocks a revocation. If its transaction
+  for a pilot key is canceled because the key changed meanwhile (an admin retire or a slot reclaim), it reads the key
+  again and retries once with the fresh state; a key already compromised answers its stored date.
 - `GET /v1/keys` rows gain `kind`; pilot rows gain `company_fingerprint` and `not_after` (ISO). The response gains
   `pilot_keys` (true when the caller's org is switched on).
 - **Renewal** is a new pilot key with a new authorization. A fingerprint once seen in an org is never enrolled again.
-- An expired pilot key (registry clock past `not_after`) stays `active` in the list and counts toward the 50 until
-  an admin retires it; it cannot register.
+- **Slots: only a usable pilot key holds one** (design §4.2 "Pilot slots"). Usable = state `active`, `not_after`
+  after the registry clock, and parent company KEY item `active`. Both ways to stop being usable are permanent, so
+  when an enroll hits the cap the registry pages the org's KEY items and retires every active pilot key that is no
+  longer usable, each with the admin-retire transaction (condition state `active` → `retired`, tombstone,
+  `PILOT_COUNT` − 1), one transaction per key; a canceled one (a racing retire or compromise won) is skipped. It
+  never touches a retired or compromised key and never changes `not_after`. So `PILOT_COUNT.n` always equals the
+  number of active pilot keys. Until a cap hit triggers that reclaim, an ended pilot key still shows `active` in the
+  list; it cannot register either way.
 - Recipients (Verify, browser half, not built) never see registry key state; the 500-entry recipient compromised list
   lives in the recipient's browser. No share-view field reports pilot key state (a follow-up that needs an AD-9
   amendment first).
@@ -247,6 +259,7 @@ The console runs on another origin (GitHub Pages), so the API answers CORS for a
   change it with `-c corsOrigins=https://a.example,https://b.example`. The settings are:
   - allowed methods: GET, POST, DELETE and OPTIONS
   - allowed headers: `authorization`, `content-type` and `idempotency-key`
+  - exposed headers: `retry-after` (so the console can read it cross-origin)
   - `allowCredentials: false`, preflight cached 10 minutes
 
   API Gateway answers the preflight itself. The stack rejects `*`, wildcard hosts and non-https origins, and a
@@ -255,13 +268,21 @@ The console runs on another origin (GitHub Pages), so the API answers CORS for a
   LocalStack REST stand-in.
   - The value is a comma list of exact origins. A `scheme://host:*` entry allows any port; it is for dev only.
   - `*` and wildcard hosts are ignored.
-  - An allowlisted `Origin` gets that origin back, with `Vary: Origin`. Any other origin gets no CORS header.
+  - An allowlisted `Origin` gets that origin back, with `Vary: Origin` and
+    `Access-Control-Expose-Headers: retry-after`. Any other origin gets no CORS header.
   - Preflight is 204 for an allowed origin and 403 `cors_forbidden` otherwise. It is answered before identity
     and the restore gate, so the 503 or 401 that follows can be read by the console.
   - Credentials are never allowed: the token travels in `Authorization`, not in a cookie.
-- **Public share view:** in the Lambda it sends `Access-Control-Allow-Origin: *` with no credentials, so any
-  recipient's page can read it. On the deployed HTTP API, the API-wide CORS settings apply to this route too (API
+- **Public share view:** in the Lambda it sends `Access-Control-Allow-Origin: *` (and the same expose header) with no
+  credentials, so any recipient's page can read it. On the deployed HTTP API, the API-wide CORS settings apply to this route too (API
   Gateway overrides integration CORS headers), so there it is limited to the allowlist.
+
+### Retry-After
+
+Every 429 and 503 the Lambda returns carries `Retry-After` in whole seconds: 429 `quota_exceeded` gives the seconds
+until the next UTC month starts (when the quota resets); every 503 (`unavailable`, `restore_pending`, including on the
+share view) gives 30. No other status carries it. API Gateway's own throttling 429 does not carry it, so a client
+falls back to its own backoff there.
 
 ### PROPOSED routes (agreed contract, not built)
 

@@ -204,12 +204,13 @@ test('the public share check has its own tighter throttle (2 rps, burst 5); othe
   assert.ok([stage.DependsOn].flat().includes(publicRouteId));
 });
 
-test('CORS on the HTTP API: only the allowlisted origins, Authorization allowed, never "*", no credentials', () => {
+test('CORS on the HTTP API: only the allowlisted origins, Authorization allowed, Retry-After exposed, never "*", no credentials', () => {
   const [[, api]] = resources('AWS::ApiGatewayV2::Api');
   const cors = api.Properties.CorsConfiguration;
   assert.deepEqual(cors.AllowOrigins, ['https://anirudh763.github.io']);
   assert.deepEqual([...cors.AllowHeaders].sort(), ['authorization', 'content-type', 'idempotency-key']);
   assert.deepEqual([...cors.AllowMethods].sort(), ['DELETE', 'GET', 'OPTIONS', 'POST']);
+  assert.deepEqual(cors.ExposeHeaders, ['retry-after']);
   assert.notEqual(cors.AllowCredentials, true);
   assert.ok(!JSON.stringify(cors).includes('*'));
   const custom = Template.fromStack(new RegistryStack(new App(), 'Cors', { corsOrigins: ['https://example.org'] }));
