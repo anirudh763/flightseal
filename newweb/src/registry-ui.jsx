@@ -664,7 +664,7 @@ export function useShareRecord(token) {
       else if (res.kind === 'network' || res.kind === 'timeout') setView({ token, state: 'error', message: "You're offline. Opening a link needs a connection. You can still check files." });
       else if (res.ok || res.status === 503 || res.status === 429) setView({ token, state: 'error', message: UNAVAILABLE });
       else setView({ token, state: 'error', message: LINK_DEAD });
-    }).catch(() => { if (live) setView({ token, state: 'error', message: UNAVAILABLE }); });
+    }); // getShare never rejects (registry-client.mjs: every call resolves)
     return () => { live = false; };
   }, [token]);
   // Until the effect runs for a new token, the old answer is never shown for it.

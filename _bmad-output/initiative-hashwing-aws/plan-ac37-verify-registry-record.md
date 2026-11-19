@@ -3,14 +3,14 @@ title: 'AC-37: Verify compares a share link with the registry record (downgrade 
 type: feature
 ticket: ''
 created: '2026-11-19'
-status: in-progress
+status: in-review
 baseline_revision: 'f2583efddeab71a84ba0be1f5f85b9c1b75d58fd'
 route: full
 route_source: auto
 risk: medium
-review: ''
-review_source: ''
-lenses_ran: []
+review: quick
+review_source: pinned
+lenses_ran: [quick]
 review_loop_iteration: 0
 followup_review_recommended: false
 context:

@@ -2061,7 +2061,8 @@ const compromisedFingerprints = (history) => new Set(history.filter((entry) => e
 const readCompanies = () => { try { const burned = compromisedFingerprints(listTrustedHistory()); return listTrustedKeys().filter((pin) => pin.fingerprint && !burned.has(pin.fingerprint)); } catch { return []; } };
 const readActivePins = () => { try { const burned = compromisedFingerprints(listTrustedHistory()); return listTrustedKeys().filter((pin) => pin.publicKey && !burned.has(pin.fingerprint)); } catch { return []; } };
 // AC-37's "Registry record" verdict line, styled like the key trust line (ok, warn, or plain for information).
-const recordRow = (line) => [line.label, <p className={`trust-line ${line.kind}`}><span className="status-shape" aria-hidden="true" />{line.value}</p>];
+// The information line has no status shape, so it never looks like the round "ok" shape of a match.
+const recordRow = (line) => [line.label, <p className={`trust-line ${line.kind}`}>{line.kind !== 'info' && <span className="status-shape" aria-hidden="true" />}{line.value}</p>];
 function TrustLine({ trust }) {
   return <p className={`trust-line ${TRUST_KIND[trust.status] || 'warn'}`}><span className="status-shape" aria-hidden="true" />{trustLine(trust, SOURCES)}</p>;
 }
