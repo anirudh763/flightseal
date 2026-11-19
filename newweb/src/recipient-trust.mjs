@@ -77,11 +77,12 @@ export const parseSealedLine = isoAfter('Sealed');
 export const parseLandingLine = isoAfter('Reported landing time');
 export const landingLine = (iso) => `Reported landing time: ${iso} (operator-entered, not signed, not verified)`;
 
-/** trust: { status: trusted|untrusted|replaced|compromised|wrong-key|invalid-signature, entry? } */
+/** trust: { status: trusted|unconfirmed|untrusted|replaced|compromised|wrong-key|invalid-signature, entry? } */
 export function trustLine(trust, sources = {}) {
   const entry = trust?.entry;
   switch (trust?.status) {
     case 'trusted': return `Signed by a key you trust: ${entry.name} (added from ${sources[entry.source] || entry.source})`;
+    case 'unconfirmed': return `Signed by a key saved for ${entry.name}, but how you confirmed it isn't recorded. Confirm its fingerprint on Trust.`;
     case 'compromised': return `Signed by a key you marked as compromised: ${entry.name}. Don't rely on this proof without checking with the company.`;
     case 'replaced': return `Signed by a key that was replaced for ${entry.name} on ${String(entry.replacedAt || '').slice(0, 10) || 'an unknown date'}. Ask the company whether proofs from that key are still valid.`;
     case 'weak': return "This public key is weak and can't prove anything"; // docs/verifier.js WEAK_KEY_MESSAGE
@@ -90,7 +91,7 @@ export function trustLine(trust, sources = {}) {
     default: return "Valid signature, but this key isn't in your trusted list — confirm its fingerprint through a channel you already know.";
   }
 }
-export const TRUST_KIND = { trusted: 'ok', untrusted: 'warn', replaced: 'warn', compromised: 'bad', 'wrong-key': 'bad', 'invalid-signature': 'bad', weak: 'bad' };
+export const TRUST_KIND = { trusted: 'ok', unconfirmed: 'warn', untrusted: 'warn', replaced: 'warn', compromised: 'bad', 'wrong-key': 'bad', 'invalid-signature': 'bad', weak: 'bad' };
 
 export const BYTES_DIFFER = Object.freeze({
   title: 'Bytes differ',
@@ -221,7 +222,7 @@ export function manifestReport({ sealedName = '', trust, sources = {}, keyFinger
     `- Sealed list: ${sealedName}`, '- Manifest: verified (signature checked)', `- Key trust: ${line}`,
     ...(entry ? [`- Key source: ${sources[entry.source] || entry.source}`] : []), `- Key fingerprint: \`SHA-256 ${groups(keyFingerprint)}\``, `- Chain head: \`${head}\``,
   ].join('\n')}\n\n## Times\n\n${fields.map((field) => `- ${field.label}: ${field.value} (${field.basis})`).join('\n')}\n\n## Files\n\n${[...itemLines, ...extraLines].map((l) => (l.startsWith('  ') ? `  - ${l.trim()}` : `- ${l}`)).join('\n')}\n${differs ? `\n## ${BYTES_DIFFER.title}\n\n${BYTES_DIFFER.text}\n` : ''}`;
-  const keyTrust = { status: trust?.status || 'untrusted', line, company: entry?.name ?? null, source: entry?.source ?? null, sourceLabel: entry ? (sources[entry.source] || entry.source) : null, addedAt: entry?.addedAt || null, replacedAt: entry?.replacedAt || null, compromisedAt: entry?.compromisedAt || null, fingerprint: keyFingerprint || null };
+  const keyTrust = { status: trust?.status || 'untrusted', line, company: entry?.name ?? null, source: entry?.source ?? null, sourceLabel: entry ? (sources[entry.source] || entry.source) : null, addedAt: entry?.addedAt || null, confirmedAt: entry?.confirmedAt || null, replacedAt: entry?.replacedAt || null, compromisedAt: entry?.compromisedAt || null, fingerprint: keyFingerprint || null };
   const json = JSON.stringify({
     result: resultLine, kind: 'hashwing-manifest-check', sealedFile: sealedName, verdict: { key: result.key, headline: result.headline, sentence: result.sentence }, manifestVerified: true, head, keyTrust,
     timeProvenance: { fields, intervalMs: reportedInterval(landings.length === 1 ? landings[0] : '', sealedAt).ms },

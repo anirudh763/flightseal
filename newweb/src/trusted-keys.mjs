@@ -8,6 +8,7 @@ export const PINS_CHANGED = 'hashwing-trusted-keys-changed';
 // compromised-fingerprint list if a user ever fills 64 entries.
 const MAX_KEYS = 64; // history entries count
 const HEX64 = /^[a-f0-9]{64}$/;
+const ISO = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,3})?Z$/;
 const STATUSES = new Set(['active', 'replaced', 'compromised']);
 export const SOURCES = Object.freeze({ website: 'company website you already knew', contract: 'contract or invoice', phone: 'phone call with a known contact', other: 'other', 'not-recorded': 'not recorded' });
 
@@ -66,8 +67,8 @@ function sha256Hex(bytes) {
 const keyFingerprint = (publicKey) => sha256Hex(Uint8Array.from(publicKey.match(/../g), (byte) => Number.parseInt(byte, 16)));
 
 function clean(entry) {
-  const { name, publicKey, fingerprint, source, addedAt, status, replacedAt, compromisedAt } = entry;
-  return { name, publicKey, fingerprint, source, addedAt, status, ...(replacedAt ? { replacedAt } : {}), ...(compromisedAt ? { compromisedAt } : {}) };
+  const { name, publicKey, fingerprint, source, addedAt, status, confirmedAt, replacedAt, compromisedAt } = entry;
+  return { name, publicKey, fingerprint, source, addedAt, status, ...(confirmedAt ? { confirmedAt } : {}), ...(replacedAt ? { replacedAt } : {}), ...(compromisedAt ? { compromisedAt } : {}) };
 }
 function read(storage = globalThis.localStorage) {
   let entries;
@@ -79,6 +80,9 @@ function read(storage = globalThis.localStorage) {
     if (!entry || typeof entry !== 'object' || Array.isArray(entry)) return [];
     // Legacy pins are { name, publicKey, fingerprint } and read as active with no recorded source.
     const next = { source: 'not-recorded', addedAt: '', status: 'active', ...entry };
+    // confirmedAt is the user's "I confirmed this myself" time (R34). A bad one only makes the entry unconfirmed; it
+    // never drops the entry, which could lose a compromised record.
+    if (!(typeof next.confirmedAt === 'string' && ISO.test(next.confirmedAt) && !Number.isNaN(Date.parse(next.confirmedAt)))) delete next.confirmedAt;
     const dated = (key) => typeof next[key] === 'string' && !Number.isNaN(Date.parse(next[key]));
     if ((next.status === 'replaced' && !dated('replacedAt')) || (next.status === 'compromised' && !dated('compromisedAt'))) return [];
     if (typeof next.name !== 'string' || !next.name || next.name.length > 80 || !(next.publicKey === '' || HEX64.test(next.publicKey)) || !HEX64.test(next.fingerprint)
@@ -102,8 +106,8 @@ function checkName(input) {
 }
 const sameName = (a, b) => a.toLowerCase() === b.toLowerCase();
 
-// Shared by pinTrustedKey and addTrustedCompany: same name and fingerprint keeps the entry; a different
-// fingerprint needs confirmation and then keeps the old one as history.
+// Shared by pinTrustedKey and addTrustedCompany: same name and fingerprint keeps the entry (and confirms a legacy
+// one in place); a different fingerprint needs confirmation and then keeps the old one as history.
 function upsert(entries, { name, publicKey, fingerprint, source, now, confirm, message }) {
   if (entries.some((entry) => entry.status === 'compromised' && entry.fingerprint === fingerprint)) {
     throw new Error('This key was marked as compromised, so it can’t be added again. Ask the company for a new key.');
@@ -111,21 +115,26 @@ function upsert(entries, { name, publicKey, fingerprint, source, now, confirm, m
   const existing = entries.find((entry) => entry.status === 'active' && sameName(entry.name, name));
   if (existing && existing.fingerprint === fingerprint) {
     if (!existing.publicKey && publicKey) existing.publicKey = publicKey;
+    if (!existing.confirmedAt) { existing.source = source; existing.confirmedAt = now; }
     return { entries, entry: existing };
   }
   if (existing && !confirm) throw Object.assign(new Error(message(existing)), { code: 'replace-needs-confirm', previous: formatFingerprint(existing.fingerprint) });
   if (existing) { existing.status = 'replaced'; existing.replacedAt = now; }
-  const entry = { name, publicKey, fingerprint, source, addedAt: now, status: 'active' };
+  const entry = { name, publicKey, fingerprint, source, addedAt: now, status: 'active', confirmedAt: now };
   return { entries: [...entries, entry], entry };
 }
 
 export function listTrustedKeys({ storage = globalThis.localStorage } = {}) { return read(storage).filter((entry) => entry.status === 'active'); }
 export function listTrustedHistory({ storage = globalThis.localStorage } = {}) { return read(storage); }
 
-export async function pinTrustedKey(nameInput, publicKey, { storage = globalThis.localStorage, cryptoObject = globalThis.crypto, confirmRotation = false, source = 'not-recorded', now = new Date().toISOString() } = {}) {
+export const CONFIRM_MESSAGE = 'Tick the box to confirm you checked this fingerprint yourself.';
+const pickedSource = (source) => !!source && source !== 'not-recorded' && Object.hasOwn(SOURCES, source);
+
+export async function pinTrustedKey(nameInput, publicKey, { storage = globalThis.localStorage, cryptoObject = globalThis.crypto, confirmRotation = false, source, confirmed = false, now = new Date().toISOString() } = {}) {
   const name = String(nameInput || '').trim();
   if (!name || name.length > 80) throw new Error('Enter a key profile name up to 80 characters.');
-  if (!Object.hasOwn(SOURCES, source)) throw new Error('Choose where you got this key.');
+  if (!pickedSource(source)) throw new Error('Choose where you got this key.');
+  if (confirmed !== true) throw new Error(CONFIRM_MESSAGE);
   const value = String(publicKey || '').trim().toLowerCase();
   const fingerprint = await fingerprintHex(value, cryptoObject);
   if (weakPublicKey(parseHex(value, 32))) throw new Error(WEAK_KEY_MESSAGE);
@@ -135,10 +144,11 @@ export async function pinTrustedKey(nameInput, publicKey, { storage = globalThis
   return clean(entry);
 }
 
-export async function addTrustedCompany(nameInput, fingerprintInput, { source, confirmReplace = false, now = new Date().toISOString(), storage = globalThis.localStorage, cryptoObject = globalThis.crypto } = {}) {
+export async function addTrustedCompany(nameInput, fingerprintInput, { source, confirmed = false, confirmReplace = false, now = new Date().toISOString(), storage = globalThis.localStorage, cryptoObject = globalThis.crypto } = {}) {
   const name = checkName(nameInput);
   const fingerprint = normalizeFingerprint(fingerprintInput);
-  if (!source || source === 'not-recorded' || !Object.hasOwn(SOURCES, source)) throw new Error('Choose where you got this fingerprint.');
+  if (!pickedSource(source)) throw new Error('Choose where you got this fingerprint.');
+  if (confirmed !== true) throw new Error(CONFIRM_MESSAGE);
   if ((await weakFingerprintSet(cryptoObject)).has(fingerprint)) throw new Error(WEAK_KEY_MESSAGE);
   const { entries, entry } = upsert(read(storage), { name, publicKey: '', fingerprint, source, now, confirm: confirmReplace,
     message: (old) => `“${old.name}” already has the key ${formatFingerprint(old.fingerprint)}. Replace it only if the company told you about a new key through a channel you already know.` });
@@ -156,14 +166,15 @@ export function markCompromised(name, fingerprintInput, { now = new Date().toISO
   return clean(entry);
 }
 
-/** trusted (active pin) / replaced / compromised / untrusted. Compromised wins if the key is saved more than once. */
+/** compromised / trusted (active pin the user confirmed) / unconfirmed (active pin without confirmedAt, R34) / replaced /
+ * untrusted. Compromised wins if the key is saved more than once, then a confirmed active pin. */
 export async function trustForKey(publicKey, { storage = globalThis.localStorage, cryptoObject = globalThis.crypto } = {}) {
   let fingerprint;
   try { fingerprint = await fingerprintHex(publicKey, cryptoObject); } catch { return { status: 'untrusted', fingerprint: '' }; }
   if (weakPublicKey(parseHex(String(publicKey).trim().toLowerCase(), 32))) return { status: 'weak', fingerprint };
   const matches = read(storage).filter((entry) => entry.fingerprint === fingerprint);
-  for (const [status, result] of [['compromised', 'compromised'], ['active', 'trusted'], ['replaced', 'replaced']]) {
-    const entry = matches.findLast((item) => item.status === status);
+  for (const [test, result] of [[(e) => e.status === 'compromised', 'compromised'], [(e) => e.status === 'active' && e.confirmedAt, 'trusted'], [(e) => e.status === 'active', 'unconfirmed'], [(e) => e.status === 'replaced', 'replaced']]) {
+    const entry = matches.findLast(test);
     if (entry) return { status: result, entry, fingerprint };
   }
   return { status: 'untrusted', fingerprint };
