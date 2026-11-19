@@ -132,8 +132,9 @@ try {
     assert.equal(await page.getByLabel(/Status/).count(), 0, 'flag off: no status filter');
     await layout(page, 'jobs list', [320, 390, 768, 1440]);
     await page.setViewportSize({ width: 320, height: 900 }); await frame(page);
-    const order = await page.locator('.jobs-table tbody tr').first().evaluate((tr) => ['.jobs-name', '.jobs-ref', '.jobs-status', '.jobs-when', '.jobs-actions'].map((c) => tr.querySelector(c)).filter((el) => !el.classList.contains('jobs-ref-empty')).map((el) => el.getBoundingClientRect().top));
-    assert.deepEqual([...order].sort((x, y) => x - y), order, `320px: package, job ref, status, time, actions (${order})`);
+    const orders = await page.locator('.jobs-table tbody tr').evaluateAll((trs) => trs.map((tr) => ['.jobs-name', '.jobs-ref', '.jobs-status', '.jobs-when', '.jobs-actions'].map((c) => tr.querySelector(c)).filter((el) => !el.classList.contains('jobs-ref-empty')).map((el) => el.getBoundingClientRect().top)));
+    assert.ok(orders.some((o) => o.length === 5), 'at least one row has a job reference');
+    for (const order of orders) assert.deepEqual([...order].sort((x, y) => x - y), order, `320px, every row: package, job ref, status, time, actions (${order})`);
     const empty = page.locator('.jobs-table .jobs-ref-empty');
     assert.ok(await empty.count(), 'the list has a job without a job reference');
     assert.deepEqual(await empty.evaluateAll((cells) => cells.map((c) => [getComputedStyle(c).display !== 'none', c.getBoundingClientRect().height <= 1, c.parentElement.cells.length])), (await empty.evaluateAll((c) => c.map(() => [true, true, 5]))), '320px: an empty job ref is hidden visually but stays a cell, so screen readers keep five cells under five headers');
