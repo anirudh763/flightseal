@@ -406,3 +406,22 @@ test("checkReceipts refuses a weak trusted key with a clear error, and a real ke
   const check = await checkReceipts(real, key, full);
   assert.equal(summarize(full, check).result, "INTACT");
 });
+
+test("cross-format: a company-key signature over the key-enroll challenge never checks as a receipt", async () => {
+  assert.ok(await ed25519Supported(), "this check needs Ed25519 in WebCrypto");
+  const pair = await crypto.subtle.generateKey({ name: "Ed25519" }, false, ["sign", "verify"]);
+  const key = new Uint8Array(await crypto.subtle.exportKey("raw", pair.publicKey));
+  const challenge = new TextEncoder().encode(`hashwing-key-enroll v1\norgK\n${"0123456789abcdef".repeat(2)}`);
+  const challengeSig = new Uint8Array(await crypto.subtle.sign({ name: "Ed25519" }, pair.privateKey, challenge));
+  const head = new Uint8Array(32);
+  const receiptMsg = new Uint8Array(16 + 8 + 32); // "fseal-receipt v1" + count (LE 8) + head; count 0
+  receiptMsg.set(new TextEncoder().encode("fseal-receipt v1"), 0);
+  const receiptSig = new Uint8Array(await crypto.subtle.sign({ name: "Ed25519" }, pair.privateKey, receiptMsg));
+  const scan = { status: "ok", records: 0, links: new Map() };
+  const forged = await checkReceipts([{ count: 0n, head, key, sig: challengeSig }], key, scan);
+  assert.equal(forged.results[0].result, "bad-signature");
+  assert.equal(forged.results[0].sigChecked, true);
+  const genuine = await checkReceipts([{ count: 0n, head, key, sig: receiptSig }], key, scan);
+  assert.equal(genuine.results[0].result, "ok");
+  assert.equal(genuine.results[0].sigChecked, true);
+});

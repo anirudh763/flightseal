@@ -285,7 +285,7 @@ function createRegistry() {
     unsavedCount: () => state.pending.filter(unsaved).length,
   };
 }
-const useRegistry = () => { const r = getRegistry(); return [r, useSyncExternalStore(r.subscribe, r.snapshot)]; };
+export const useRegistry = () => { const r = getRegistry(); return [r, useSyncExternalStore(r.subscribe, r.snapshot)]; };
 const exportText = (receipts) => JSON.stringify({ format: 'hashwing-outbox-export', version: 1, receipts }, null, 2) + '\n';
 /** How many unsent proofs this tab holds in memory only (lost on reload unless exported). */
 export function useRegistryUnsent() { const [r] = useRegistry(); return r.unsavedCount(); }

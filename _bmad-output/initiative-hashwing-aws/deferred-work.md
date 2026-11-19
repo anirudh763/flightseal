@@ -28,3 +28,9 @@
 - source_plan: `_bmad-output/initiative-hashwing-aws/plan-fix-lost-work.md`
   summary: (PR #37 review 10, 3) Untested: a denied IndexedDB open (falls back to memory, covered only by the no-IndexedDB test), clipboard or download failure on the kept-work paths, the per-file buttons after a zip failure, and the retry of an owner's pending proof when its full queue gains room (needs a registry that acks; code calls flushOwned on every outbox change). A failed pending-store write (quota) is covered by registry-session.
   evidence: registry-session.test.mjs "the pending store refuses a full store…".
+- source_plan: `_bmad-output/initiative-hashwing-aws/plan-trust-company-keys.md`
+  summary: The flag-off Trust and limits sentence "Company sign-in isn't part of this copy of HashWing." (AC-50, design §6) is not added: it changes flag-off text, which the plan keeps unchanged.
+  evidence: plan "Never" list; `newweb/tests/registry-wiring.mjs` flag-off check asserts the Trust headings only.
+- source_plan: `_bmad-output/initiative-hashwing-aws/plan-trust-company-keys.md`
+  summary: RESOLVED by rewording: the compromise dialog now says "Older proofs from it show a warning once the people who check them mark it compromised too." It used to say "Older proofs from it will show a warning." (plan copy), but Verify does not read registry key state, so a recipient sees that warning only after marking the key compromised in their own Trusted companies list (R35, design PR 2).
+  evidence: `newweb/src/company-keys.jsx` compromise dialog; `recipient-trust.mjs` and `trusted-keys.mjs` unchanged.
