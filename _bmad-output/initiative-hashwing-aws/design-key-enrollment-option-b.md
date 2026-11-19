@@ -261,6 +261,7 @@ line, which comes from this device's outbox.
 
 ## 10. Test plan
 
+- **Cross-format rule (all PRs):** every signed format has its own fixed prefix (`fseal-receipt v1`, `hashwing-key-enroll v1`, the pilot challenge, `hashwing-pilot-authorization v1`), and each verifier rejects any other prefix. Test: a company-key signature over a challenge and over an authorization each fail as a receipt (Python `receipt.py` and the browser verifier), and a receipt signature fails as an authorization.
 **PR 1, registry pytest:** compromise twice → second is 200 with the same `changed_at` and no new write; `list_keys`
 has `enrolled_by_me` and never a `sub`; member gets 403 on challenge, enroll and compromise; another org's fingerprint
 is 404; retry after a lost enroll response → 409 `key_exists` and the list shows it `active`; private-key fields refused; `GET /v1/keys` pages past 50 and returns `active_key`.
@@ -304,7 +305,7 @@ registered → Verify on a constant-on build.
 4. Pilot key cap per org (50 `[ASSUMPTION]`).
 
 ### Defaults taken 2026-11-19 (the owner asked not to wait on these; each can be changed)
-1. Authorization lifetime: 14 days default, 30 days maximum, as designed. The owner can change it before Option B is switched on; both switches stay off until then.
+1. Authorization lifetime: 14 days default, 30 days maximum, as designed. Neither switch (`PILOT_KEYS_ORGS`, `PILOT_AUTHORIZATION_ACCEPTED`) is turned on outside tests and local development without the owner's explicit yes. In plain words, the trade-off the owner must accept: a stolen or retired pilot key can still read "Verified" until its authorization lapses, and an honest pilot-signed proof drops from "Verified" to "signer not confirmed" once its authorization lapses (14 days by default).
 2. A "removed or marked compromised" signal for recipients: yes, lower-only, on the share view. Not in PRs 1 to 3; listed as a follow-up.
 3. Other admins are told when the company key is replaced or marked compromised: yes, in the app's key list (no email or outside message).
 4. Caps: 50 pilot keys per company, 500 entries in a recipient's compromised list.
