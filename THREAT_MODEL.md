@@ -102,7 +102,8 @@ file names, manifests, salts, per-file digests, GPS or notes.
 | Reuse an authorization in another org | refused unless that org's active company key is the same key | `company_key` must be the org's `ACTIVE_KEY` |
 | Reuse a signature across formats | refused | distinct prefixes: `fseal-receipt v1`, `hashwing-key-enroll v1`, `hashwing-pilot-key-enroll v1`, `hashwing-pilot-authorization v1`; tested with one key in every checker |
 | Enroll a weak pilot key, or the company key as a pilot key | refused (422) | weak keys fail the challenge signature and the authorization check; `pilot_key` equal to `company_key` is `bad_authorization` |
-| Exceed 50 pilot keys under concurrent enrolls | refused (409 `pilot_key_limit`) | `PILOT_COUNT` is incremented in the enroll transaction with condition `n < 50` |
+| Exceed 50 pilot keys under concurrent enrolls | refused (409 `pilot_key_limit`) | `PILOT_COUNT` is incremented in the enroll transaction with condition `n < 50`; only usable pilot keys hold a slot (ended or orphaned ones are retired, one conditional transaction each, when an enroll hits the cap), so the count always equals the active pilot keys and two racing enrolls never share one freed slot |
+| Block revocation by switching an org off | refused | retire and compromise ignore `PILOT_KEYS_ORGS`; switching off frees no slots and changes no key |
 | Keep using an envelope after a pilot leaves | stopped | `POST /v1/epoch` invalidates every outstanding envelope |
 | Replay a registration to resurrect a withdrawn share or a deleted registration | no effect | a retry returns the original ack (or 410) and never creates a share |
 | Restore an old backup to bring back withdrawn shares | refused until tombstones are applied | `RESTORED_FROM` closes every route (503) until `apply_tombstones` writes its marker |

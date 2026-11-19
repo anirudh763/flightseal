@@ -116,6 +116,11 @@ idempotency key, which returns the original ack.
 | 429 `quota_exceeded` (the org's monthly quota) | `needs_attention`, `quota_exceeded`, message "Your company's monthly registration limit is reached; this proof is saved and can be exported" | final for the month: no automatic retry; `retryNow(id)` tries again (for example next month) |
 | 503, any other 429 (API Gateway throttling), other 5xx, network error, timeout, a 2xx that is not a readable JSON ack (`bad_response`) | `waiting_for_connection`, `attempts + 1` | backoff: d = min(15 min, 2 s · 2^(n-1)), delay in [d/2, d]; after 10 attempts `needs_attention`, `attempts_exhausted` (retryable) |
 
+Server half of `Retry-After` (ledger R74): the registry sends it in whole seconds on every 503 (30) and on 429
+`quota_exceeded` (seconds until the next UTC month), and exposes it to the console's origin
+(`Access-Control-Expose-Headers: retry-after`). API Gateway's own throttling 429 does not carry it. The outbox on
+main does not read it yet; the backoff above applies.
+
 `retryNow()` with no id sends every queued row now, ignoring backoff and `navigator.onLine`. The outbox also
 dispatches on open and on the `online` event. It never creates or retries a share. It mints a new envelope only for
 a row that has none yet, as a once-per-open prefetch, or through an explicit `retryNow(id)` after one of the three

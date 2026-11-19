@@ -24,8 +24,10 @@ WEAK = bytes([1]) + bytes(31)  # the identity point: small order
 OFF_CURVE = (2**255 - 21).to_bytes(32, "little")  # canonical y = p - 2, but no x: the not_weak control of ed25519-weak-keys.json
 DEFAULT = NOW + pa.DEFAULT_DAYS * pa.DAY
 
-HOW = ("For each case: find the lines of `line` that start with `line_prefix` without its trailing space. None: no "
-       "authorization. More than one, or one not exactly `line_prefix` + base64url + '.' + sig: reason malformed. "
+HOW = ("For each case: find the lines of `line` that start with `line_prefix` without its trailing space, at the very "
+       "first character of the line (no trimming: a line with any character before it, even a space, is not an "
+       "authorization line). None: no authorization, so `found` is false and nothing is authorized (signer not "
+       "confirmed); `found` is true otherwise. More than one, or one not exactly `line_prefix` + base64url + '.' + sig: reason malformed. "
        "Otherwise check the base64url and sig against `pilot_key` (the key being authorized), `company_key` (the "
        "expected company key) and `now` (the checker's own clock, epoch seconds), testing `reasons` in order: "
        "malformed unless the authorization is base64url without padding that decodes to exactly the four canonical "
@@ -39,14 +41,14 @@ HOW = ("For each case: find the lines of `line` that start with `line_prefix` wi
 
 
 def case(name, reason, *, signer=COMPANY, pilot=P, company=C, not_after=DEFAULT, text=None, auth=None, sig=None,
-         line=None, expect_pilot=P, expect_company=C):
+         line=None, expect_pilot=P, expect_company=C, found=True):
     text = text if text is not None else pa.statement(pilot, company, not_after)
     auth = auth if auth is not None else pa.encode(text)
     sig = sig if sig is not None else ed25519.sign(signer, text).hex()
     return {"name": name, "authorization": auth, "authorization_sig": sig,
             "line": line if line is not None else pa.to_line(auth, sig), "signed_text": text.decode("ascii"),
             "pilot_key": expect_pilot.hex(), "company_key": expect_company.hex(), "now": NOW,
-            "reason": reason, "registry_error": pa.REGISTRY_ERROR.get(reason)}
+            "found": found, "reason": reason, "registry_error": pa.REGISTRY_ERROR.get(reason)}
 
 
 def cases():
@@ -94,6 +96,7 @@ def cases():
         case("pilot key not a curve point", "weak_pilot_key", pilot=OFF_CURVE, expect_pilot=OFF_CURVE),
         case("pilot key equals company key", "same_key", pilot=C, expect_pilot=C),
         case("two authorization lines in one message", "malformed", text=good, sig=good_sig, line=two + "\n" + two),
+        case("leading space before the line", None, line=" " + two, found=False),
     ]
 
 

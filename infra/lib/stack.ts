@@ -212,6 +212,8 @@ export class RegistryStack extends Stack {
         allowMethods: [apigw.CorsHttpMethod.GET, apigw.CorsHttpMethod.POST, apigw.CorsHttpMethod.DELETE,
           apigw.CorsHttpMethod.OPTIONS],
         allowHeaders: ['authorization', 'content-type', 'idempotency-key'],
+        // The app sends Retry-After on its 429/503; API Gateway's own throttling 429 does not carry it.
+        exposeHeaders: ['retry-after'],
         allowCredentials: false,
         maxAge: Duration.minutes(10),
       },

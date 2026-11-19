@@ -62,10 +62,8 @@ def test_switch_off_answers_pilot_keys_off_before_schema_and_writes_nothing(valu
     app, table, clock = make_app(**env)
     enroll(app, clock)
     before = copy.deepcopy(table.items)
-    for method, path, tok in (("GET", "/v1/pilot-keys/challenge", token(clock)),
-                              ("POST", "/v1/pilot-keys", token(clock)),
-                              ("POST", f"/v1/pilot-keys/{FP[SEED_B]}/retire", _admin(clock))):
-        s, out, _ = call(app, method, path, tok, raw="{not json")
+    for method, path in (("GET", "/v1/pilot-keys/challenge"), ("POST", "/v1/pilot-keys")):
+        s, out, _ = call(app, method, path, token(clock), raw="{not json")
         assert (s, out) == (403, {"error": "pilot_keys_off"}), (value, path)
     assert table.items == before
     assert call(app, "GET", "/v1/keys", token(clock))[1]["pilot_keys"] is False
@@ -567,3 +565,236 @@ def test_restore_refuses_a_kind_disagreement_and_keeps_the_gate_closed(where):
     with pytest.raises(ValueError):
         _restore(live, backup)
     assert ("SYSTEM", "RESTORE") not in backup.items
+
+
+# ------------------------------------------------------------ slots: only usable pilot keys hold one (design §4.2)
+
+def _active_pilots(table, org="orgA"):
+    return sum(1 for (pk, sk), v in table.items.items() if pk == f"ORG#{org}" and sk.startswith("KEY#")
+               and v.get("kind") == "pilot" and v["state"] == "active")
+
+
+def _invariant(table, org="orgA"):
+    """PILOT_COUNT.n is exactly the number of active pilot keys, after every operation."""
+    assert _count(table, org) == _active_pilots(table, org)
+    return _count(table, org)
+
+
+def _state(table, seed):
+    return table.items[("ORG#orgA", "KEY#" + _fp(seed))]["state"]
+
+
+def _fill(app, clock, seeds, days=14, company_seed=SEED_A):
+    for s in seeds:
+        assert pilot_enroll(app, clock, s, days=days, company_seed=company_seed)[0] == 201
+
+
+FULL = [_seed(100 + i) for i in range(50)]
+EXPIRED = FULL[0]
+
+
+def _at_cap_with_one_ended(app, clock):
+    """50 active pilot keys: FULL[0]'s authorization has ended (1 day), the other 49 are still usable."""
+    _fill(app, clock, FULL[:1], days=1)
+    _fill(app, clock, FULL[1:])
+    clock.t += DAY
+
+
+def _key_and_tomb_items(table):
+    return {k: v for k, v in _keys(table).items() if not k[1].startswith("CHAL#")}
+
+
+def test_renewal_cycles_never_fill_the_cap():
+    """10 pilots each renew with a new key every 14 days for 8 cycles (80 keys): every enroll succeeds."""
+    app, table, clock = _world()
+    seeds = []
+    for cycle in range(8):
+        for p in range(10):
+            seed = _seed(100 + cycle * 10 + p)
+            assert pilot_enroll(app, clock, seed, sub=f"pilot-{p}")[0] == 201, (cycle, p)
+            seeds.append(seed)
+            assert _invariant(table) <= 50
+        clock.t += 14 * DAY  # this cycle's keys have now ended (not_after == registry clock)
+    retired = [s for s in seeds if _state(table, s) == "retired"]
+    assert retired == seeds[:50]  # the first enroll past the cap freed every ended key, and only those
+    for s in retired:
+        tomb = table.items[(f"TOMB#orgA#KEY#{_fp(s)}", "TOMB")]
+        key = table.items[("ORG#orgA", "KEY#" + _fp(s))]
+        assert (tomb["state"], tomb["key_kind"], tomb["not_after"]) == ("retired", "pilot", key["not_after"])
+        assert key["not_after"] <= key["changed_at"]  # retired only once its authorization had ended
+    assert _invariant(table) == 30
+
+
+def test_fifty_usable_keys_hold_the_cap_and_nothing_is_retired():
+    app, table, clock = _world()
+    _fill(app, clock, FULL)
+    clock.t += 14 * DAY - 1  # one second before they end: all still usable
+    before = _key_and_tomb_items(table)
+    assert pilot_enroll(app, clock, _seed(200))[:2] == (409, {"error": "pilot_key_limit"})
+    assert _key_and_tomb_items(table) == before
+    assert _invariant(table) == 50
+
+
+def test_an_ended_key_frees_its_slot():
+    app, table, clock = _world()
+    _at_cap_with_one_ended(app, clock)
+    assert pilot_enroll(app, clock, _seed(200))[0] == 201
+    assert _state(table, EXPIRED) == "retired"
+    assert table.items[("ORG#orgA", "KEY#" + _fp(EXPIRED))]["changed_at"] == clock.t
+    assert table.items[("ORG#orgA", "KEY#" + _fp(EXPIRED))]["not_after"] == T0 + DAY  # never changed
+    tomb = table.items[(f"TOMB#orgA#KEY#{_fp(EXPIRED)}", "TOMB")]
+    assert (tomb["state"], tomb["at"], tomb["company_fp"]) == ("retired", clock.t, FP[SEED_A])
+    assert all(_state(table, s) == "active" for s in FULL[1:])
+    assert _invariant(table) == 50
+
+
+@pytest.mark.parametrize("change", ["rotated", "compromised"])
+def test_a_replaced_or_compromised_company_key_frees_its_pilots_slots(change):
+    app, table, clock = _world()
+    _fill(app, clock, FULL)
+    if change == "rotated":
+        assert enroll(app, clock, seed=SEED_C, confirm=True)[0] == 201
+    else:
+        assert call(app, "POST", f"/v1/keys/{FP[SEED_A]}/compromised", _admin(clock), {})[0] == 200
+        assert enroll(app, clock, seed=SEED_C)[0] == 201
+    assert pilot_enroll(app, clock, _seed(200), company_seed=SEED_C)[0] == 201
+    assert all(_state(table, s) == "retired" for s in FULL)
+    assert _state(table, _seed(200)) == "active"
+    assert _invariant(table) == 1
+
+
+def test_a_reclaimed_key_never_comes_back():
+    app, table, clock = _world()
+    _at_cap_with_one_ended(app, clock)
+    assert pilot_enroll(app, clock, _seed(200))[0] == 201
+    assert pilot_enroll(app, clock, EXPIRED)[:2] == (409, {"error": "key_exists"})
+    assert register(app, token(clock), line(EXPIRED, 3))[:2] == (403, {"error": "key_not_active"})
+    assert _no_reg(table) and _invariant(table) == 50
+
+
+@pytest.mark.parametrize("where", ["enroll", "reclaim"])
+def test_racing_enrolls_at_the_cap_take_one_freed_slot(where):
+    """49 usable + 1 ended. The second enroll commits between the first one's reads and its enroll (or its reclaim)
+    transaction: exactly one of them gets the freed slot."""
+    app, table, clock = _world()
+    _at_cap_with_one_ended(app, clock)
+    real, inner = table.transact, []
+
+    def racing(ops):
+        hit = ops[0]["op"] == "delete" if where == "enroll" else ops[0].get("set", {}).get("state") == "retired"
+        if hit:
+            table.transact = real
+            inner.append(pilot_enroll(app, clock, _seed(201), sub="pilot-2")[:2])
+        return real(ops)
+
+    table.transact = racing
+    outer = pilot_enroll(app, clock, _seed(200))[:2]
+    assert inner[0][0] == 201 and outer == (409, {"error": "pilot_key_limit"})
+    assert ("ORG#orgA", "KEY#" + _fp(_seed(200))) not in table.items
+    assert _state(table, EXPIRED) == "retired"
+    assert _invariant(table) == 50
+
+
+@pytest.mark.parametrize("admin", ["retire", "compromise"])
+def test_an_admin_change_committed_during_a_reclaim_decrements_once(admin):
+    app, table, clock = _world()
+    _at_cap_with_one_ended(app, clock)
+    real, answers = table.transact, []
+    fp = _fp(EXPIRED)
+
+    def racing(ops):  # the admin's change commits between the reclaim's read and its transaction
+        if ops[0]["key"] == ("ORG#orgA", "KEY#" + fp) and ops[0].get("set", {}).get("state") == "retired":
+            table.transact = real
+            if admin == "retire":
+                answers.append(_retire(app, clock, fp))
+            else:
+                answers.append(call(app, "POST", f"/v1/keys/{fp}/compromised", _admin(clock), {})[:2])
+        return real(ops)
+
+    table.transact = racing
+    assert pilot_enroll(app, clock, _seed(200))[0] == 201
+    state = "retired" if admin == "retire" else "compromised"
+    assert answers == [(200, {"key_fingerprint": fp, "state": state, "changed_at": pa.iso(clock.t)})]
+    assert _state(table, EXPIRED) == state
+    assert _invariant(table) == 50
+
+
+def test_a_reclaim_committed_during_a_compromise_never_refuses_it():
+    app, table, clock = _world()
+    _at_cap_with_one_ended(app, clock)
+    real, enrolled = table.transact, []
+    fp = _fp(EXPIRED)
+
+    def racing(ops):  # the reclaim (another pilot's enroll) commits between the compromise's read and its transaction
+        if ops[0].get("set", {}).get("state") == "compromised":
+            table.transact = real
+            enrolled.append(pilot_enroll(app, clock, _seed(200))[0])
+        return real(ops)
+
+    table.transact = racing
+    s, out, _ = call(app, "POST", f"/v1/keys/{fp}/compromised", _admin(clock), {})
+    assert (s, out) == (200, {"key_fingerprint": fp, "state": "compromised", "changed_at": pa.iso(clock.t)})
+    assert enrolled == [201]
+    assert _state(table, EXPIRED) == "compromised"
+    assert table.items[(f"TOMB#orgA#KEY#{fp}", "TOMB")]["state"] == "compromised"
+    assert _invariant(table) == 50
+
+
+@pytest.mark.parametrize("value", [None, ""])
+def test_switch_off_retire_still_works_and_switching_off_frees_nothing(value):
+    app, table, clock = _world()
+    _fill(app, clock, FULL)
+    clock.t += 15 * DAY  # every key has ended, but nothing enrolls while the org is off
+    off = App(table, {k: v for k, v in {**app.env, "PILOT_KEYS_ORGS": value}.items() if v is not None}, clock)
+    for method, path in (("GET", "/v1/pilot-keys/challenge"), ("POST", "/v1/pilot-keys")):
+        assert call(off, method, path, token(clock), {})[:2] == (403, {"error": "pilot_keys_off"})
+    assert all(_state(table, s) == "active" for s in FULL) and _invariant(table) == 50
+    assert _retire(off, clock, _fp(FULL[0])) == (200, {"key_fingerprint": _fp(FULL[0]), "state": "retired",
+                                                       "changed_at": pa.iso(clock.t)})
+    assert _retire(off, clock, _fp(_seed(9))) == (404, {"error": "not_found"})
+    assert all(_state(table, s) == "active" for s in FULL[1:])
+    assert _invariant(table) == 49
+
+
+# ------------------------------------------------------------ restore: items written before pilot keys existed
+
+def test_restore_of_pre_pilot_key_items_and_tombstones_reads_them_as_company_keys():
+    """The shapes written before PR #60 merged (467cd91^1, and 537b937 for the stateless compromise tombstone): KEY
+    items without `kind`, tombstones without `key_kind`. A in the backup and replaced after it; B in the backup and
+    compromised after it (a tombstone with no `state`); C enrolled after the backup (absent from it)."""
+    app, _, clock = make_app()
+    live, backup, t0 = MemoryTable(), MemoryTable(), T0 - 10 * DAY
+    for table in (live, backup):
+        table.items = {
+            ("ORG#orgA", "KEY#" + FP[SEED_A]): {"PK": "ORG#orgA", "SK": "KEY#" + FP[SEED_A], "state": "active",
+                                                 "enrolled_at": t0, "enrolled_by": "admin-1", "changed_at": t0},
+            ("ORG#orgA", "KEY#" + FP[SEED_B]): {"PK": "ORG#orgA", "SK": "KEY#" + FP[SEED_B], "state": "rotated",
+                                                 "enrolled_at": t0 - DAY, "enrolled_by": "admin-1", "changed_at": t0},
+            ("ORG#orgA", "ACTIVE_KEY"): {"PK": "ORG#orgA", "SK": "ACTIVE_KEY", "fp": FP[SEED_A]},
+        }
+
+    def tomb(fp, **fields):
+        live.items[(f"TOMB#orgA#KEY#{fp}", "TOMB")] = {"PK": f"TOMB#orgA#KEY#{fp}", "SK": "TOMB", "kind": "key",
+                                                        "org": "orgA", "ref": fp, **fields}
+
+    tomb(FP[SEED_B], at=t0 + DAY)  # 537b937: compromise, no state
+    tomb(FP[SEED_C], state="active", at=t0 + 2 * DAY, enrolled_at=t0 + 2 * DAY, enrolled_by="admin-2")
+    tomb(FP[SEED_A], state="rotated", at=t0 + 2 * DAY)
+    live.items[("ORG#orgA", "KEY#" + FP[SEED_C])] = {"PK": "ORG#orgA", "SK": "KEY#" + FP[SEED_C], "state": "active",
+                                                      "enrolled_at": t0 + 2 * DAY, "enrolled_by": "admin-2",
+                                                      "changed_at": t0 + 2 * DAY}
+    assert _restore(live, backup) == 3
+    assert backup.items[("SYSTEM", "RESTORE")]["restore_id"] == "r1"
+    keys = {sk[4:]: v for (pk, sk), v in backup.items.items() if sk.startswith("KEY#")}
+    assert {fp: (k["kind"], k["state"]) for fp, k in keys.items()} == {
+        FP[SEED_A]: ("company", "rotated"), FP[SEED_B]: ("company", "compromised"), FP[SEED_C]: ("company", "active")}
+    assert not any("company_fp" in k or "not_after" in k for k in keys.values())
+    assert keys[FP[SEED_C]]["enrolled_by"] == "admin-2"
+    assert backup.items[("ORG#orgA", "ACTIVE_KEY")]["fp"] == FP[SEED_C]
+    assert _count(backup) == 0
+    restored = App(backup, {**app.env, "RESTORED_FROM": "live", "RESTORE_ID": "r1", "TABLE_NAME": "restored"}, clock)
+    s, out, _ = call(restored, "GET", "/v1/keys", token(clock))
+    assert s == 200 and out["active_key"] == FP[SEED_C] and {r["kind"] for r in out["keys"]} == {"company"}
+    assert register(restored, token(clock), line(SEED_C, 3))[0] == 201
+    assert register(restored, token(clock), line(SEED_A, 4), idem="idem-key-0000000002")[:2] == \
+        (403, {"error": "key_not_active"})

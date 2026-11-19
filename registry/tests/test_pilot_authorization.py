@@ -19,12 +19,16 @@ SEED_C = bytes(range(2, 34))
 SEEDS = {ed25519.public_key(s).hex(): s for s in (SEED_A, SEED_B, SEED_C)}
 
 
+NOT_FOUND = object()  # no authorization line: nothing is authorized (signer not confirmed)
+
+
 def evaluate(case):
     try:
         found = pa.parse_line(case["line"])
     except ValueError:
         return "malformed"
-    assert found is not None
+    if found is None:
+        return NOT_FOUND
     return pa.check(*found, bytes.fromhex(case["pilot_key"]), bytes.fromhex(case["company_key"]), case["now"])[0]
 
 
@@ -42,11 +46,14 @@ def test_vector_constants():
 
 @pytest.mark.parametrize("case", VECTORS["cases"], ids=lambda c: c["name"])
 def test_vector(case):
-    assert evaluate(case) == case["reason"]
+    result = evaluate(case)
+    assert (result is not NOT_FOUND) is case["found"]
+    if case["found"]:
+        assert result == case["reason"]
     assert pa.REGISTRY_ERROR.get(case["reason"]) == case["registry_error"]
 
 
-@pytest.mark.parametrize("case", [c for c in VECTORS["cases"] if c["pilot_key"] in SEEDS and "\n" not in c["line"]],
+@pytest.mark.parametrize("case", [c for c in VECTORS["cases"] if c["found"] and c["pilot_key"] in SEEDS and "\n" not in c["line"]],
                          ids=lambda c: c["name"])
 def test_vector_through_the_registry(case):
     """POST /v1/pilot-keys answers each vector's registry_error, with the expected company key as ACTIVE_KEY."""
@@ -68,6 +75,9 @@ def test_vector_through_the_registry(case):
 
 def test_parse_line():
     assert pa.parse_line("no authorization here\n") is None
+    a0, s0 = authorize(SEED_A, ed25519.public_key(SEED_B), 1_800_000_000)
+    for indent in (" ", "\t", "x"):  # only a line that starts exactly with the prefix counts; no trimming
+        assert pa.parse_line(indent + pa.to_line(a0, s0)) is None
     a, s = authorize(SEED_A, ed25519.public_key(SEED_B), 1_800_000_000)
     assert pa.parse_line("note\n" + pa.to_line(a, s)) == (a, s)
     for bad in ("Authorized by company key:abc." + "0" * 128, "Authorized by company key: a.b.c",
