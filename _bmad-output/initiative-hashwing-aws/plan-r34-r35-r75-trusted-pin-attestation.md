@@ -14,8 +14,8 @@ lenses_ran: [quick]
 review_loop_iteration: 0
 followup_review_recommended: false
 context:
-  - '/private/tmp/claude-501/-Users-anirudhyadav/d85e4c7d-ebdd-49d1-8c47-0eace70cc60c/scratchpad/wt-pins/AGENTS.md'
-  - '/private/tmp/claude-501/-Users-anirudhyadav/d85e4c7d-ebdd-49d1-8c47-0eace70cc60c/scratchpad/wt-pins/_bmad-output/initiative-hashwing-aws/design-key-enrollment-option-b.md'
+  - '{project-root}/AGENTS.md'
+  - '{project-root}/_bmad-output/initiative-hashwing-aws/design-key-enrollment-option-b.md'
 warnings: [multiple-goals]
 deferred:
   - summary: >-
@@ -97,6 +97,7 @@ deferred:
 
 - Implemented by the step-03 subagent as planned. Beyond the plan: the tick clears when the key or fingerprint changes (and, after review, when the source changes); the legacy hint and Confirm button hide for a key already marked compromised; console.mjs drives the legacy pin -> signer not confirmed -> Confirm -> Verified flow with axe.
 - R35 and R75 needed no product code; their tests also pass on the baseline.
+- Final check: the checkbox uses the spec's sentence "I confirmed this fingerprint through a channel I already knew" (EXPERIENCE.md Trust layout) on both forms; AC-12 lists the unconfirmed line; console.mjs adds the R75 wording guard on the small-file Verify screen and reports.
 - Merged origin/main 467cd91 (PRs #59, #60); ledger R35 conflict resolved by keeping the server evidence from #60 and adding the client evidence.
 
 ## Plan Change Log

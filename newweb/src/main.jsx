@@ -2092,7 +2092,7 @@ function TrustedKeyPinControls({ value, onUse, idPrefix = 'trusted-key' }) {
     <input id={`${idPrefix}-name`} value={name} maxLength={80} onChange={(event) => setName(event.target.value)} placeholder="For example, Flight recorder 1" />
     <label className="field-label" htmlFor={`${idPrefix}-source`}>Where did you get this key?</label>
     <select id={`${idPrefix}-source`} required value={source} onChange={(event) => { setSource(event.target.value); setConfirmed(false); }}><option value="">Choose a source</option>{PICKABLE_SOURCES.map(([key, label]) => <option key={key} value={key}>{label}</option>)}</select>
-    <label className="check-row" htmlFor={`${idPrefix}-confirmed`}><input id={`${idPrefix}-confirmed`} type="checkbox" checked={confirmed} onChange={(event) => setConfirmed(event.target.checked)} />I confirmed this fingerprint myself, through the channel above, not from the message that came with the file</label>
+    <label className="check-row" htmlFor={`${idPrefix}-confirmed`}><input id={`${idPrefix}-confirmed`} type="checkbox" checked={confirmed} onChange={(event) => setConfirmed(event.target.checked)} />I confirmed this fingerprint through a channel I already knew</label>
     <button className="button secondary" type="button" disabled={!value || !name.trim() || !source || !confirmed} onClick={() => save()}>Pin public key on this device</button>
     {confirm && <ConfirmBox text={confirm} confirmLabel="Replace key" cancelLabel="Keep current key" onConfirm={() => save(true)} onCancel={() => setConfirm('')} />}
     <p>Pinning is your local trust decision. Confirm every key rotation independently; a fingerprint is not a verified pilot identity.</p>
@@ -2145,7 +2145,7 @@ function TrustedCompanies() {
       <fieldset className="source-choice" ref={sourceChoice}><legend>Where did you get this fingerprint?</legend>
         {PICKABLE_SOURCES.map(([key, label]) => <label key={key} className="check-row"><input type="radio" name="tc-source" value={key} required checked={source === key} onChange={() => { setSource(key); setConfirmed(false); }} />{label}</label>)}
       </fieldset>
-      <label className="check-row" htmlFor="tc-confirmed"><input id="tc-confirmed" type="checkbox" checked={confirmed} onChange={(event) => setConfirmed(event.target.checked)} />I confirmed this fingerprint myself, through the channel above, not from the message that came with the file</label>
+      <label className="check-row" htmlFor="tc-confirmed"><input id="tc-confirmed" type="checkbox" checked={confirmed} onChange={(event) => setConfirmed(event.target.checked)} />I confirmed this fingerprint through a channel I already knew</label>
       <button className="button primary" type="submit">Add company</button>
     </form>
     {pending?.kind === 'replace' && <ConfirmBox text={pending.text} confirmLabel="Replace key" cancelLabel="Keep current key" onConfirm={() => add(true)} onCancel={() => setPending(null)} />}

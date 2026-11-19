@@ -1162,7 +1162,11 @@ try {
     await checkVerdict('', 'Signed by a key marked compromised'); // no company chosen: the rebuilt original exists but is not offered
     await page.waitForSelector('.restored', { timeout: 30000 });
     assert.equal(await page.getByRole('button', { name: 'Download original file' }).count(), 0, 'no original offered under a compromised verdict');
-    await assertOneHeadline('Signed by a key marked compromised');
+    const burnt = await assertOneHeadline('Signed by a key marked compromised');
+    // R75: the small-file screen and reports never say the signature came before (or after) the compromise.
+    const nearCompromise = /\b(before|after|predat\w*|prior to)\b\W+(?:\w+\W+){0,3}compromis|compromis\w*\W+(?:\w+\W+){0,3}(before|after|predat\w*|prior to)\b/i;
+    assert.doesNotMatch(await page.locator('main').innerText(), nearCompromise, 'screen');
+    for (const out of [burnt.text, burnt.markdown, JSON.stringify(burnt.json)]) assert.doesNotMatch(out, nearCompromise, 'report');
 
     // One changed byte inside a sealed chunk: Tampered, and no original is offered.
     const sealedBytes = readFileSync(sealedPath);

@@ -54,7 +54,7 @@ The records written after sealing starts: their contents, their order and their 
   that key would then read as trusted. It can also delete a compromised mark, and a compromised entry that is
   corrupted (for example, its date is missing) is dropped like any malformed entry. The mitigation is a dedicated
   origin for the console (deferred).
-- A pin reads as trusted only with `confirmedAt`, the time the user ticked "I confirmed this fingerprint myself"
+- A pin reads as trusted only with `confirmedAt`, the time the user ticked "I confirmed this fingerprint through a channel I already knew"
   (R34). That tick is the user's own statement, stored in the same `localStorage`; HashWing can't check it, and a
   sibling site can write a "confirmed" pin just as easily (same caveat as above). Pins saved before the tick existed
   read "Files match · signer not confirmed" until re-added with the box ticked. A profile backup does not carry pins

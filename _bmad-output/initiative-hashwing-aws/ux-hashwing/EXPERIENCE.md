@@ -497,8 +497,7 @@ Jobs                                        Saved in this browser only. Not a cl
 ```
 Trust
   Trusted companies       list; [Add company] opens the form: name, fingerprint, where you confirmed it, and the
-                          checkbox "I confirmed this fingerprint myself, through the channel above, not from the
-                          message that came with the file" (unticked by default, required on Add company and on the
+                          checkbox "I confirmed this fingerprint through a channel I already knew" (required; unticked by default, required on Add company and on the
                           check form's pin; unticked: "Tick the box to confirm you checked this fingerprint yourself.").
                           Each row reads "Added from {source} on {date} · confirmed by you on {date}"; an older pin without the
                           tick reads "Not confirmed yet. Add it again above and tick the box." with (Confirm)
@@ -603,7 +602,7 @@ Build status, checked against the code and tests on `main` at e279032 (2026-11-1
 - **AC-09** `partial` With the flag on, Verify opens with "What were you sent?" ("I have a HashWing link" / "I have files"); with the flag off, on the files form (AC-65). The sample demo is reachable from a "Try a sample" link. Not met today: Verify opens with the sample panel; the chooser and the "Try a sample" link are not built.
 - **AC-10** `built` A byte-different file shows "Bytes differ" in the warn style with the exact `BYTES_DIFFER.text`. No surface shows "tampered" for it.
 - **AC-11** `built` Every time row shows its basis line verbatim from `timeFields()`. A negative interval is shown as negative.
-- **AC-12** `built` The trust line strings match `trustLine()` verbatim for trusted, untrusted, replaced, compromised, wrong-key, invalid-signature and weak.
+- **AC-12** `built` The trust line strings match `trustLine()` verbatim for trusted, unconfirmed (a pin saved without the confirmation tick, R34), untrusted, replaced, compromised, wrong-key, invalid-signature and weak.
 - **AC-13** `partial` Every interactive element is at least 44 by 44 px at 320, 768 and 1440 px, except links inside a sentence (WCAG 2.5.8 inline exception). Not met today (UX review of PR #35): `.offline-control-actions .button` is 38px tall (`newweb/src/style.css`, about line 406), a Dismiss button is 40px, and Trust's "Source and issue tracker" link is 18px tall.
 - **AC-14** `built, partly tested` At 320, 768 and 1440 px there is no horizontal page scroll and no clipped control. Fingerprints and SHA-256 values wrap within their cells.
 - **AC-15** `built, untested` Under `forced-colors: active`, every status still shows its word and its distinct shape.
