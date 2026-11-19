@@ -304,6 +304,16 @@ test('applyRegistryRecord: a match keeps the headline; each field mismatch lower
   assert.equal(kept.line.kind, 'warn');
 });
 
+test('applyRegistryRecord: a match line is green only under Verified; beside any other headline it is information', () => {
+  assert.equal(applyRegistryRecord(RESULTS.verified, REC, RCPT).line.kind, 'ok');
+  for (const [key, result] of Object.entries(RESULTS)) {
+    if (key === 'verified') continue;
+    const out = applyRegistryRecord(result, REC, RCPT);
+    assert.equal(out.line.value, "Matches the registry's record", key);
+    assert.equal(out.line.kind, 'info', key);
+  }
+});
+
 test('manifestReport with the record step: the Result line equals the lowered headline in every format, with the record line', () => {
   const args = { sealedName: 'x.manifest.fseal', sources: SOURCES, keyFingerprint: 'b'.repeat(64), head: 'a'.repeat(64), trust: { status: 'trusted', entry: { name: 'Acme', source: 'phone' } }, items: [ITEM('match')], extras: [], locals: [{ name: 'a', sha256: 'a'.repeat(64) }] };
   const cases = [

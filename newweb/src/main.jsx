@@ -1954,6 +1954,7 @@ function App() {
             {checkOptions}
             <button className="button primary" type="button" disabled={!checkFile || !checkText.trim() || !!busy} aria-describedby={checkWhy ? 'check-why' : undefined} onClick={runProtectCheck}>Check files</button>
             {checkWhy && <p id="check-why" className="field-hint">{checkWhy}</p>}
+            {__REGISTRY_URL__ && protectView && !smallVerdict && recordCheck?.pending && <p className="field-hint" role="status">Checking the share link…</p>}
             {smallVerdict && <VerdictBlock result={smallVerdict} focusKey={result} trustHref={workspaceHref('help')} onTrust={toTrust} downloads={smallDownloads} lines={smallLines}>
               <TimeFields fields={resultTimes} />
               {smallRows.length > 0 && <CompareTable rows={smallRows} label="File compared with the receipt" />}
@@ -2694,6 +2695,7 @@ function ManifestCheck({ sealed, text, fromLink, recordCheck, anchor, keyConflic
     <button className="button primary" type="button" disabled={!sealed || !text.trim() || running} aria-describedby={!text.trim() ? 'check-why' : undefined} onClick={run}>Check files</button>
     {!text.trim() && <p id="check-why" className="field-hint">Paste the receipt message</p>}
     {message && <p className="field-hint" role="status">{message}</p>}
+    {__REGISTRY_URL__ && outcome && recordPending && <p className="field-hint" role="status">Checking the share link…</p>}
     {result && <div className="manifest-outcome"><VerdictBlock result={result} focusKey={outcome.focus} trustHref={trustHref} onTrust={onTrust} downloads={outcome.verified ? downloads : []}
       lines={outcome.mismatch ? [['Signature', 'Valid'], ['Trusted company', `Not signed by ${outcome.mismatch}'s key`], ...(TRUST_KIND[outcome.trust.status] === 'bad' ? [['Key trust', <TrustLine trust={outcome.trust} />]] : []), ...recordLines] : outcome.verified ? [['Signature', 'Valid'], ['Key trust', <TrustLine trust={outcome.trust} />], ['Files', <span className="mono-values">{countsLine(comparison.items, comparison.extras)}</span>], ['Receipt coverage', 'All items covered'], ...(registryLine ? [['Registry', registryLine.value]] : []), ...recordLines] : [['Signature', 'Not valid'], ...recordLines]}>
       {outcome.verified && <>

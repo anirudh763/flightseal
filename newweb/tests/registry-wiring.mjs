@@ -28,7 +28,7 @@ const AXE = readFileSync(require.resolve('axe-core/axe.min.js'), 'utf8');
 const FORBIDDEN = ['Company registry', 'Test sign-in', 'Export pending proofs', 'Not sent to the registry yet', 'hashwing-outbox', 'hashwing-pending', 'hashwing-registry-signouts', '/v1/envelopes', '/v1/shares', 'registry-test-secret', 'dev-hs256',
   'REGISTRY_URL', 'execute-api', 'amazonaws.com', '__dev/token', 'Your company\'s keys', '/v1/keys', 'hashwing-key-enroll',
   // AC-37: the share record step (applyRegistryRecord) ships only in registry-on builds.
-  "Matches the registry's record", "Doesn't match the registry's record for this link", "Files match · doesn't match the link", "This link was withdrawn or couldn't be checked", 'Registry record'];
+  "Matches the registry's record", "Doesn't match the registry's record for this link", "Files match · doesn't match the link", "This link was withdrawn or couldn't be checked", 'Registry record', 'Checking the share link'];
 const JWT = /eyJ[\w-]+\.eyJ[\w-]+\./; // any signed token (a pasted dev token is an HS256 JWT)
 const LINK_DEAD = "This link doesn't open. It may have been withdrawn or expired, or it was copied incompletely. Ask the sender for a new link.";
 const SEED_A_PEM = `-----BEGIN PRIVATE KEY-----\n${Buffer.concat([Buffer.from('302e020100300506032b657004220420', 'hex'), Buffer.from([...Array(32).keys()])]).toString('base64')}\n-----END PRIVATE KEY-----\n`;
@@ -624,10 +624,30 @@ try {
       assert.equal(listJson.verdict.key, 'link-mismatch');
       assert.equal(listJson.record.value, "Doesn't match the registry's record for this link");
 
+      // While the record is still loading, the files form says so politely and shows no verdict yet.
+      let release; const held = new Promise((ok) => { release = ok; });
+      const hold = async (route) => { await held; await route.fulfill({ status: 200, contentType: 'application/json', headers: { 'access-control-allow-origin': '*' }, body: JSON.stringify(real) }); };
+      await reviewer.goto('about:blank');
+      await reviewer.route(`${base}/v1/shares/**`, hold);
+      try {
+        await reviewer.goto(shareUrl);
+        await reviewer.getByRole('button', { name: 'Check the files' }).click();
+        await reviewer.locator('#check-file').setInputFiles(flightA.path);
+        await reviewer.locator('#check-text').fill(flightA.handover);
+        await reviewer.getByRole('button', { name: 'Check files' }).click();
+        await reviewer.getByRole('status').filter({ hasText: 'Checking the share link…' }).waitFor({ timeout: 30000 });
+        assert.equal(await reviewer.locator('#verdict-heading').count(), 0, 'no verdict while the record loads');
+        release();
+        await reviewer.locator('#verdict-heading').waitFor({ timeout: 30000 });
+        assert.equal(await reviewer.locator('#verdict-heading').innerText(), 'Verified');
+        assert.equal(await reviewer.getByText('Checking the share link…').count(), 0);
+      } finally { release(); await reviewer.unroute(`${base}/v1/shares/**`, hold); }
+
       r = await checkWith(compromised);
       assert.equal(r.headline, 'Signed by a key marked compromised', r.lines);
       assert.match(r.lines, /Registry record Matches the registry's record/);
       assert.ok((await reportHead())[0].startsWith('Result: Signed by a key marked compromised. '));
+      assert.equal(await reviewer.locator('.verdict-lines .trust-line', { hasText: "Matches the registry's record" }).evaluate((el) => el.classList.contains('info') && !el.classList.contains('ok')), true, 'a match beside a compromised headline is not green');
     } finally { await fresh.close(); }
   });
 

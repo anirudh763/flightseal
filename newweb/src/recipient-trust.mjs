@@ -150,7 +150,8 @@ export function applyRegistryRecord(result, record, receipt) {
   if (!record) return { result, line: { label, value: "This link was withdrawn or couldn't be checked", kind: 'info' } };
   let same = false;
   try { same = !!receipt && record.head === receipt.head && record.key_fingerprint === receipt.fingerprint && BigInt(record.count) === BigInt(receipt.count); } catch { same = false; }
-  if (same) return { result, line: { label, value: "Matches the registry's record", kind: 'ok' } };
+  // Green only under Verified: a match beside any other headline is information, never a mixed signal.
+  if (same) return { result, line: { label, value: "Matches the registry's record", kind: result?.key === 'verified' ? 'ok' : 'info' } };
   const line = { label, value: "Doesn't match the registry's record for this link", kind: 'warn' };
   if (result?.key !== 'verified') return { result, line };
   return { result: { key: 'link-mismatch', headline: "Files match · doesn't match the link", kind: 'warn', sentence: "The files match what was sealed, but not the registry's record for the link you opened. The link may belong to other files.", next: { text: 'Ask the sender for the right link', action: null } }, line };
