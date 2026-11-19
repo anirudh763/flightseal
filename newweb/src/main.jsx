@@ -1951,11 +1951,11 @@ function App() {
           {restored && restored !== 'none' && result === protectResult && <div className="restored">
             <h3>{restored.matches ? 'Original file recovered' : BYTES_DIFFER.title}</h3>
             <dl className="detail-grid"><dt>Name</dt><dd className="wrap">{restored.name}</dd><dt>Size</dt><dd>{fmtBytes(restored.bytes)}</dd><dt>SHA-256</dt><dd><code>{restored.actualSha256}</code></dd></dl>
-            {restored.matches ? offersOriginal(smallVerdict) && <button className="button secondary" type="button" onClick={() => download(restored.name, restored.data, 'application/octet-stream')}><Download aria-hidden="true" size={16} />Download original file</button> : smallVerdict?.key !== 'differ' && <p>{BYTES_DIFFER.text}</p>}
+            {restored.matches ? offersOriginal(smallVerdict) && <button className="button secondary" type="button" onClick={() => download(restored.name, restored.data, 'application/octet-stream')}><Download aria-hidden="true" size={16} />Download original file</button> : smallVerdict && smallVerdict.key !== 'differ' && <p>{BYTES_DIFFER.text}</p>}
             <details className="report-details protect-options"><summary>More options <ChevronDown size={17} aria-hidden="true" /></summary><div className="manifest-options-body">
               <label className="field-label" htmlFor="compare-copy">Compare with a copy you have</label>
               <input id="compare-copy" type="file" onChange={(e) => compareCopy(e.target.files?.[0] || null)} />
-              {copyCompare?.for === result && <div className="compare-result" role="status"><span className={`status-label ${copyCompare.matches ? 'ok' : 'warn'}`}>{copyCompare.matches ? 'Matches' : BYTES_DIFFER.title}</span> <span className="wrap">{copyCompare.name} · {fmtBytes(copyCompare.bytes)}</span><code className="wrap">{copyCompare.sha256}</code>{!copyCompare.matches && smallVerdict?.key !== 'differ' && <p>{BYTES_DIFFER.text}</p>}</div>}
+              {copyCompare?.for === result && <div className="compare-result" role="status"><span className={`status-label ${copyCompare.matches ? 'ok' : 'warn'}`}>{copyCompare.matches ? 'Matches' : BYTES_DIFFER.title}</span> <span className="wrap">{copyCompare.name} · {fmtBytes(copyCompare.bytes)}</span><code className="wrap">{copyCompare.sha256}</code>{!copyCompare.matches && smallVerdict && smallVerdict.key !== 'differ' && <p>{BYTES_DIFFER.text}</p>}</div>}
             </div></details>
           </div>}
           {restored === 'none' && result === protectResult && <p className="field-hint">This log holds decoded flight records rather than a whole sealed file, so there is no original file to download.</p>}

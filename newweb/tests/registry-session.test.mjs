@@ -225,7 +225,7 @@ test('the Verify time row for each state of this device\'s outbox row', () => {
   assert.deepEqual(registryTimeField(base, lines), { value: 'No registry record on this device', basis: 'this device has no registry record for this receipt' });
   assert.deepEqual(registryTimeField({ ...base, owner: null, outbox: null }, lines), { value: 'Not signed in', basis: "sign in to the company registry to see this device's record" });
   // A client who opened a share link has no account and needs none: said calmly, never as "Not signed in".
-  assert.deepEqual(registryTimeField({ ...base, owner: null, outbox: null }, lines, { fromLink: true }), { value: 'No account needed', basis: "a share link shows the registry's record without signing in; this check of your files doesn't use it" });
+  assert.deepEqual(registryTimeField({ ...base, owner: null, outbox: null }, lines, { fromLink: true }), { value: 'No account needed', basis: "opened from a share link; not used in this check" });
   assert.deepEqual(registryTimeField(row({ state: 'registering', label: 'Registering' }), lines, { fromLink: true }), { value: 'Not yet registered', basis: "this device's list: Registering" }, 'a signed-in sender keeps their own record');
   assert.deepEqual(registryTimeField({ ...base, outbox: null, listed: false }, lines), notYet);
   assert.deepEqual(registryTimeField({ ...base, listed: false }, lines), notYet);

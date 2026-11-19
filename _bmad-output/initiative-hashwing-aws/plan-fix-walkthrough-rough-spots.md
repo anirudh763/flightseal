@@ -3,14 +3,14 @@ title: 'Walkthrough rough spots: one Files differ note, bar link fits at 320px, 
 type: bugfix
 ticket: ''
 created: '2026-11-19'
-status: in-review
+status: built
 baseline_revision: '56fc2192098eefae77ce2e578cd43c32e237ccbd'
 route: oneshot
 route_source: auto
 risk: medium
-review: ''
-review_source: ''
-lenses_ran: []
+review: quick
+review_source: pinned
+lenses_ran: [quick]
 review_loop_iteration: 0
 followup_review_recommended: false
 context: ['{project-root}/AGENTS.md']
@@ -39,6 +39,26 @@ Results: before the fix, the new checks failed on the baseline: manifest-mode (2
 Surprise: the 320px truncation was a 0.3px overflow (label 112.3px in a 112px box), so wrapping fixes it at any font metric rather than nudging the max-width.
 
 Docs: docs/OUTBOX.md and ux-hashwing/EXPERIENCE.md name the new "No account needed" line; the initiative open-items list marks four of five items fixed ("Sealed locally" in Jobs stays open).
+
+## Review Triage Log
+
+### 2026-11-19 — Review pass
+- verdicts: 6 findings — high 0, medium 0, low 5, false 0, maybe-false 1
+- findings:
+  - `[maybe-false]` `[reject]` Cross-tab: a second tab on the same profile could recreate the jobs DB after removal — that tab's logoutFromAnotherTab runs keepUnsavedThenClear → clearSensitiveWorkspace, which bumps runRef/protectRunRef and aborts the controller (small seal stops at its next op check) and remounts ManifestSeal (unmount aborts it). Only a write already past those checks could slip through; settling it needs a two-tab timing test. If real it is low, so rejected with this note.
+  - `[low]` `[patch]` registry-wiring client-result screenshots taken before the registry line settled — moved the screenshots after the "No account needed" assertions.
+  - `[low]` `[patch]` bar-link fit not checked at 768px — loop now covers 320/768/1440.
+  - `[low]` `[patch]` new basis text narrated the interface (owner copy rule) — shortened to "opened from a share link; not used in this check".
+  - `[low]` `[patch]` docs/OUTBOX.md option list read wrongly — reworded as three parallel options.
+  - `[low]` `[patch]` small-file restored/copy box could show the explanation before the verdict appeared, then hide it — now shown only once a non-differ verdict exists.
+
+## Auto Run Result
+
+- Summary: Verify shows the Files differ explanation once; the flag-on bar link wraps at 320px instead of truncating; a signed-out client with a share link reads "Registry: No account needed"; removing a profile marks its jobs scope removed before closing the store so late seals cannot recreate its jobs DB.
+- Files: newweb/src/main.jsx (items 1, 3, 4), newweb/src/registry-ui.jsx (item 3 wording), newweb/src/style.css (item 2), newweb/tests/{console,manifest-mode,jobs,registry-wiring}.mjs and registry-session.test.mjs (tests), docs/OUTBOX.md and ux-hashwing/EXPERIENCE.md (wording), initiative open items, docs/console rebuilt.
+- Review: 5 low patches applied, 0 deferred, 1 rejected (cross-tab, maybe-false, reason above). followup_review_recommended: false (no high, fewer than two medium patched).
+- Verification: test:browser 64 ok (console+manifest-mode 51, jobs 13/13); one earlier run timed out once in the console "one task at a time" check waiting for #handover-text and passed on rerun (it doesn't touch the changed lines); registry-wiring 29/29; profiles 8/8; newweb unit tests 65/65; tests/web 146/146. New checks failed on the baseline before the fix.
+- Residual risk: the cross-tab removal case is untested.
 
 ## Verification
 
