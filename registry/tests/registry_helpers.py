@@ -11,6 +11,7 @@ sys.path.insert(0, str(ROOT / "registry"))
 
 from registry import ed25519, receipt  # noqa: E402
 from registry.app import App  # noqa: E402
+from registry.enroll_challenge import bytes_to_sign  # noqa: E402
 from registry.identity import make_dev_token  # noqa: E402
 from registry.store import MemoryTable  # noqa: E402
 
@@ -62,7 +63,7 @@ def enroll(app, clock, seed=SEED_A, org="orgA", confirm=None):
     s, ch, _ = call(app, "GET", "/v1/keys/challenge", admin)
     assert s == 200, ch
     body = {"public_key": ed25519.public_key(seed).hex(), "nonce": ch["nonce"],
-            "signature": ed25519.sign(seed, ch["message"].encode()).hex()}
+            "signature": ed25519.sign(seed, bytes_to_sign(org, ch)).hex()}
     if confirm is not None:
         body["confirm_replace"] = confirm
     return call(app, "POST", "/v1/keys", admin, body)

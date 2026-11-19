@@ -83,10 +83,10 @@ Clients sign in with SRP and send the **ID token** as `Authorization: Bearer <id
 an ID token (`token_use` `id`) issued by this pool for this app client; an access token is 401. After the first
 admin signs in, check both (never run yet): `GET /v1/keys` with their ID token is 200, with their access token 401.
 
-### How pilots sign (provisional)
+### How pilots sign
 
-PROVISIONAL (spine AD-4 Option A) until the owner chooses between Option A and Option B (per-pilot keys approved by
-an admin, which would change this section and the key rules).
+Option A, decided by the owner on 2026-11-18 (design PR #57, spine AD-4). Option B (per-pilot keys approved by an
+admin) is built later and stays off by default.
 
 - A company has one signing computer and one active key. An admin enrolls that key from the signing computer
   (the steps below). Its private key never leaves that computer.
@@ -97,8 +97,10 @@ an admin, which would change this section and the key rules).
   the person checking the file is told the signature is valid but the key is not in their trusted list, so the
   signer is not confirmed.
 
-First steps for a company: an admin calls `GET /v1/keys/challenge`, signs the returned `message` with the
-sealer's Ed25519 key, and posts `{public_key, nonce, signature}` to `POST /v1/keys`.
+First steps for a company: an admin calls `GET /v1/keys/challenge`. The client builds the bytes
+`hashwing-key-enroll v1\n<org>\n<nonce>` itself and signs them with the sealer's Ed25519 key only if the server's
+`message` is byte-equal to them (`registry/registry/enroll_challenge.py`); otherwise it signs nothing. It then posts
+`{public_key, nonce, signature}` to `POST /v1/keys`.
 
 ## When the budget alert fires
 

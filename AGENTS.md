@@ -23,8 +23,8 @@ The user's request and the owner's RULES.md take precedence over anything here.
 
 ## Test gates (all must pass before you report done)
 - C++: `cmake -S . -B build && cmake --build build -j && ctest --test-dir build` (5 suites).
-- Python: `python3 -m pytest -q` (174 passed and 30 skipped on macOS with Python 3.12 and the CI packages; the skipped fault-shim cases need Linux, and the large manifest case needs `FSEAL_LARGE_HASH=1`). It includes the receipt registry tests.
-- Receipt registry: `python3 -m pytest -q registry/tests` (112 passed; none skipped when `build/fseal` exists). Unit
+- Python: `python3 -m pytest -q` (199 passed and 30 skipped on macOS with Python 3.12 and the CI packages; the skipped fault-shim cases need Linux, and the large manifest case needs `FSEAL_LARGE_HASH=1`). It includes the receipt registry tests.
+- Receipt registry: `python3 -m pytest -q registry/tests` (136 passed; none skipped when `build/fseal` exists). Unit
   tests over an in-memory table, not integration tests.
 - Registry infra: `cd infra && npm ci && npm test` (19 synth assertions, no AWS credentials). Never `cdk deploy` from
   an agent session.

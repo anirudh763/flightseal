@@ -4,6 +4,7 @@ import json
 from registry_helpers import SEED_A, T0, call, line, make_app, token
 
 from registry import ed25519
+from registry.enroll_challenge import bytes_to_sign
 from registry.identity import identify
 
 ISS = "https://cognito-idp.us-east-1.amazonaws.com/us-east-1_TestPool"
@@ -108,7 +109,7 @@ def test_wrong_org_claim_cannot_read_another_orgs_data():
     assert s == 200, ch
     s, _ = cognito_call(app, "POST", "/v1/keys", admin_a,
                         {"public_key": ed25519.public_key(SEED_A).hex(), "nonce": ch["nonce"],
-                         "signature": ed25519.sign(SEED_A, ch["message"].encode()).hex()})
+                         "signature": ed25519.sign(SEED_A, bytes_to_sign("orgA", ch)).hex()})
     assert s == 201
     pilot_a = claims(sub="pilot-a")
     s, env_out = cognito_call(app, "POST", "/v1/envelopes", pilot_a, {})
