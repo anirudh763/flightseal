@@ -3,7 +3,7 @@ title: 'R34/R35/R75: trusted pins need an independent-confirmation attestation; 
 type: feature
 ticket: ''
 created: '2026-11-19'
-status: in-review
+status: built
 baseline_revision: '0e3855aa422b1b85449cf1187421b8196797a84b'
 route: full
 route_source: auto
@@ -17,7 +17,14 @@ context:
   - '/private/tmp/claude-501/-Users-anirudhyadav/d85e4c7d-ebdd-49d1-8c47-0eace70cc60c/scratchpad/wt-pins/AGENTS.md'
   - '/private/tmp/claude-501/-Users-anirudhyadav/d85e4c7d-ebdd-49d1-8c47-0eace70cc60c/scratchpad/wt-pins/_bmad-output/initiative-hashwing-aws/design-key-enrollment-option-b.md'
 warnings: [multiple-goals]
-deferred: []
+deferred:
+  - summary: >-
+      No browser check shows Verify reading "Signed by a key marked compromised" after a page reload or a profile restore.
+    evidence: |-
+      Verify reads trust only through trustForKey, which the unit tests run on re-read storage and after commitBackupRestore; a Verify reload clears the chosen files, so a browser check needs a reseeded run.
+    location: >-
+      newweb/tests/manifest-mode.mjs:283
+    severity: low
 ---
 
 <intent-contract>
@@ -88,9 +95,25 @@ deferred: []
 
 ## Implementation Notes
 
+- Implemented by the step-03 subagent as planned. Beyond the plan: the tick clears when the key or fingerprint changes (and, after review, when the source changes); the legacy hint and Confirm button hide for a key already marked compromised; console.mjs drives the legacy pin -> signer not confirmed -> Confirm -> Verified flow with axe.
+- R35 and R75 needed no product code; their tests also pass on the baseline.
+- Merged origin/main 467cd91 (PRs #59, #60); ledger R35 conflict resolved by keeping the server evidence from #60 and adding the client evidence.
+
 ## Plan Change Log
 
 ## Review Triage Log
+
+### 2026-11-19 — Review pass
+- verdicts: 8 findings — high 0, medium 0, low 6, false 1, maybe-false 0 (1 low rejected)
+- findings:
+  - `[low]` `[patch]` Legacy hint says "Add it again below" but the form is above — changed to "above" in main.jsx, console.mjs, EXPERIENCE.md.
+  - `[low]` `[patch]` Upgraded legacy pin shows "confirmed by you" with no date (addedAt is '') — the row now reads "confirmed by you on {confirmedAt date}"; console.mjs asserts the date on the upgraded Pilot Co row.
+  - `[low]` `[patch]` Check-form checkbox says "key" while the error says "fingerprint" — label now says "fingerprint".
+  - `[low]` `[patch]` Tick survives a change of source, so the statement can refer to another channel — both forms clear the tick on source change; manifest-mode.mjs asserts it.
+  - `[low]` `[defer]` AC 4 on-screen Verify after reload/restore is unit-level only — deferred (see frontmatter); the Verify path is trustForKey, covered on re-read storage and after restore.
+  - `[low]` `[patch]` EXPERIENCE.md bullet after the verdict table omits the new unconfirmed trust line — added.
+  - `[low]` `[patch]` Ledger cites manifest-mode.mjs:252 for the disabled pin button — line refs corrected after the final edits (254, 268, 368, 283, 553).
+  - `[false]` `[reject]` docs/console rebuild missing from the diff — the diff file excluded docs/console on purpose; the rebuilt bundle is committed (index-B4WZqbg7.js contains the new strings).
 
 ## Design Notes
 
@@ -104,3 +127,11 @@ Legacy pins (including ones that had a source) stop reading Verified until re-co
 - `node newweb/tests/profiles.mjs` -- all pass
 - `python3 registry/devserver/server.py --port 8796 &` then `REGISTRY_DEV_URL=http://127.0.0.1:8796 node newweb/tests/registry-wiring.mjs` -- all pass; stop the server
 - `PATH=/Users/anirudhyadav/flightseal/.venv-agent/bin:$PATH node --test tests/web/*.test.mjs` -- all pass
+
+## Auto Run Result
+
+Status: built. Trusted pins on both paths need a real source and an unticked-by-default "I confirmed this fingerprint myself" box; pins store confirmedAt; legacy pins read `unconfirmed` (Files match · signer not confirmed) until re-added; compromised still wins. R35/R75 tests added (no product change needed). AC-37 not built.
+Files: trusted-keys.mjs, recipient-trust.mjs, main.jsx (Trust and check-form pin UI), five test files, THREAT_MODEL.md, EXPERIENCE.md, ledger rows R34/R35/R75, docs/console rebuild.
+Review: 6 low patched, 1 low deferred, 1 false rejected. followup_review_recommended: false (no high, no medium patched).
+Verification at the merged head: node --test newweb/tests/*.test.mjs 147/147; tests/web/*.test.mjs 146/146; test:browser exit 0 (console 35, manifest-mode 16, jobs 13); profiles 8/8; registry-wiring 34/34 against the dev registry on 8796 (stopped).
+Residual risk: existing users' pins stop reading Verified until re-confirmed; the tick is a self-statement in shared-origin localStorage (THREAT_MODEL).

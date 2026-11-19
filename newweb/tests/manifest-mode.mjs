@@ -247,9 +247,6 @@ try {
     await settings.waitForFunction(() => document.querySelector('.commandbar h1')?.textContent === 'Settings');
     await settings.locator('.trusted-companies-details > summary').click();
     assert.equal(await settings.locator('#tc-confirmed').isChecked(), false, 'the box starts unticked');
-    await settings.locator('#tc-confirmed').check();
-    await settings.getByLabel('other', { exact: true }).check();
-    assert.equal(await settings.locator('#tc-confirmed').isChecked(), false, 'changing the channel clears the tick');
     await addCompany('Acme Survey', 'ab'.repeat(32), '');
     assert.match(await settings.getByRole('alert').innerText(), /Choose where you got this fingerprint/);
     // R34: the "I confirmed this myself" box is required; unticked, nothing is saved and the alert names the box.
@@ -270,6 +267,9 @@ try {
     assert.match(list, new RegExp(grouped(sender)));
     assert.match(list, /Added from contract or invoice on \d{4}-\d{2}-\d{2} · confirmed by you/);
     assert.equal(await settings.locator('#tc-confirmed').isChecked(), false, 'the box is cleared after a save');
+    await settings.locator('#tc-confirmed').check();
+    await settings.getByLabel('other', { exact: true }).check();
+    assert.equal(await settings.locator('#tc-confirmed').isChecked(), false, 'changing the channel clears the tick');
     await addCompany('Old Co', 'cd'.repeat(32), 'other');
     await settings.getByRole('button', { name: 'Mark as compromised: Old Co' }).click();
     await settings.locator('.confirm-box').getByRole('button', { name: 'Mark as compromised' }).click();
