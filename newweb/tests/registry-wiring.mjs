@@ -25,7 +25,7 @@ const { chromium } = require('playwright');
 const AXE = readFileSync(require.resolve('axe-core/axe.min.js'), 'utf8');
 // "Sealed on this device" ships in every build now (AC-60), so the registry list is caught by its own strings instead.
 const FORBIDDEN = ['Company registry', 'Test sign-in', 'Export pending proofs', 'Not sent to the registry yet', 'hashwing-outbox', 'hashwing-pending', 'hashwing-registry-signouts', '/v1/envelopes', '/v1/shares', 'registry-test-secret', 'dev-hs256',
-  'REGISTRY_URL', 'execute-api', 'amazonaws.com', '__dev/token'];
+  'REGISTRY_URL', 'execute-api', 'amazonaws.com', '__dev/token', 'Your company\'s keys', '/v1/keys', 'hashwing-key-enroll'];
 const JWT = /eyJ[\w-]+\.eyJ[\w-]+\./; // any signed token (a pasted dev token is an HS256 JWT)
 const LINK_DEAD = "This link doesn't open. It may have been withdrawn or expired, or it was copied incompletely. Ask the sender for a new link.";
 const SEED_A_PEM = `-----BEGIN PRIVATE KEY-----\n${Buffer.concat([Buffer.from('302e020100300506032b657004220420', 'hex'), Buffer.from([...Array(32).keys()])]).toString('base64')}\n-----END PRIVATE KEY-----\n`;
@@ -41,7 +41,7 @@ async function check(name, fn) {
   catch (error) { checks.push({ name, passed: false, error: String(error.stack || error) }); console.error(`FAIL ${name}: ${error.stack || error}`); }
 }
 const dev = async (path) => (await fetch(`${base}/__dev/${path}`)).json();
-const tokenFor = async (sub, role = 'pilot', ttl = 3600) => (await dev(`token?org=orgA&sub=${sub}&role=${role}&ttl=${ttl}`)).token;
+const tokenFor = async (sub, role = 'pilot', ttl = 3600, org = 'orgA') => (await dev(`token?org=${org}&sub=${sub}&role=${role}&ttl=${ttl}`)).token;
 const registerLog = async (sub) => (await dev('log')).log.filter((e) => e.route === 'register' && (!sub || e.sub === sub));
 
 // Console and page errors fail the run. The only exception: Chromium's "Failed to load resource" line for a registry
@@ -101,11 +101,11 @@ async function assignRow(page, name, org = 'orgA') {
   // Assign binds the row at once; wait until the outbox row (not the pending one) is the only row of that name.
   await page.waitForFunction((n) => { const rows = [...document.querySelectorAll('.registry-row')].filter((r) => r.querySelector('.registry-name')?.textContent === n); return rows.length === 1 && rows[0].querySelector(':scope > summary .status-label')?.textContent !== 'Sealed locally'; }, name, { timeout: 30000 });
 }
-async function signIn(page, sub, role, ttl) {
+async function signIn(page, sub, role, ttl, org = 'orgA') {
   await go(page, 'help');
-  await page.locator('#registry-token').fill(await tokenFor(sub, role, ttl));
+  await page.locator('#registry-token').fill(await tokenFor(sub, role, ttl, org));
   await page.locator('#company-registry').getByRole('button', { name: 'Sign in' }).click();
-  await page.locator('#company-registry').getByText(`Signed in to the company registry as ${sub} · orgA · ${role === 'admin' ? 'Admin' : 'Member'}`).waitFor();
+  await page.locator('#company-registry').getByText(`Signed in to the company registry as ${sub} · ${org} · ${role === 'admin' ? 'Admin' : 'Member'}`).waitFor();
 }
 async function importSeedA(page) {
   await go(page, 'help');
@@ -223,7 +223,7 @@ try {
     for (const screen of ['protect', 'verify', 'help']) {
       await go(page, screen);
       const text = await page.locator('body').innerText();
-      for (const s of ['Company registry', 'Export pending proofs', 'Test sign-in', 'Sign in to the company registry', "The registry's record"]) assert.ok(!text.includes(s), `${screen} shows ${s}`);
+      for (const s of ['Company registry', "Your company's keys", 'Export pending proofs', 'Test sign-in', 'Sign in to the company registry', "The registry's record"]) assert.ok(!text.includes(s), `${screen} shows ${s}`);
     }
     // AC-60: the job list sits under the sealing result and Jobs works, with no registry chip, request or database.
     await go(page, 'protect');
@@ -244,6 +244,8 @@ try {
     await page.getByRole('heading', { name: 'Trusted companies' }).waitFor();
     await page.getByRole('heading', { name: 'Your signing key' }).waitFor();
     assert.equal(await page.getByRole('heading', { name: 'Company registry' }).count(), 0);
+    assert.equal(await page.getByRole('heading', { name: "Your company's keys" }).count(), 0);
+    assert.deepEqual(await page.locator('#page-help .panel-head h2').allInnerTexts(), ['Trusted companies', 'Your signing key', 'Trust and limits', 'Limits'], 'flag off: neither registry section');
     const dbs = await page.evaluate(async () => (await indexedDB.databases()).map((d) => d.name));
     assert.ok(!dbs.some((n) => n.startsWith('hashwing-outbox')), dbs.join());
     assert.deepEqual(foreign, []);
@@ -288,7 +290,7 @@ try {
     await chipIs(page, 'local-flight.ulg', 'Needs attention');
     const row = await openRow(page, 'local-flight.ulg');
     await row.getByText("This signing key isn't enrolled for your company yet. Ask your company's registry admin to enroll this key's fingerprint, then try again.").waitFor();
-    assert.ok(!(await row.innerText()).includes('Trust page'), 'no enroll control exists, so the copy names none');
+    assert.ok(!(await row.innerText()).includes('Trust page'), 'the REASONS copy is unchanged: it asks the admin to enroll the fingerprint without naming a page');
     assert.equal(await row.locator('.registry-fingerprint .fingerprint').innerText(), localFingerprint, "the row shows this key's fingerprint for the admin");
     await row.getByRole('button', { name: 'Try again' }).waitFor();
     await row.locator('.registry-tech summary').click();
@@ -1154,6 +1156,195 @@ try {
         assert.equal(await jp.evaluate(() => document.activeElement?.id), 'jobs-status-filter');
       });
     } finally { await jctx.close(); }
+  }
+
+  // Trust: "Your company's keys" (AC-38..AC-40, AC-59), in org orgK so orgA's enrolled SEED_A stays as the checks above need it.
+  {
+    const kctx = await newContext();
+    const kp = watch(await kctx.newPage(), 'company-keys');
+    const panel = kp.locator('#company-keys');
+    const DAY = '\\d{4}-\\d\\d-\\d\\d';
+    const keyRows = () => panel.locator('.company-keys > li');
+    const rowsText = async () => (await keyRows().allInnerTexts()).map((t) => t.replace(/\s+/g, ' '));
+    const waitRows = async (pred, what) => {
+      try { await kp.waitForFunction((src) => { const rows = [...document.querySelectorAll('#company-keys .company-keys > li')].map((li) => li.innerText.replace(/\s+/g, ' ')); return new Function('rows', `return ${src}`)(rows); }, pred, { timeout: 15000 }); }
+      catch { assert.fail(`${what}: ${JSON.stringify(await rowsText())} / ${await panel.innerText()}`); }
+    };
+    const generate = async () => {
+      await go(kp, 'help');
+      const before = await kp.locator('.signing-key-controls [role="status"]').innerText().catch(() => '');
+      await kp.getByRole('button', { name: 'Generate Ed25519 key' }).click();
+      await kp.waitForFunction((b) => { const t = document.querySelector('.signing-key-controls [role="status"]')?.textContent || ''; return /public key [0-9a-f]{64}/.test(t) && t !== b; }, before);
+    };
+    const shownButtons = async () => panel.locator('button').evaluateAll((bs) => bs.filter((b) => b.offsetParent !== null && !b.closest('dialog')).map((b) => b.textContent));
+    const keyPosts = [];
+    kp.on('request', (r) => { if (r.method() === 'POST' && new URL(r.url()).pathname === '/v1/keys') keyPosts.push(JSON.parse(r.postData() || '{}')); });
+    try {
+      await check('AC-59 (flag on): Trust shows Trusted companies, Your signing key, Company registry, Your company\'s keys, then Trust and limits; signed out, the keys section asks to sign in', async () => {
+        await kp.goto(`${flagOn.url}#/app/help`);
+        await kp.locator('#page-help').waitFor();
+        assert.deepEqual(await kp.locator('#page-help .panel-head h2').allInnerTexts(), ['Trusted companies', 'Your signing key', 'Company registry', "Your company's keys", 'Trust and limits', 'Limits']);
+        await panel.getByText("Sign in under Company registry to see your company's keys.").waitFor();
+        assert.deepEqual(await shownButtons(), []);
+      });
+
+      await check('admin, no key loaded: Enroll this key is disabled with the reason; with a generated key, a seal needs attention (key_not_enrolled), Enroll this key makes it Active "by you", and Try again registers it', async () => {
+        await signIn(kp, 'keys-admin', 'admin', 3600, 'orgK');
+        await panel.getByText('No company key enrolled yet.').waitFor();
+        const enrollButton = panel.getByRole('button', { name: 'Enroll this key' });
+        assert.equal(await enrollButton.isDisabled(), true);
+        await panel.getByText("Load your company's signing key under Your signing key first.").waitFor();
+        assert.equal(await enrollButton.getAttribute('aria-describedby'), 'company-keys-load-hint');
+        await generate();
+        await sealSmall(kp, 'keys-flight.ulg');
+        await chipIs(kp, 'keys-flight.ulg', 'Needs attention');
+        assert.match(await (await openRow(kp, 'keys-flight.ulg')).innerText(), /This signing key isn't enrolled for your company yet/);
+        await go(kp, 'help');
+        await enrollButton.waitFor();
+        assert.equal(await enrollButton.isDisabled(), false);
+        await enrollButton.click();
+        await waitRows(`rows.length === 1 && new RegExp('Active.*Enrolled ${DAY} by you').test(rows[0])`, 'enrolled row');
+        await panel.getByText("This key is now your company's active key.").waitFor();
+        assert.equal(keyPosts.length, 1);
+        assert.deepEqual(Object.keys(keyPosts[0]).sort(), ['nonce', 'public_key', 'signature'], 'only the public key, the nonce and the signature leave the device');
+        assert.equal(await panel.getByRole('button', { name: /^(Enroll|Replace) / }).count(), 0, 'the active key has no enroll button');
+        await panel.getByText("Only the company computer holds this key. Pilots on other devices seal with a one-time key, which reads 'signer not confirmed'.").waitFor();
+        await go(kp, 'protect');
+        const row = await openRow(kp, 'keys-flight.ulg');
+        await row.getByRole('button', { name: 'Try again' }).click();
+        await chipIs(kp, 'keys-flight.ulg', 'Registered');
+      });
+
+      await check('replace: the dialog focuses "Keep the current key" and Escape cancels; confirming marks the old row "Replaced on {date}", and "rotated" is nowhere in the page', async () => {
+        await generate();
+        const replace = panel.getByRole('button', { name: 'Replace with this key' });
+        await replace.click();
+        const dialog = panel.locator('dialog[open]');
+        await dialog.waitFor();
+        assert.equal(await kp.evaluate(() => document.activeElement?.textContent), 'Keep the current key');
+        await kp.keyboard.press('Escape');
+        await dialog.waitFor({ state: 'detached' });
+        assert.equal(await kp.evaluate(() => document.activeElement?.textContent), 'Replace with this key', 'focus returns to the button');
+        assert.equal(keyPosts.length, 1, 'Escape sent nothing');
+        await replace.click();
+        await dialog.getByRole('button', { name: 'Replace key' }).click();
+        await waitRows(`rows.length === 2 && rows.some((r) => /Active.*by you/.test(r)) && rows.some((r) => new RegExp('Replaced on ${DAY}').test(r))`, 'replaced rows');
+        assert.equal(keyPosts[1].confirm_replace, true);
+        const html = await kp.evaluate(() => ({ text: document.body.innerText, html: document.documentElement.outerHTML }));
+        assert.ok(!/rotated/i.test(html.text) && !/rotated/i.test(html.html), '"rotated" never reaches the page');
+      });
+
+      await check('lost response: an enroll whose answer is lost reads as success on the next press (409 key_exists, the loaded key is the active key)', async () => {
+        await generate();
+        const isPost = (url) => new URL(url).pathname === '/v1/keys';
+        let dropped = 0;
+        const drop = async (route) => {
+          if (route.request().method() !== 'POST' || dropped) return route.continue();
+          dropped += 1;
+          await route.fetch(); // the registry commits it
+          await route.abort(); // the browser never sees the answer
+        };
+        await kp.route(isPost, drop);
+        try {
+          await panel.getByRole('button', { name: 'Replace with this key' }).click();
+          await panel.locator('dialog[open]').getByRole('button', { name: 'Replace key' }).click();
+          await panel.getByText("Couldn't reach the company registry. Try again in a few minutes.").waitFor();
+        } finally { await kp.unroute(isPost, drop); }
+        assert.equal(dropped, 1);
+        await panel.getByRole('button', { name: 'Replace with this key' }).click();
+        await panel.locator('dialog[open]').getByRole('button', { name: 'Replace key' }).click();
+        await panel.getByText("This key is now your company's active key.").waitFor();
+        await waitRows(`rows.length === 3 && rows.filter((r) => /Active/.test(r)).length === 1 && rows.filter((r) => /Replaced on/.test(r)).length === 2`, 'after the lost response');
+        const log = (await dev('log')).log.filter((e) => e.route === 'enroll' && e.org === 'orgK');
+        assert.deepEqual(log.map((e) => e.status), [201, 201, 201, 409], 'the second press got key_exists');
+        assert.equal(await panel.getByRole('button', { name: /^(Enroll|Replace) / }).count(), 0);
+      });
+
+      await check('mark compromised: the dialog focuses "Keep it" and Escape cancels; confirming reads "Marked compromised on {date}"', async () => {
+        const replaced = keyRows().filter({ hasText: 'Replaced on' }).first();
+        const fp = await replaced.locator('.fingerprint').innerText();
+        const trigger = replaced.getByRole('button', { name: 'Mark compromised' });
+        await trigger.click();
+        const dialog = panel.locator('dialog[open]');
+        await dialog.getByText('New receipts signed with it will be refused. Older proofs from it will show a warning.').waitFor();
+        assert.equal(await kp.evaluate(() => document.activeElement?.textContent), 'Keep it');
+        await axe(kp, 'compromise dialog open');
+        await kp.keyboard.press('Escape');
+        await dialog.waitFor({ state: 'detached' });
+        assert.equal(await kp.evaluate(() => document.activeElement?.textContent), 'Mark compromised');
+        await trigger.click();
+        await dialog.getByRole('button', { name: 'Mark compromised' }).click();
+        const row = keyRows().filter({ hasText: fp });
+        await row.getByText(new RegExp(`^Marked compromised on ${DAY}$`)).waitFor();
+        assert.equal(await row.getByRole('button', { name: 'Mark compromised' }).count(), 0, 'no second mark');
+      });
+
+      await check('member (pilot, orgK): the list is shown read-only, with no button but Copy', async () => {
+        await kp.locator('#company-registry').getByRole('button', { name: 'Sign out' }).click();
+        await panel.getByText("Sign in under Company registry to see your company's keys.").waitFor();
+        await signIn(kp, 'keys-pilot', 'pilot', 3600, 'orgK');
+        await waitRows('rows.length === 3', 'member list');
+        assert.ok(!(await panel.innerText()).includes('by you'), "the admin's rows aren't the member's");
+        const buttons = await shownButtons();
+        assert.deepEqual([...new Set(buttons)], ['Copy'], JSON.stringify(buttons));
+        assert.equal(buttons.length, 3);
+      });
+
+      await check('offline: key actions are disabled and the reason is shown', async () => {
+        await kp.locator('#company-registry').getByRole('button', { name: 'Sign out' }).click();
+        await signIn(kp, 'keys-admin', 'admin', 3600, 'orgK');
+        await waitRows('rows.length === 3', 'admin list');
+        await generate();
+        await panel.getByRole('button', { name: 'Replace with this key' }).waitFor();
+        await kctx.setOffline(true); offline = true;
+        try {
+          await panel.getByText("You're offline. Key changes need a connection.").waitFor();
+          assert.equal(await panel.getByRole('button', { name: 'Replace with this key' }).isDisabled(), true);
+          const marks = panel.getByRole('button', { name: 'Mark compromised' });
+          assert.ok((await marks.count()) > 0);
+          for (const b of await marks.all()) assert.equal(await b.isDisabled(), true);
+        } finally { await kctx.setOffline(false); offline = false; }
+        await panel.getByText("You're offline.", { exact: false }).waitFor({ state: 'detached' });
+      });
+
+      await check('registry down: the list says it couldn\'t reach the registry, and Try again loads it', async () => {
+        const isList = (url) => new URL(url).pathname === '/v1/keys';
+        const abort = (route) => (route.request().method() === 'GET' ? route.abort() : route.continue());
+        await kp.route(isList, abort);
+        try {
+          await kp.reload();
+          await kp.locator('#page-help').waitFor();
+          await panel.getByText("Couldn't reach the company registry. Try again in a few minutes.").waitFor({ timeout: 15000 });
+          assert.equal(await panel.getByRole('button', { name: /^(Enroll|Replace) / }).count(), 0, 'no key action without the list');
+        } finally { await kp.unroute(isList, abort); }
+        await panel.getByRole('button', { name: 'Try again' }).click();
+        await waitRows('rows.length === 3', 'reloaded list');
+      });
+
+      await check('company keys: axe 0 violations, no horizontal scroll and 44px buttons at 320/768/1440 with the list shown; Tab reaches the primary button; screenshots', async () => {
+        await generate();
+        const primary = panel.getByRole('button', { name: 'Replace with this key' });
+        await primary.waitFor();
+        for (const width of [320, 768, 1440]) {
+          await kp.setViewportSize({ width, height: 900 });
+          const overflow = await kp.evaluate(() => document.documentElement.scrollWidth - innerWidth);
+          assert.ok(overflow <= 0, `company keys@${width}: horizontal scroll ${overflow}px`);
+          const small = await panel.locator('button').evaluateAll((bs) => bs.filter((b) => b.offsetParent !== null).map((b) => [b.textContent, b.getBoundingClientRect().height]).filter(([, h]) => h < 44));
+          assert.deepEqual(small, [], `company keys@${width}: buttons under 44px`);
+          await axe(kp, `company keys@${width}`);
+          await panel.scrollIntoViewIfNeeded();
+          await kp.screenshot({ path: join(OUT, `company-keys-${width}.png`), fullPage: true });
+        }
+        await kp.setViewportSize({ width: 1440, height: 900 });
+        await panel.getByRole('button', { name: 'Copy' }).first().focus();
+        let reached = false;
+        for (let i = 0; i < 12 && !reached; i++) {
+          await kp.keyboard.press('Tab');
+          reached = await kp.evaluate(() => document.activeElement?.textContent === 'Replace with this key');
+        }
+        assert.ok(reached, 'Tab reaches Replace with this key');
+      });
+    } finally { await kctx.close(); }
   }
 
   await check('no console or page errors', async () => { assert.deepEqual(errors, []); });
