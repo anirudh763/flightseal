@@ -113,11 +113,13 @@ confirmed" once it ends.
 
 - **Switch on:** set `PILOT_KEYS_ORGS` on the Lambda to a comma list of exact org ids (for example `orgA,orgB`; no
   spaces, no `*`; an entry that isn't exactly an org id is ignored). The stack never sets it, so this is a manual
-  change on the function's environment, and a later `cdk deploy` removes it again. The dev server takes
+  change on the function's environment; a later `cdk deploy` that updates the function probably removes it again
+  (not verified on AWS). The dev server takes
   `--pilot-keys-orgs orgA` (local only).
 - **Switch off:** remove the org from the list (or the whole variable). The pilot routes answer `pilot_keys_off`,
   pilot keys get `key_not_active` on register, and every stored pilot key, tombstone and `PILOT_COUNT` is kept, so
-  switching back on restores them as they were.
+  switching back on restores them as they were. While an org is off, retire also answers `pilot_keys_off`: to revoke a
+  pilot key then, use `POST /v1/keys/<fp>/compromised`.
 - **Enroll:** the pilot makes a key on their own device, the company computer signs an authorization for its public
   key (confirm the full fingerprint with the pilot by phone or in person first), then the pilot calls
   `GET /v1/pilot-keys/challenge` and `POST /v1/pilot-keys`. The authorization must be signed by the org's current

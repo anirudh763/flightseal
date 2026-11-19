@@ -339,7 +339,7 @@ def test_register_still_works_one_second_before_not_after():
     assert register(app, token(clock), line(SEED_B, 3))[0] == 201
 
 
-@pytest.mark.parametrize("change", ["retire", "compromise", "parent_rotated", "parent_compromised"])
+@pytest.mark.parametrize("change", ["retire", "compromise", "parent_rotated", "parent_compromised", "not_after"])
 def test_change_committed_during_registration_blocks_it(change):
     app, table, clock = _world()
     pilot_enroll(app, clock, SEED_B)
@@ -355,6 +355,8 @@ def test_change_committed_during_registration_blocks_it(change):
                 assert call(app, "POST", f"/v1/keys/{FP[SEED_B]}/compromised", _admin(clock), {})[0] == 200
             elif change == "parent_rotated":
                 assert enroll(app, clock, seed=SEED_C, confirm=True)[0] == 201
+            elif change == "not_after":  # only the in-transaction `not_after > now` condition can catch this
+                table.items[("ORG#orgA", "KEY#" + FP[SEED_B])]["not_after"] = clock.t
             else:
                 assert call(app, "POST", f"/v1/keys/{FP[SEED_A]}/compromised", _admin(clock), {})[0] == 200
         return real(ops)

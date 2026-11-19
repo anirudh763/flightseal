@@ -79,6 +79,8 @@ def test_parse_line():
 def test_weak_key_helper_matches_the_shared_weak_key_vectors():
     weak = json.loads((ROOT / "tests/fixtures/ed25519-weak-keys.json").read_text())
     assert all(ed25519.weak_key(bytes.fromhex(e["key"])) for e in weak["weak"])
+    # The CLI's not_weak control is canonical but not a curve point: verify refuses it, so weak_key says weak too.
+    assert weak["not_weak"] == [gen.OFF_CURVE.hex()] and ed25519.weak_key(gen.OFF_CURVE)
     assert not any(ed25519.weak_key(ed25519.public_key(s)) for s in (SEED_A, SEED_B, SEED_C))
 
 

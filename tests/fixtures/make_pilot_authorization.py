@@ -21,16 +21,17 @@ NOW = 1_800_000_000
 COMPANY, PILOT, OTHER = bytes(range(32)), bytes(range(1, 33)), bytes(range(2, 34))
 C, P, O = (ed25519.public_key(s) for s in (COMPANY, PILOT, OTHER))
 WEAK = bytes([1]) + bytes(31)  # the identity point: small order
+OFF_CURVE = (2**255 - 21).to_bytes(32, "little")  # canonical y = p - 2, but no x: the not_weak control of ed25519-weak-keys.json
 DEFAULT = NOW + pa.DEFAULT_DAYS * pa.DAY
 
 HOW = ("For each case: find the lines of `line` that start with `line_prefix` without its trailing space. None: no "
        "authorization. More than one, or one not exactly `line_prefix` + base64url + '.' + sig: reason malformed. "
        "Otherwise check the base64url and sig against `pilot_key` (the key being authorized), `company_key` (the "
        "expected company key) and `now` (the checker's own clock, epoch seconds), testing `reasons` in order: "
-       "malformed = base64url without padding that decodes to exactly the four canonical lines (prefix, "
-       "pilot_key=<64 lowercase hex>, company_key=<64 lowercase hex>, not_after=<YYYY-MM-DDTHH:MM:SSZ>, joined by "
-       "\\n, no trailing newline) and re-encodes to the same characters, sig 128 lowercase hex; weak_pilot_key = the "
-       "statement's pilot_key is small-order or non-canonical; same_key = pilot_key equals company_key in the "
+       "malformed unless the authorization is base64url without padding that decodes to exactly the four canonical "
+       "lines (prefix, pilot_key=<64 lowercase hex>, company_key=<64 lowercase hex>, not_after=<YYYY-MM-DDTHH:MM:SSZ>, "
+       "a real UTC time, joined by \\n, no trailing newline) and re-encodes to the same characters, and sig is 128 "
+       "lowercase hex; weak_pilot_key = the statement's pilot_key is small-order, non-canonical or not a curve point; same_key = pilot_key equals company_key in the "
        "statement; not_pilot_key = the statement's pilot_key differs from `pilot_key`; bad_signature = sig does not "
        "verify under the statement's company_key over the decoded bytes; ended = not_after <= now; too_long = "
        "not_after > now + max_days * 86400; not_company_key = the statement's company_key differs from `company_key`. "
@@ -88,6 +89,7 @@ def cases():
         case("pilot_key mismatch", "not_pilot_key", pilot=O),
         case("signed by another key", "bad_signature", signer=OTHER),
         case("weak pilot key", "weak_pilot_key", pilot=WEAK, expect_pilot=WEAK),
+        case("pilot key not a curve point", "weak_pilot_key", pilot=OFF_CURVE, expect_pilot=OFF_CURVE),
         case("pilot key equals company key", "same_key", pilot=C, expect_pilot=C),
         case("two authorization lines in one message", "malformed", text=good, sig=good_sig, line=two + "\n" + two),
     ]

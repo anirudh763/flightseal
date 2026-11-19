@@ -6,7 +6,7 @@
   "max_days": 30,
   "pilot_key_cap": 50,
   "recipient_compromised_cap": 500,
-  "how_to_evaluate": "For each case: find the lines of `line` that start with `line_prefix` without its trailing space. None: no authorization. More than one, or one not exactly `line_prefix` + base64url + '.' + sig: reason malformed. Otherwise check the base64url and sig against `pilot_key` (the key being authorized), `company_key` (the expected company key) and `now` (the checker's own clock, epoch seconds), testing `reasons` in order: malformed = base64url without padding that decodes to exactly the four canonical lines (prefix, pilot_key=<64 lowercase hex>, company_key=<64 lowercase hex>, not_after=<YYYY-MM-DDTHH:MM:SSZ>, joined by \\n, no trailing newline) and re-encodes to the same characters, sig 128 lowercase hex; weak_pilot_key = the statement's pilot_key is small-order or non-canonical; same_key = pilot_key equals company_key in the statement; not_pilot_key = the statement's pilot_key differs from `pilot_key`; bad_signature = sig does not verify under the statement's company_key over the decoded bytes; ended = not_after <= now; too_long = not_after > now + max_days * 86400; not_company_key = the statement's company_key differs from `company_key`. `signed_text` is what was signed; `registry_error` is what POST /v1/pilot-keys answers (with 422).",
+  "how_to_evaluate": "For each case: find the lines of `line` that start with `line_prefix` without its trailing space. None: no authorization. More than one, or one not exactly `line_prefix` + base64url + '.' + sig: reason malformed. Otherwise check the base64url and sig against `pilot_key` (the key being authorized), `company_key` (the expected company key) and `now` (the checker's own clock, epoch seconds), testing `reasons` in order: malformed unless the authorization is base64url without padding that decodes to exactly the four canonical lines (prefix, pilot_key=<64 lowercase hex>, company_key=<64 lowercase hex>, not_after=<YYYY-MM-DDTHH:MM:SSZ>, a real UTC time, joined by \\n, no trailing newline) and re-encodes to the same characters, and sig is 128 lowercase hex; weak_pilot_key = the statement's pilot_key is small-order, non-canonical or not a curve point; same_key = pilot_key equals company_key in the statement; not_pilot_key = the statement's pilot_key differs from `pilot_key`; bad_signature = sig does not verify under the statement's company_key over the decoded bytes; ended = not_after <= now; too_long = not_after > now + max_days * 86400; not_company_key = the statement's company_key differs from `company_key`. `signed_text` is what was signed; `registry_error` is what POST /v1/pilot-keys answers (with 422).",
   "reasons": [
     {
       "reason": "malformed",
@@ -301,6 +301,18 @@
       "line": "Authorized by company key: aGFzaHdpbmctcGlsb3QtYXV0aG9yaXphdGlvbiB2MQpwaWxvdF9rZXk9MDEwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMApjb21wYW55X2tleT0wM2ExMDdiZmYzY2UxMGJlMWQ3MGRkMThlNzRiYzA5OTY3ZTRkNjMwOWJhNTBkNWYxZGRjODY2NDEyNTUzMWI4Cm5vdF9hZnRlcj0yMDI3LTAxLTI5VDA4OjAwOjAwWg.2c3a671edbaf8b2b8629af544c3a58a87e7e00d824bf04be8061401a267afe545b29585e67ce859714ab4661545efddfdb2f8565c751d60428e54d2889e52309",
       "signed_text": "hashwing-pilot-authorization v1\npilot_key=0100000000000000000000000000000000000000000000000000000000000000\ncompany_key=03a107bff3ce10be1d70dd18e74bc09967e4d6309ba50d5f1ddc8664125531b8\nnot_after=2027-01-29T08:00:00Z",
       "pilot_key": "0100000000000000000000000000000000000000000000000000000000000000",
+      "company_key": "03a107bff3ce10be1d70dd18e74bc09967e4d6309ba50d5f1ddc8664125531b8",
+      "now": 1800000000,
+      "reason": "weak_pilot_key",
+      "registry_error": "bad_authorization"
+    },
+    {
+      "name": "pilot key not a curve point",
+      "authorization": "aGFzaHdpbmctcGlsb3QtYXV0aG9yaXphdGlvbiB2MQpwaWxvdF9rZXk9ZWJmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmY3Zgpjb21wYW55X2tleT0wM2ExMDdiZmYzY2UxMGJlMWQ3MGRkMThlNzRiYzA5OTY3ZTRkNjMwOWJhNTBkNWYxZGRjODY2NDEyNTUzMWI4Cm5vdF9hZnRlcj0yMDI3LTAxLTI5VDA4OjAwOjAwWg",
+      "authorization_sig": "34944bb06c1615a64b5a95176f456ff5a14ed9f37097eb3c19407dbf5240720182987b8618798d6c1954acea16676c778e5dfa562b021c7febcbc2e62f7fa503",
+      "line": "Authorized by company key: aGFzaHdpbmctcGlsb3QtYXV0aG9yaXphdGlvbiB2MQpwaWxvdF9rZXk9ZWJmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmY3Zgpjb21wYW55X2tleT0wM2ExMDdiZmYzY2UxMGJlMWQ3MGRkMThlNzRiYzA5OTY3ZTRkNjMwOWJhNTBkNWYxZGRjODY2NDEyNTUzMWI4Cm5vdF9hZnRlcj0yMDI3LTAxLTI5VDA4OjAwOjAwWg.34944bb06c1615a64b5a95176f456ff5a14ed9f37097eb3c19407dbf5240720182987b8618798d6c1954acea16676c778e5dfa562b021c7febcbc2e62f7fa503",
+      "signed_text": "hashwing-pilot-authorization v1\npilot_key=ebffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff7f\ncompany_key=03a107bff3ce10be1d70dd18e74bc09967e4d6309ba50d5f1ddc8664125531b8\nnot_after=2027-01-29T08:00:00Z",
+      "pilot_key": "ebffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff7f",
       "company_key": "03a107bff3ce10be1d70dd18e74bc09967e4d6309ba50d5f1ddc8664125531b8",
       "now": 1800000000,
       "reason": "weak_pilot_key",
