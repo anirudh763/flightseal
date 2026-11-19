@@ -38,7 +38,7 @@ export function CompanyKeysPanel({ signingKey }) {
     let live = true;
     setLoaded(null);
     const pem = signingKey?.privateKeyPem;
-    if (pem) (signingKey.publicKeyHex ? Promise.resolve(signingKey.publicKeyHex) : publicKeyHexFromPem(pem))
+    if (pem) publicKeyHexFromPem(pem) // generated or imported: the same path, from the PEM itself
       .then(async (pub) => ({ pub, fp: await fingerprintHex(pub) }))
       .then((v) => { if (live) setLoaded(v); }, () => {});
     return () => { live = false; };

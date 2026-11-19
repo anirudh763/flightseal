@@ -1331,12 +1331,16 @@ try {
           assert.ok(overflow <= 0, `company keys@${width}: horizontal scroll ${overflow}px`);
           const small = await panel.locator('button').evaluateAll((bs) => bs.filter((b) => b.offsetParent !== null).map((b) => [b.textContent, b.getBoundingClientRect().height]).filter(([, h]) => h < 44));
           assert.deepEqual(small, [], `company keys@${width}: buttons under 44px`);
-          await kp.mouse.move(0, 0); await sleep(300); // no hover or colour transition under the pointer while axe reads colours
+          await kp.mouse.move(0, 0); await sleep(300); // nothing hovered while axe reads colours
           await axe(kp, `company keys@${width}`);
           await panel.scrollIntoViewIfNeeded();
           await kp.screenshot({ path: join(OUT, `company-keys-${width}.png`), fullPage: true });
         }
         await kp.setViewportSize({ width: 1440, height: 900 });
+        assert.equal(await panel.locator('.button.primary').count(), 1, 'one primary button in the section');
+        await primary.hover(); await sleep(300);
+        await axe(kp, 'company keys, primary hovered');
+        await kp.mouse.move(0, 0);
         await panel.getByRole('button', { name: 'Copy' }).first().focus();
         let reached = false;
         for (let i = 0; i < 12 && !reached; i++) {

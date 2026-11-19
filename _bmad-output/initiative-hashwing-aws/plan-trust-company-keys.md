@@ -100,12 +100,12 @@ deferred: []
 ## Tasks & Acceptance
 
 **Execution:**
-- [ ] `newweb/src/registry-client.mjs` -- four key methods -- the client key methods named in the design
-- [ ] `newweb/src/company-keys.mjs` + `newweb/tests/company-keys.test.mjs` -- pure flow plus unit tests for the matrix -- the B1 rule, proved without a browser
-- [ ] `newweb/src/company-keys.jsx`, `newweb/src/registry-ui.jsx` (export `useRegistry` only), `newweb/src/main.jsx` (one insertion and the import), `newweb/src/style.css` (only if needed) -- the section
-- [ ] `tests/web/verifier.test.mjs` -- cross-format test
-- [ ] `newweb/tests/registry-wiring.mjs` -- the checks above
-- [ ] docs/console rebuild and commit; docs, ledger and AGENTS.md counts last, from measured runs
+- [x] `newweb/src/registry-client.mjs` -- four key methods -- the client key methods named in the design
+- [x] `newweb/src/company-keys.mjs` + `newweb/tests/company-keys.test.mjs` -- pure flow plus unit tests for the matrix -- the B1 rule, proved without a browser
+- [x] `newweb/src/company-keys.jsx`, `newweb/src/registry-ui.jsx` (export `useRegistry` only), `newweb/src/main.jsx` (one insertion and the import), `newweb/src/style.css` (only if needed) -- the section
+- [x] `tests/web/verifier.test.mjs` -- cross-format test
+- [x] `newweb/tests/registry-wiring.mjs` -- the checks above
+- [x] docs/console rebuild and commit; docs, ledger and AGENTS.md counts last, from measured runs
 
 **Acceptance Criteria:**
 - Given a flag-on build and an admin signed in on the computer holding the key, when they press Enroll this key, then the row reads Active and "by you", and a proof that needed attention for `key_not_enrolled` registers after Try again.
@@ -114,6 +114,13 @@ deferred: []
 - Given the flag-off build, when Trust renders, then the page is unchanged and the bundle has none of the new strings.
 
 ## Implementation Notes
+
+- The panel uses `panel trust-wide` so it spans both Trust columns like the registry panel; no new CSS.
+- `enroll()` has one extra reason, `sign_failed` (the browser couldn't import or sign with the loaded PEM; nothing is sent).
+- When the loaded key is the active one, the section shows the factual line "The key loaded here is your company's active key." instead of a button.
+- The public key always comes from the PEM (`publicKeyHexFromPem`), for generated and imported keys alike.
+- Lost response is tested with Playwright `route.fetch()` + `route.abort()`; no `registry/` change was needed.
+- Tailwind scans `newweb/` for class names, so a test comment containing a utility name (e.g. "transition") changes the flag-off CSS; keep such words out of `newweb/` comments.
 
 ## Plan Change Log
 
