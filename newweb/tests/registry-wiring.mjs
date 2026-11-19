@@ -1,8 +1,7 @@
 // Registry wiring in the console (VITE_REGISTRY_URL), against the DEV ONLY registry/devserver/server.py.
 // 1. The flag-off bundle in docs/console carries no registry code, and the flag-off console makes no registry request.
 // 2. A flag-on console built into .test-artifacts/registry-wiring/build drives sign-in, the outbox list, shares,
-//    delete and the recipient view in Playwright Chromium. Run `npm --prefix newweb run build` first (flag off).
-// 3. Jobs with the flag on: statuses from this device's registry list, the status filter and the row detail (5 checks).
+//    delete and the recipient view in Playwright Chromium, then Jobs (5 checks). Run `npm --prefix newweb run build` first (flag off).
 import { createRequire } from 'node:module';
 import { spawn, spawnSync } from 'node:child_process';
 import { createServer } from 'node:http';
@@ -1036,6 +1035,11 @@ try {
         await jp.waitForFunction(() => location.hash === '#/app/jobs');
         assert.equal(await jp.locator('#jobs-status-filter').inputValue(), '', 'Back restores All');
         assert.equal((await shownJobs()).length, 3);
+        await pick('Registered', 'registered');
+        await jp.locator('#jobs-search').fill('no-such-job');
+        await jp.getByRole('button', { name: 'Clear search' }).click();
+        await jp.waitForFunction(() => location.hash === '#/app/jobs?status=registered');
+        assert.deepEqual(await shownJobs(), [`${REG}.fseal`], 'Clear search keeps the status');
         await jp.evaluate(() => { location.hash = '/app/jobs?status=bogus'; });
         await jp.locator('.jobs-table caption').waitFor();
         assert.equal(await jp.locator('#jobs-status-filter').inputValue(), '', 'an unknown status reads as All');
@@ -1058,7 +1062,7 @@ try {
         assert.equal(facts.Package, `${REG}.fseal`);
         assert.match(facts.Items, /^1 item · [\d,]+ bytes$/);
         assert.ok(facts.Sealed, 'sealed time');
-        assert.match(facts['Registry status'], /^Registered at \d{4}-\d\d-\d\d \d\d:\d\d:\d\d UTC\. This is the registry's statement, not proof of the files\. Updated .+/);
+        assert.match(facts['Registry status'], /^Registered at \d{4}-\d\d-\d\d \d\d:\d\d:\d\d UTC\. This is the registry's statement, not proof of the files\.$/, 'the registry\'s time only');
         await detail.getByRole('button', { name: 'Copy receipt message' }).click();
         await jp.getByText('Receipt message copied.').waitFor();
         assert.match(await jp.evaluate(() => navigator.clipboard.readText()), /fseal-receipt v1 count=/);
@@ -1074,6 +1078,11 @@ try {
         await sleep(500);
         assert.deepEqual(sent, [], 'no registry request while Jobs was opened, filtered and expanded');
         assert.equal((await dev('log')).log.length, logBefore, 'the registry saw no request from Jobs');
+        await jp.evaluate(() => { location.hash = '/app/jobs?status=registered'; });
+        await jp.reload(); // the filter waits for this device's list after the sign-in resumes
+        await jp.locator('.jobs-status.ok').waitFor({ timeout: 30000 });
+        assert.deepEqual(await shownJobs(), [`${REG}.fseal`]);
+        assert.equal(await statusParam(), 'registered');
       });
 
       await check('Jobs (flag on): axe 0 violations and no horizontal scroll at 320/768/1440 with a filter and an expanded detail; screenshots', async () => {

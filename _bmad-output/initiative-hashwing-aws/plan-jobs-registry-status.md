@@ -77,14 +77,14 @@ deferred: []
 ## Tasks & Acceptance
 
 **Execution:**
-- [ ] `newweb/src/routes.mjs` -- allowlist `status` -- URL state.
-- [ ] `newweb/src/registry-ui.jsx` -- `useJobsRegistry()` -- status from the existing snapshot.
-- [ ] `newweb/src/jobs.jsx` -- props, filter, detail -- generic, no registry wording.
-- [ ] `newweb/src/main.jsx` -- wire behind `__REGISTRY_URL__` -- flag-off unchanged.
-- [ ] `newweb/src/style.css` -- filter and detail styles, 320px.
-- [ ] `newweb/tests/registry-wiring.mjs` -- flag-on Jobs checks (below).
-- [ ] rebuild `docs/console` (flag off) per Boundaries; commit with it.
-- [ ] `AGENTS.md`, ledger R22/R26, EXPERIENCE AC tags -- exact evidence.
+- [x] `newweb/src/routes.mjs` -- allowlist `status` -- URL state.
+- [x] `newweb/src/registry-ui.jsx` -- `useJobsRegistry()` -- status from the existing snapshot.
+- [x] `newweb/src/jobs.jsx` -- props, filter, detail -- generic, no registry wording.
+- [x] `newweb/src/main.jsx` -- wire behind `__REGISTRY_URL__` -- flag-off unchanged.
+- [x] `newweb/src/style.css` -- filter and detail styles, 320px.
+- [x] `newweb/tests/registry-wiring.mjs` -- flag-on Jobs checks (below).
+- [x] rebuild `docs/console` (flag off) per Boundaries; commit with it.
+- [x] `AGENTS.md`, ledger R22/R26, EXPERIENCE AC tags -- exact evidence.
 
 **Acceptance Criteria (flag-on checks to add, each in the new context):**
 - Given a signed-in pilot with SEED_A imported, when one file is sealed with SEED_A (registers), one with the one-time key after "Clear key" (Needs attention, key_not_enrolled), and one signed out (pending, Sealed locally), then Jobs shows per row exactly the label the "Sealed on this device" list shows for that file, the page text contains no "Verified", and the register log count does not change while Jobs is opened, filtered and rows expanded.
@@ -100,6 +100,8 @@ deferred: []
 - `jobsStatusMap`/`jobStatus` are exported pure functions (tested in `registry-session.test.mjs`); the hook memoizes them on the snapshot.
 
 ## Plan Change Log
+
+- A Registered row's detail carries no device "Updated" time (`at: null`): its line already holds the registry's `received_at`. Other states keep `updated_at` / the pending `at`.
 
 - `ready` is `s.listed || s.listError || (!s.owner && no saved token)`, not `!s.owner || s.listed`: on reload the owner is set only after the saved sign-in resumes asynchronously, so `!s.owner` alone was true too early and an out-of-range page could settle before the outbox rows arrived. If a saved token fails to resume, the clamp waits until the next render (the visible page is clamped anyway).
 - Signed in but the outbox list not open yet, the no-record line reads "This device's registry list isn't open yet." (as the Verify time row does), not "no registry record".

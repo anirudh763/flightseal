@@ -399,7 +399,8 @@ export function jobsStatusMap(s) {
     const row = !s.online && raw.state === 'sealed_local' ? { ...raw, state: 'waiting_for_connection', label: stateLabel('waiting_for_connection') } : raw;
     const [label, kind] = chipOf(row);
     const group = row.state === 'registered' ? 'registered' : row.state === 'needs_attention' ? 'problems' : 'waiting';
-    map.set(row.receipt, { label, kind: kind.split(' ')[0], group, line: jobLine(row), at: row.updated_at ?? null });
+    const at = row.state === 'registered' && !isDeleted(row) ? null : row.updated_at ?? null; // Registered carries the registry's own time in its line
+    map.set(row.receipt, { label, kind: kind.split(' ')[0], group, line: jobLine(row), at });
   }
   for (const p of s.pending) {
     if (map.has(p.receipt)) continue;

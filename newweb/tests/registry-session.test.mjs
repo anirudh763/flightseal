@@ -234,7 +234,7 @@ test('Jobs status for each outbox state, pending proofs and no record, matched o
   const of = (s) => jobStatus(jobsStatusMap(s), msg);
   const row = (extra) => ({ ...base, rows: [{ id: 'x', receipt: R, updated_at: 5, ...extra }] });
   assert.deepEqual(of(row({ state: 'registered', disposition: 'active', label: 'Registered', received_at: '2026-11-17T10:00:05Z' })),
-    { label: 'Registered', kind: 'ok', group: 'registered', line: "Registered at 2026-11-17 10:00:05 UTC. This is the registry's statement, not proof of the files.", at: 5 });
+    { label: 'Registered', kind: 'ok', group: 'registered', line: "Registered at 2026-11-17 10:00:05 UTC. This is the registry's statement, not proof of the files.", at: null });
   const deleted = of(row({ state: 'registered', disposition: 'deleted', label: 'Registered, later deleted' }));
   assert.deepEqual([deleted.label, deleted.kind, deleted.group], ['Registered, later deleted', 'neutral', 'registered']);
   const attention = of(row({ state: 'needs_attention', reason: 'key_not_enrolled', label: 'Needs attention' }));
