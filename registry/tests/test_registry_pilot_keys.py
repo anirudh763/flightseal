@@ -367,6 +367,33 @@ def test_change_committed_during_registration_blocks_it(change):
     assert _no_reg(table)
 
 
+@pytest.mark.parametrize("env", [{}, {"PILOT_KEYS_ORGS": ""}, ON])
+def test_company_key_register_is_exactly_as_before_whatever_the_switch(env):
+    """Switch off (unset or empty) or on: a company-key registration sends the same four-item transaction as before
+    Option B (REG, IDEM, QUOTA, KEY check on state only) and gets the same ack."""
+    app, table, clock = make_app(**env)
+    assert enroll(app, clock)[0] == 201
+    real, sent = table.transact, []
+    table.transact = lambda ops: (sent.append(copy.deepcopy(ops)), real(ops))[1]
+    s, ack, _ = register(app, token(clock), line(SEED_A, 3))
+    assert s == 201 and set(ack) == {"registration_id", "received_at", "count", "head", "key_fingerprint",
+                                     "disposition"}
+    [ops] = [o for o in sent if any(op["op"] == "put" and op["item"]["SK"].startswith("REG#") for op in o)]
+    assert [op["op"] for op in ops] == ["put", "put", "update", "check"]
+    assert ops[3] == {"op": "check", "key": ("ORG#orgA", "KEY#" + FP[SEED_A]), "cond": [("eq", "state", "active")]}
+
+
+def test_authorization_from_one_org_is_refused_in_another():
+    """An authorization names no org: it is bound to the org whose ACTIVE_KEY signed it, and to one pilot key."""
+    app, table, clock = make_app(PILOT_KEYS_ORGS="orgA,orgB")
+    assert enroll(app, clock)[0] == 201  # orgA: SEED_A
+    assert enroll(app, clock, seed=SEED_C, org="orgB")[0] == 201  # orgB: SEED_C
+    auth = authorize(SEED_A, ed25519.public_key(SEED_B), clock.t + 14 * DAY)
+    assert pilot_enroll(app, clock, SEED_B, org="orgB", auth=auth)[:2] == (422, {"error": "company_key_not_active"})
+    assert pilot_enroll(app, clock, _seed(9), auth=auth)[:2] == (422, {"error": "bad_authorization"})  # other pilot
+    assert pilot_enroll(app, clock, SEED_B, auth=auth)[0] == 201
+
+
 def test_company_key_register_path_is_unchanged_with_the_switch_on():
     app, table, clock = _world()
     pilot_enroll(app, clock, SEED_B)
