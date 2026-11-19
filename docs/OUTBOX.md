@@ -160,7 +160,7 @@ idempotency window. A malformed `token`, or a page without Web Crypto (not a sec
 node --test newweb/tests/outbox.test.mjs newweb/tests/registry-client.test.mjs   # 58 tests, stub fetch + memory store
 node --test newweb/tests/registry-session.test.mjs                                # 15 tests, the console's session store in Node
 node --test newweb/tests/outbox-browser.mjs                                      # 8 tests, Chromium + dev server
-node newweb/tests/registry-wiring.mjs                                            # 36 checks, flag-off scan + flag-on console
+node newweb/tests/registry-wiring.mjs                                            # 45 checks, flag-off scan + flag-on console
 ```
 
 The browser tests start `registry/devserver/server.py` (DEV ONLY; it refuses to bind to anything but loopback),
