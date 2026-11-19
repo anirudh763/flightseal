@@ -30,7 +30,7 @@ import { deleteJobsDb, openJobsStore } from './jobs-store.mjs';
 import { LinkStep, VERIFY_OPENS_ON, VerifyChooser } from './verify-start.jsx';
 import { createEncryptedProfileBackup, inspectEncryptedProfileBackup, commitBackupRestore, previewBackupRestore } from './profile-backup.mjs';
 import { createSyncProvider } from './sync-provider.mjs';
-import { PINS_CHANGED, SOURCES, addTrustedCompany, fingerprintHex, formatFingerprint, listTrustedHistory, listTrustedKeys, markCompromised, pinTrustedKey, removeTrustedKey, trustForKey } from './trusted-keys.mjs';
+import { CONFIRM_MESSAGE, PINS_CHANGED, SOURCES, addTrustedCompany, fingerprintHex, formatFingerprint, listTrustedHistory, listTrustedKeys, markCompromised, pinTrustedKey, removeTrustedKey, trustForKey } from './trusted-keys.mjs';
 import { RegistryBarLink, RegistryBoundary, RegistryPanel, RegistryShareNote, RegistrySigningLine, SealedOnDevice, ShareRecordPanel, getRegistry, useJobsRegistry, registryLogout, registryScope, registrySealStart, registrySealed, useRegistryTimeField, useRegistryUnsent } from './registry-ui.jsx';
 import { BYTES_DIFFER, TRUST_KIND, composeNote, countsLine, offersOriginal, pairFiles, verdict, landingLine, manifestReport, parseLandingLine, parseNote, parseSealedLine, timeFields, toIsoFromLocal, trustLine } from './recipient-trust.mjs';
 
@@ -2093,7 +2093,8 @@ function TrustedKeyPinControls({ value, onUse, idPrefix = 'trusted-key' }) {
     <label className="field-label" htmlFor={`${idPrefix}-source`}>Where did you get this key?</label>
     <select id={`${idPrefix}-source`} required value={source} onChange={(event) => { setSource(event.target.value); setConfirmed(false); }}><option value="">Choose a source</option>{PICKABLE_SOURCES.map(([key, label]) => <option key={key} value={key}>{label}</option>)}</select>
     <label className="check-row" htmlFor={`${idPrefix}-confirmed`}><input id={`${idPrefix}-confirmed`} type="checkbox" checked={confirmed} onChange={(event) => setConfirmed(event.target.checked)} />I confirmed this fingerprint through a channel I already knew</label>
-    <button className="button secondary" type="button" disabled={!value || !name.trim() || !source || !confirmed} onClick={() => save()}>Pin public key on this device</button>
+    <button className="button secondary" type="button" disabled={!value || !name.trim() || !source || !confirmed} aria-describedby={!value || !name.trim() || !source || !confirmed ? `${idPrefix}-pin-hint` : undefined} onClick={() => save()}>Pin public key on this device</button>
+    {(!value || !name.trim() || !source || !confirmed) && <p id={`${idPrefix}-pin-hint`} className="field-hint">To pin, add a key, a name and a source, then tick the box.</p>}
     {confirm && <ConfirmBox text={confirm} confirmLabel="Replace key" cancelLabel="Keep current key" onConfirm={() => save(true)} onCancel={() => setConfirm('')} />}
     <p>Pinning is your local trust decision. Confirm every key rotation independently; a fingerprint is not a verified pilot identity.</p>
     {message && <p role="status">{message}</p>}
@@ -2122,7 +2123,10 @@ function TrustedCompanies() {
       setMessage(`Added ${entry.name}.`);
     } catch (cause) {
       if (cause?.code === 'replace-needs-confirm') setPending({ kind: 'replace', text: cause.message });
-      else setError(cause?.message || 'Could not add this company.');
+      else {
+        setError(cause?.message || 'Could not add this company.');
+        if (cause?.message === CONFIRM_MESSAGE) document.getElementById('tc-confirmed')?.focus();
+      }
     }
   };
   const act = () => {
@@ -2145,12 +2149,12 @@ function TrustedCompanies() {
       <fieldset className="source-choice" ref={sourceChoice}><legend>Where did you get this fingerprint?</legend>
         {PICKABLE_SOURCES.map(([key, label]) => <label key={key} className="check-row"><input type="radio" name="tc-source" value={key} required checked={source === key} onChange={() => { setSource(key); setConfirmed(false); }} />{label}</label>)}
       </fieldset>
-      <label className="check-row" htmlFor="tc-confirmed"><input id="tc-confirmed" type="checkbox" checked={confirmed} onChange={(event) => setConfirmed(event.target.checked)} />I confirmed this fingerprint through a channel I already knew</label>
+      <label className="check-row" htmlFor="tc-confirmed"><input id="tc-confirmed" type="checkbox" checked={confirmed} aria-invalid={error === CONFIRM_MESSAGE || undefined} aria-describedby={error === CONFIRM_MESSAGE ? 'tc-error' : undefined} onChange={(event) => setConfirmed(event.target.checked)} />I confirmed this fingerprint through a channel I already knew</label>
       <button className="button primary" type="submit">Add company</button>
     </form>
     {pending?.kind === 'replace' && <ConfirmBox text={pending.text} confirmLabel="Replace key" cancelLabel="Keep current key" onConfirm={() => add(true)} onCancel={() => setPending(null)} />}
     {pending && pending.kind !== 'replace' && <ConfirmBox text={pending.text} confirmLabel={pending.kind === 'compromise' ? 'Mark as compromised' : 'Remove company'} cancelLabel="Cancel" onConfirm={act} onCancel={() => setPending(null)} />}
-    {error && <p className="field-hint receipt-error" role="alert">{error}</p>}
+    {error && <p id="tc-error" className="field-hint receipt-error" role="alert">{error}</p>}
     {message && <p className="field-hint" role="status">{message}</p>}
     {active.length ? <ul className="company-list" aria-label="Active trusted companies">{active.map((entry) => <li key={`${entry.name}-${entry.fingerprint}`}>
       <strong className="wrap">{entry.name}</strong>
