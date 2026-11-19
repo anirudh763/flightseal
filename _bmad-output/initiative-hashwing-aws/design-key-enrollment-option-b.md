@@ -302,3 +302,9 @@ registered → Verify on a constant-on build.
    the share view)? The security review leans yes; it can only lower a result. Today they don't (AD-9 minimal disclosure), so revocation reaches them only through the company.
 3. Should a company key replacement or compromise notify the org's other admins? Nothing does today.
 4. Pilot key cap per org (50 `[ASSUMPTION]`).
+
+### Defaults taken 2026-11-19 (the owner asked not to wait on these; each can be changed)
+1. Authorization lifetime: 14 days default, 30 days maximum, as designed. The owner can change it before Option B is switched on; both switches stay off until then.
+2. A "removed or marked compromised" signal for recipients: yes, lower-only, on the share view. Not in PRs 1 to 3; listed as a follow-up.
+3. Other admins are told when the company key is replaced or marked compromised: yes, in the app's key list (no email or outside message).
+4. Caps: 50 pilot keys per company, 500 entries in a recipient's compromised list.
