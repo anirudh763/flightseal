@@ -500,7 +500,7 @@ class App:
         h = self._str(body, "token_hash", HEX64)
         idem_key = self._str(body, "idempotency_key", IDEM_KEY)
         days = body.get("expires_days", 30)
-        if not isinstance(days, int) or isinstance(days, bool) or not 1 <= days <= 365:
+        if not isinstance(days, int) or isinstance(days, bool) or not 1 <= days <= 30:  # owner decision: 30 days default and maximum
             raise HttpError(400, "bad_request")
         pk, now = f"ORG#{ident.org_id}", self.now()
         sidem = self.t.get(pk, "SIDEM#" + idem_key)
