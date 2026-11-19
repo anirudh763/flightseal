@@ -97,7 +97,7 @@ All paths relative to the worktree.
 ## Implementation Notes
 
 - Reclaim and retry live in `pilot_enroll`: reclaim only when the counter condition is the failure left after the challenge, key and ACTIVE_KEY checks; the same ops are re-sent once with the same `now`. `_retire_ops` is shared by admin retire and reclaim. A pilot item with no string `company_fp` or no int `not_after` counts as unusable (as on register).
-- Compromise is a two-pass loop that rebuilds every op from a fresh read. `test_racing_compromise_rereads_after_a_cancel[rotated]` changed from 409 to 200 (a racing rotation no longer refuses compromise); `test_compromise_gives_up_with_409_when_every_attempt_races` covers the remaining 409.
+- Compromise is a two-pass loop that rebuilds every op from a fresh read; the second pass runs only for a pilot key, so company-key compromise behaves exactly as before (company-key tests unchanged). `test_compromise_of_a_pilot_key_gives_up_with_409_when_every_attempt_races` covers the remaining 409.
 - Retry-After and the expose header are set once in `handle` from the final status; the 204 preflight also carries the expose header.
 - Measured: registry 301 passed (0 skipped with `build/fseal`), full suite 364 passed / 30 skipped, infra 19, ctest 5/5, LocalStack 24 pass / 2 fail (the known persistence steps) / 2 blocked.
 

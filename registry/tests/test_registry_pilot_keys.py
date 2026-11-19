@@ -798,3 +798,18 @@ def test_restore_of_pre_pilot_key_items_and_tombstones_reads_them_as_company_key
     assert register(restored, token(clock), line(SEED_C, 3))[0] == 201
     assert register(restored, token(clock), line(SEED_A, 4), idem="idem-key-0000000002")[:2] == \
         (403, {"error": "key_not_active"})
+
+
+def test_compromise_of_a_pilot_key_gives_up_with_409_when_every_attempt_races():
+    app, table, clock = _world()
+    assert pilot_enroll(app, clock, SEED_B)[0] == 201
+    real, flips = table.transact, iter(["retired", "active"])
+
+    def racing(ops):  # each attempt loses to another change of state (not to a compromise)
+        table.items[("ORG#orgA", "KEY#" + FP[SEED_B])]["state"] = next(flips)
+        return real(ops)
+
+    table.transact = racing
+    s, out, _ = call(app, "POST", f"/v1/keys/{FP[SEED_B]}/compromised", _admin(clock), {})
+    assert (s, out) == (409, {"error": "conflict"})
+    assert table.items[("ORG#orgA", "KEY#" + FP[SEED_B])]["state"] == "active"  # both attempts were read and retried

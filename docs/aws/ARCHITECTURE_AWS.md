@@ -190,8 +190,8 @@ pilot UI, Verify delegated path) is not. **Off everywhere by default.**
   It works whatever `PILOT_KEYS_ORGS` says.
 - `POST /v1/keys/<fp>/compromised` works for both kinds; for an active pilot key it also subtracts 1 from
   `PILOT_COUNT`. The decrement has no floor condition, so the counter never blocks a revocation. If its transaction
-  is canceled because the key changed meanwhile (a retire, a slot reclaim, a rotation), it reads the key again and
-  retries once with the fresh state; a key already compromised answers its stored date.
+  for a pilot key is canceled because the key changed meanwhile (an admin retire or a slot reclaim), it reads the key
+  again and retries once with the fresh state; a key already compromised answers its stored date.
 - `GET /v1/keys` rows gain `kind`; pilot rows gain `company_fingerprint` and `not_after` (ISO). The response gains
   `pilot_keys` (true when the caller's org is switched on).
 - **Renewal** is a new pilot key with a new authorization. A fingerprint once seen in an org is never enrolled again.

@@ -55,10 +55,8 @@ def test_repeat_compromise_keeps_the_first_date_and_writes_nothing():
     assert _key_items(table) == before
 
 
-@pytest.mark.parametrize("flip_to", ["compromised", "rotated"])
-def test_racing_compromise_rereads_after_a_cancel(flip_to):
-    """A racing compromise wins with its own date; any other racing change is read again and compromise retries once
-    with the fresh state, so it is never refused for the race."""
+@pytest.mark.parametrize("flip_to, expected", [("compromised", 200), ("rotated", 409)])
+def test_racing_compromise_rereads_after_a_cancel(flip_to, expected):
     app, table, clock = make_app()
     enroll(app, clock)
     raced_at = clock.t - 5
@@ -72,24 +70,12 @@ def test_racing_compromise_rereads_after_a_cancel(flip_to):
     table.transact = racing
     clock.t += 60
     s, out = _compromise(app, _admin(clock))
-    at = "2027-01-15T07:59:55Z" if flip_to == "compromised" else "2027-01-15T08:01:00Z"
-    assert (s, out) == (200, {"key_fingerprint": FP_A, "state": "compromised", "changed_at": at})
-    assert table.items[("ORG#orgA", "KEY#" + FP_A)]["state"] == "compromised"
-
-
-def test_compromise_gives_up_with_409_when_every_attempt_races():
-    app, table, clock = make_app()
-    enroll(app, clock)
-    real, flips = table.transact, iter(["rotated", "active"])
-
-    def racing(ops):  # each attempt loses to another change of state
-        table.items[("ORG#orgA", "KEY#" + FP_A)]["state"] = next(flips)
-        return real(ops)
-
-    table.transact = racing
-    assert _compromise(app, _admin(clock)) == (409, {"error": "conflict"})
-    table.transact = real
-    assert table.items[("ORG#orgA", "KEY#" + FP_A)]["state"] == "active"
+    if expected == 200:
+        assert (s, out) == (200, {"key_fingerprint": FP_A, "state": "compromised",
+                                  "changed_at": "2027-01-15T07:59:55Z"})
+    else:
+        assert (s, out) == (409, {"error": "conflict"})
+    assert table.items[("ORG#orgA", "KEY#" + FP_A)]["state"] == flip_to  # the cancelled write left nothing
 
 
 def test_register_racing_a_compromise_is_refused_and_writes_nothing():

@@ -636,8 +636,8 @@ class App:
 
     def compromise(self, ident, body, _query, fp):
         """Idempotent: a key already compromised keeps its first `changed_at`, and nothing is written. If a racing
-        retire, reclaim or rotation changes the key first, it reads the key again and retries once, so it is never
-        refused for that race."""
+        retire or slot reclaim changes a pilot key first, it reads the key again and retries once, so it is never
+        refused for that race. A company key keeps its single attempt."""
         self._fields(body)
         pk, now = f"ORG#{ident.org_id}", self.now()
         for _ in (1, 2):
@@ -653,6 +653,8 @@ class App:
                 ops.append({"op": "delete", "key": (pk, "ACTIVE_KEY"), "cond": [("eq", "fp", fp)]})
             if self._transact(ops) is None:
                 return 200, {"key_fingerprint": fp, "state": "compromised", "changed_at": _iso(now)}
+            if not _is_pilot(key):
+                break
         key = self.t.get(pk, "KEY#" + fp)
         if key and key["state"] == "compromised":
             return self._compromised(fp, key)
