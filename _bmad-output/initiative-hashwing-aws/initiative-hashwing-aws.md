@@ -176,8 +176,8 @@ Task packets, their order and the tests that change on purpose are in [plan-ui-b
 - Correction: `newweb/tests/private-lifecycle.mjs` passes 20/20 against the right server (measured at 1a6f8d6). The latest reported 19/20 came from running it without `HASHWING_BASE_URL`, which made it test an old local Docker build on port 3001 that predates the rescue notice; the earlier 19/20 was very likely the same. AGENTS.md now gives the full server and test commands.
 - #54: removing a local profile now deletes its jobs database (guest jobs untouched); the menu button reads "Remove local profile, saved view and jobs". #54 reviewed at a2f4779; merged.
 
-**Open PR (not merged):**
-- #55 reviewed at 406c413; follow-ups (doc fixes, expires_at assertion, main merge with fresh build) checked by the advisor. Not merged: still open on GitHub (head 25a7fee); R54 is updated by that PR, not here.
+**Merged after these notes:**
+- #55 share links last 7 or 30 days, at most 30 (3941644): reviewed at 406c413; follow-ups (doc fixes, expires_at assertion, main merge with fresh build) checked by the advisor; merged at head 25a7fee. R54 records it.
 
 **Open items, 2026-11-18 (#54 review and a demo walkthrough on main):**
 - A small seal that finishes during profile removal can recreate that profile's jobs database (narrow race, found in the #54 review).
