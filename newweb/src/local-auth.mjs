@@ -248,7 +248,11 @@ function readLogoutMarks(storage) {
 
 function recordLogoutMark(userId, storage) {
   try {
-    const marks = Object.entries({ ...readLogoutMarks(storage), [userId]: Date.now() })
+    const current = readLogoutMarks(storage);
+    const previous = Number(current[userId]);
+    // Never below the previous mark: a session that started at "mark + 1" after a clock jump is still revoked.
+    const at = Number.isFinite(previous) ? Math.max(Date.now(), previous + 1) : Date.now();
+    const marks = Object.entries({ ...current, [userId]: at })
       .filter(([, t]) => Number.isFinite(t)).sort((a, b) => b[1] - a[1]).slice(0, MAX_LOGOUT_MARKS);
     storage?.setItem(LOGOUTS_KEY, JSON.stringify(Object.fromEntries(marks)));
   } catch { /* the BroadcastChannel and storage event still reach open tabs */ }

@@ -171,4 +171,17 @@ test('a clock that jumped back never revokes a fresh login: the new session star
   setLocalSession({ kind: 'account', userId: p.id }, { storage: fresh, profileStorage: storage, cryptoObject: webcrypto });
   assert.deepEqual(getLocalSession({ storage: fresh, profileStorage: storage }), { app: APP_ID, schema: 1, kind: 'account', userId: p.id }, 'a login after it stays valid');
   assert.equal(dropRevokedLocalSession({ storage: fresh, profileStorage: storage }), false);
+  announceLocalLogout({ userId: p.id, storage, sessionStorage: new MemoryStorage(), cryptoObject: webcrypto });
+  assert.equal(getLocalSession({ storage: fresh, profileStorage: storage }), null, 'logging out while the clock is still behind revokes that login too');
+});
+
+test('a bad stored logout mark never revokes a login', async () => {
+  const storage = new MemoryStorage();
+  const p = await createLocalProfile('badmark@example.test', 'correct horse battery staple', { storage, cryptoObject: webcrypto });
+  for (const bad of ['"soon"', 'null', '{}']) {
+    storage.setItem('flightseal_logouts_v1', JSON.stringify({ [p.id]: JSON.parse(bad) }));
+    const s = new MemoryStorage();
+    setLocalSession({ kind: 'account', userId: p.id }, { storage: s, profileStorage: storage, cryptoObject: webcrypto });
+    assert.equal(getLocalSession({ storage: s, profileStorage: storage })?.userId, p.id, `mark ${bad}`);
+  }
 });
