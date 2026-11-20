@@ -475,6 +475,7 @@ test("line numbers in errors count the authorization lines; a leading space make
   for (const [name, edit, line] of [
     ["auth-then-blank", (l) => [AUTH_LINE, AUTH_LINE, l[0], "", ...l.slice(1)], 4],
     ["auth-leading-space", (l) => [l[0], ` ${AUTH_LINE}`, ...l.slice(1)], 2],
+    ["blank-then-final-auth-no-newline", (l) => [l[0], "", AUTH_LINE], 2],
   ]) {
     const c = withLines(base, name, edit);
     const r = cli(c);

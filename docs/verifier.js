@@ -355,8 +355,9 @@ export const AUTHORIZATION_NOTE = "  note         Pilot authorization not checke
  */
 export function parseReceiptFile(text) {
   const all = text.split("\n");
+  if (all.length && all[all.length - 1] === "") all.pop(); // getline()'s EOF rule, on the original lines
   const kept = all.flatMap((line, i) => (line.startsWith(AUTHORIZATION_LINE) ? [] : [i])); // original index of each kept line
-  const parsed = parseReceipts(kept.map((i) => all[i]).join("\n"));
+  const parsed = parseReceipts(kept.map((i) => `${all[i]}\n`).join(""));
   const pilotAuthorization = kept.length !== all.length;
   return parsed.error
     ? { ...parsed, error: { ...parsed.error, line: kept[parsed.error.line - 1] + 1 }, pilotAuthorization }
