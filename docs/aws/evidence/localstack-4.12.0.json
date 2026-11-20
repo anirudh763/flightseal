@@ -3,15 +3,15 @@
   "digest": "sha256:0df3a97da57de03a588c05d9b8f390f15c7033fc7c4512f94619d344bc3cd317",
   "boto3": "1.43.123",
   "host_machine": "arm64",
-  "started_at": "2026-11-19T20:38:41Z",
+  "started_at": "2026-11-20T05:24:14Z",
   "mode": "rest-v1-stand-in",
   "note": "REST API v1 {proxy+} stand-in, not the HTTP API; dev-hs256 identity adapter; LocalStack community",
   "localstack_version": "4.12.0",
   "edition": "community",
   "lambda_architecture": "arm64",
-  "finished_at": "2026-11-19T20:39:33Z",
+  "finished_at": "2026-11-20T05:25:45Z",
   "summary": {
-    "pass": 24,
+    "pass": 27,
     "fail": 2,
     "blocked": 2,
     "skipped": 0
@@ -98,6 +98,16 @@
       "detail": "200"
     },
     {
+      "step": "list shares (admin), newest first, one per page with a cursor (DynamoDB Query, descending)",
+      "result": "pass",
+      "detail": "200 200; order matches: True"
+    },
+    {
+      "step": "withdraw a share by its id (admin, no token): link 404, list says withdrawn; a pilot cannot list",
+      "result": "pass",
+      "detail": "pilot list 403, DELETE 200, GET link 404, states ['active', 'withdrawn']"
+    },
+    {
       "step": "pilot key enroll (pilot challenge + company-key authorization)",
       "result": "pass",
       "detail": "201 active"
@@ -135,7 +145,12 @@
     {
       "step": "restore apply (Scan, Put, Update in DynamoDB): withdrawn and deleted views 404, active one 200",
       "result": "pass",
-      "detail": "6 tombstones applied; live/withdrawn/deleted share GET: [200, 404, 404]; backup emulated by copying items and undoing the withdrawal and deletion (no PITR in LocalStack community)"
+      "detail": "7 tombstones applied; live/withdrawn/deleted share GET: [200, 404, 404]; backup emulated by copying items and undoing the withdrawal and deletion (no PITR in LocalStack community)"
+    },
+    {
+      "step": "scrub (Scan, conditional UpdateItem in DynamoDB): a 91-day-old actor ID becomes scrubbed, rerun writes 0",
+      "result": "pass",
+      "detail": "first 1, rerun 0"
     },
     {
       "step": "persistence: share served before restart",

@@ -140,22 +140,32 @@ confirmed" once it ends.
 
 ## When the budget alert fires
 
-Decided 2026-11-17, not built (spine AD-18): the budget response will be a reversible traffic pause that keeps the table and user pool. Neither step below is that response: deleting the stage is untested and may not come back with `cdk deploy`, and destroying deletes the data. Until the pause exists, they are the only options, and the infra packet replaces them:
+The budget email only warns. Nothing stops requests or spend until you act, and the billing data behind the alert
+arrives hours late, so spend can already be past the threshold. The response (spine AD-18) is a reversible pause
+that keeps the table, tombstones, user pool and identities. Synthesised and asserted only (`infra/test/stack.test.ts`);
+never run on AWS.
 
-The budget email only warns. Nothing stops requests or spend until you act. Pick one:
-
-1. **Stop all traffic now, keep the data.** Delete the `$default` stage. The API then answers nothing and nothing
-   reaches the Lambda:
+1. **Pause.** Redeploy the same stack with the `TrafficPaused` parameter:
 
    ```sh
-   aws apigatewayv2 delete-stage --api-id <ApiId> --stage-name '$default'
+   cd infra && npx cdk deploy HashWingRegistry --parameters TrafficPaused=true
+   # production: npx cdk deploy HashWingRegistry-prod -c stage=prod --parameters TrafficPaused=true
    ```
 
-   CloudFormation does not notice a stage deleted this way, so a plain `npx cdk deploy` may not bring it back.
-   This has not been tested. The one way back known to work is to destroy and deploy again, which also deletes the
-   table.
-2. **Remove everything:** follow "Destroy" below with `npx cdk destroy HashWingRegistry`. The table and the user
-   pool are deleted with the stack (dev stage only; a `stage=prod` stack keeps them, see "Destroy").
+   This sets the `$default` stage's default route throttle and the public share route's throttle to rate 0, burst 0.
+   Nothing else in the template reads the parameter (a synth test checks this). Expected, not verified on AWS: API
+   Gateway answers every request with its own 429 (no `Retry-After`) and nothing reaches the Lambda. The browser
+   outbox keeps queued proofs and retries with its backoff. Whether those 429s are billed is not verified (see the
+   abuse scenario in [COST.md](COST.md)). The Lambda's own 503 `paused` and the outbox's "waiting" state from AD-18
+   are not built.
+2. **Stays paused.** A later plain `cdk deploy` keeps the parameter's previous value (the CDK default
+   `--previous-parameters`), so it does not reopen by accident. Check with
+   `aws cloudformation describe-stacks --stack-name HashWingRegistry --query "Stacks[0].Parameters"`.
+3. **Reopen.** The same command with `--parameters TrafficPaused=false` restores rate 2, burst 5 on both.
+
+Do not delete the stage or destroy the stack as a budget response: a stage deleted outside CloudFormation may not
+come back with `cdk deploy`, and destroying a dev stack deletes the table and the user pool. `cdk destroy` is a
+deliberate teardown only (see "Destroy" below).
 
 Then check Cost Explorer for which line grew: API Gateway requests, Lambda, DynamoDB or logs (see the abuse
 scenario in [COST.md](COST.md)). Do not add a WAF: it has a fixed monthly fee.

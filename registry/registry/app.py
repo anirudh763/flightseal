@@ -14,6 +14,7 @@ import sys
 import time
 
 from . import ed25519, pilot_authorization, receipt
+from .scrub import PLACEHOLDERS, RETAIN
 from .identity import ORG_ID, identify
 from .store import ConditionFailed, StoreUnavailable, TransactionCanceled
 
@@ -27,6 +28,7 @@ HEX32 = re.compile(r"[0-9a-f]{32}")
 HEX64 = re.compile(r"[0-9a-f]{64}")
 HEX128 = re.compile(r"[0-9a-f]{128}")
 SHARE_TOKEN = re.compile(r"[A-Za-z0-9_-]{43}")  # secrets.token_urlsafe(32)
+SHARE_CURSOR = re.compile(r"([0-9]{12})([0-9a-f]{64})")  # an index SK SHARE#<created 12 digits>#<hash>
 HEADERS = {"content-type": "application/json", "cache-control": "no-store", "x-content-type-options": "nosniff",
            "referrer-policy": "no-referrer"}
 ANY, ADMIN, PUBLIC = "any", "admin", "public"
@@ -46,6 +48,8 @@ ROUTES = [
     ("POST", r"/v1/epoch", "epoch", ADMIN),
     ("GET", r"/v1/epoch", "get_epoch", ANY),
     ("POST", r"/v1/shares", "create_share", ANY),
+    ("GET", r"/v1/shares", "list_shares", ADMIN),
+    ("DELETE", r"/v1/registrations/([0-9a-f]{32})/shares/([0-9a-f]{64})", "withdraw_share_by_id", ADMIN),
     ("GET", r"/v1/shares/([A-Za-z0-9_-]{1,128})", "get_share", PUBLIC),
     ("DELETE", r"/v1/shares/([A-Za-z0-9_-]{1,128})", "withdraw_share", ANY),
 ]
@@ -576,11 +580,14 @@ class App:
 
     def _tomb_for(self, org, fp, key, state, now):
         pilot = _is_pilot(key)
+        enrolled_by = key.get("enrolled_by")
+        if enrolled_by is not None and now - key.get("enrolled_at", 0) >= RETAIN:
+            enrolled_by = "scrubbed"  # R52: a KEY item read before a racing scrub never puts the sub back
         return self._key_tomb(org, fp, state, now, "pilot" if pilot else "company", key.get("company_fp"),
-                              key.get("not_after"), key.get("enrolled_at"), key.get("enrolled_by"))
+                              key.get("not_after"), key.get("enrolled_at"), enrolled_by)
 
     def list_keys(self, ident, _body, query):
-        """Never returns `enrolled_by` (a sub): only whether the caller enrolled each key."""
+        """Never returns `enrolled_by` (a sub): only whether the caller enrolled each key (never for a placeholder)."""
         cursor = query.get("cursor")
         if cursor is not None and not HEX64.fullmatch(cursor):
             raise HttpError(400, "bad_request")
@@ -590,7 +597,7 @@ class App:
         for k in items:
             pilot = _is_pilot(k)
             row = {"key_fingerprint": k["SK"][4:], "kind": "pilot" if pilot else "company", "state": k["state"],
-                   "enrolled_by_me": k.get("enrolled_by") == ident.sub}
+                   "enrolled_by_me": k.get("enrolled_by") == ident.sub and ident.sub not in PLACEHOLDERS}
             for name in ("enrolled_at", "changed_at"):
                 if name in k:  # omitted rather than invented when a stub lacks it
                     row[name] = _iso(k[name])
@@ -695,11 +702,16 @@ class App:
             raise HttpError(409, "idempotency_conflict")
         return self._share_view(self.t.get("SHARE#" + h, "SHARE"), rid, sidem["share_expires_at"])
 
-    def _share_view(self, share, rid, expires_at=None):
+    def _share_state(self, share, expires_at=None):
+        """A share's state as read now: missing reads as expired, and an active one past its expiry is expired."""
         state = (share or {}).get("state", "expired")
         expires_at = (share or {}).get("expires_at", expires_at)
         if state == "active" and (expires_at or 0) <= self.now():
             state = "expired"
+        return state, expires_at
+
+    def _share_view(self, share, rid, expires_at=None):
+        state, expires_at = self._share_state(share, expires_at)
         return 200, {"registration_id": rid, "expires_at": _iso(expires_at) if expires_at else None,
                      "disposition": state}
 
@@ -735,6 +747,8 @@ class App:
                                    "share_expires_at": expires, "expires_at": now + self.dedupe,
                                    "ttl": now + self.dedupe + DAY},
              "cond": [("or", ("not_exists",), ("lt", "expires_at", now + 1))]},
+            # The org's list index (GET /v1/shares), newest first by SK. Write-once: state is read from SHARE#.
+            {"op": "put", "item": {"PK": pk, "SK": f"SHARE#{now:012d}#{h}", "rid": rid}, "cond": [("not_exists",)]},
         ])
         if failed is None:
             return 201, {"registration_id": rid, "expires_at": _iso(expires), "disposition": "active"}
@@ -779,3 +793,48 @@ class App:
                 raise HttpError(409, "conflict")
         return 200, {"disposition": "withdrawn"}
 
+    def list_shares(self, ident, _body, query):
+        """Admin only. Newest first, from the write-once index; each row's state is read from its SHARE# item. Never
+        returns a token: `share_id` is the stored SHA-256, which cannot open the link (the public route hashes it)."""
+        limit = query.get("limit", str(PAGE))
+        if not re.fullmatch(r"[0-9]{1,2}", limit) or not 1 <= int(limit) <= PAGE:
+            raise HttpError(400, "bad_request")
+        cursor = query.get("cursor")
+        hit = SHARE_CURSOR.fullmatch(cursor) if cursor is not None else None
+        if cursor is not None and not hit:
+            raise HttpError(400, "bad_request")
+        start = f"SHARE#{hit[1]}#{hit[2]}" if hit else None
+        items, last = self.t.query(f"ORG#{ident.org_id}", "SHARE#", int(limit), start, reverse=True)
+        rows = []
+        for idx in items:
+            h = idx["SK"][-64:]
+            # ponytail: one GetItem per row, up to 50 reads a page; BatchGetItem if it matters.
+            share = self.t.get("SHARE#" + h, "SHARE")
+            if not share or share.get("org") != ident.org_id:
+                continue
+            state, expires_at = self._share_state(share)
+            rows.append({"share_id": h, "registration_id": share.get("rid", idx.get("rid")), "state": state,
+                         "created_at": _iso(share["created_at"]) if "created_at" in share else None,
+                         "expires_at": _iso(expires_at) if expires_at else None})
+        # From the last index key read, not the last row kept: a skipped row never stalls paging.
+        return 200, {"shares": rows, "next_cursor": last[6:].replace("#", "") if last else None}
+
+    def withdraw_share_by_id(self, ident, _body, _query, rid, h):
+        """Admin only: withdraw a share by its id (the stored hash) without the raw token. Unknown id, another org's
+        share or a registration id that does not match all get the same 404. Idempotent."""
+        pk, now = f"ORG#{ident.org_id}", self.now()
+        share = self.t.get("SHARE#" + h, "SHARE")
+        if (not share or share.get("org") != ident.org_id or share.get("rid") != rid
+                or self.t.get(pk, "REG#" + rid) is None):
+            raise not_found()
+        if share.get("state") != "withdrawn":
+            failed = self._transact([
+                {"op": "update", "key": ("SHARE#" + h, "SHARE"), "set": {"state": "withdrawn", "withdrawn_at": now},
+                 "cond": [("eq", "org", ident.org_id), ("eq", "rid", rid)]},
+                {"op": "put", "item": {"PK": f"TOMB#{ident.org_id}#{h}", "SK": "TOMB", "kind": "share",
+                                       "org": ident.org_id, "ref": h, "rid": rid, "at": now}},
+                {"op": "check", "key": (pk, "REG#" + rid), "cond": [("exists",)]},
+            ])
+            if failed:
+                raise HttpError(409, "conflict")
+        return 200, {"withdrawn": True}
