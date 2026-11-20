@@ -133,14 +133,14 @@ jobs:
         run: |
           npm ci
           node --test tests/report-pdf.test.mjs
-          node --test tests/trusted-keys.test.mjs tests/recipient-trust.test.mjs tests/pilot-authorization.test.mjs tests/pilot-verify.test.mjs
+          node --test tests/trusted-keys.test.mjs tests/recipient-trust.test.mjs tests/pilot-authorization.test.mjs tests/pilot-verify.test.mjs tests/pilot-keys.test.mjs
           node --test tests/jobs-store.test.mjs tests/routes.test.mjs
           npm run build
       - name: Registry outbox and client unit tests (state machine, backoff, allowlist, owner isolation, stale results)
         run: node --test newweb/tests/outbox.test.mjs newweb/tests/registry-client.test.mjs newweb/tests/registry-session.test.mjs
       - name: Registry outbox in Chromium against the real registry App (DEV ONLY server over the in-memory table)
         run: |
-          python3 registry/devserver/server.py --port 39102 > /tmp/registry-dev.log 2>&1 &
+          python3 registry/devserver/server.py --port 39102 --pilot-keys-orgs orgP > /tmp/registry-dev.log 2>&1 &
           server_pid=$!
           trap 'kill "$server_pid"; wait "$server_pid" || true' EXIT
           for attempt in $(seq 1 50); do
@@ -151,7 +151,7 @@ jobs:
           REGISTRY_DEV_URL=http://127.0.0.1:39102 node --test newweb/tests/outbox-browser.mjs
       - name: Registry wiring in the console (flag-off bundle scan, then a flag-on build against the DEV ONLY server)
         run: |
-          python3 registry/devserver/server.py --port 39103 > /tmp/registry-wiring.log 2>&1 &
+          python3 registry/devserver/server.py --port 39103 --pilot-keys-orgs orgP > /tmp/registry-wiring.log 2>&1 &
           server_pid=$!
           trap 'kill "$server_pid"; wait "$server_pid" || true' EXIT
           for attempt in $(seq 1 50); do

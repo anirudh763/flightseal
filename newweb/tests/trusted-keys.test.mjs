@@ -6,6 +6,7 @@ import { spawnSync } from 'node:child_process';
 import {
   SOURCES, addTrustedCompany, fingerprintHex, formatFingerprint, listTrustedHistory, listTrustedKeys, markCompromised,
   matchingTrustedKey, normalizeFingerprint, pinTrustedKey, removeTrustedKey, trustForKey,
+  listCompromisedFingerprints, markFingerprintCompromised, setPilotKeys,
 } from '../src/trusted-keys.mjs';
 
 class MemoryStorage { values = new Map(); getItem(k) { return this.values.get(k) ?? null; } setItem(k, v) { this.values.set(k, String(v)); } }
@@ -274,4 +275,29 @@ test('R34: a bad confirmedAt makes an entry unconfirmed, never dropped; a compro
   assert.deepEqual(listTrustedHistory({ storage }).map((e) => [e.name, Object.hasOwn(e, 'confirmedAt')]), [['Bad date', false], ['Burned', false]]);
   assert.equal((await trustForKey(keyA, opts(storage))).status, 'unconfirmed');
   assert.equal((await trustForKey(keyB, opts(storage))).status, 'compromised');
+});
+
+test('switch off (every shipped build): the pilot-keys setter and the compromised-fingerprint list do nothing', async () => {
+  const storage = new MemoryStorage();
+  await addTrustedCompany('Acme Air', fpA, { storage, source: 'website', confirmed: true, cryptoObject: webcrypto });
+  assert.throws(() => setPilotKeys('Acme Air', fpA, true, { confirmed: true, storage }), /not accepted in this copy/);
+  assert.throws(() => markFingerprintCompromised(fpB, { storage }), /not accepted in this copy/);
+  assert.deepEqual(listCompromisedFingerprints({ storage }), []);
+  assert.equal('pilotKeys' in listTrustedHistory({ storage })[0], false);
+  assert.equal(storage.getItem('hashwing_compromised_fingerprints_v1'), null);
+});
+
+test('only the Trust tick sets pilotKeys: adding, re-adding, rotating and pinning never carry it, and no other module writes pins', async () => {
+  const storage = new MemoryStorage();
+  storage.setItem(STORE, JSON.stringify([{ name: 'Acme Air', publicKey: '', fingerprint: fpA, source: 'website', addedAt: '2026-11-01T00:00:00.000Z', status: 'active', confirmedAt: '2026-11-01T00:00:00.000Z', pilotKeys: true }]));
+  await assert.rejects(addTrustedCompany('Acme Air', fpB, { storage, source: 'website', confirmed: true, cryptoObject: webcrypto }), /already has the key/);
+  await addTrustedCompany('Acme Air', fpB, { storage, source: 'website', confirmed: true, confirmReplace: true, cryptoObject: webcrypto });
+  const [old, rotated] = listTrustedHistory({ storage });
+  assert.equal(old.status, 'replaced');
+  assert.equal('pilotKeys' in rotated, false, 'a new key needs a new tick');
+  await pinTrustedKey('Beta', keyA, { storage, source: 'website', confirmed: true, cryptoObject: webcrypto });
+  assert.equal('pilotKeys' in listTrustedHistory({ storage }).at(-1), false);
+  // profile-backup.mjs, sync-provider.mjs and the rest never touch the pin store (cited by grep, not by trust).
+  const grep = spawnSync('grep', ['-rlE', `${STORE}|hashwing_compromised_fingerprints_v1`, 'src'], { cwd: new URL('..', import.meta.url).pathname, encoding: 'utf8' });
+  assert.deepEqual(grep.stdout.trim().split('\n'), ['src/trusted-keys.mjs']);
 });
