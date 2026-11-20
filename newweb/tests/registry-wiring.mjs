@@ -1,7 +1,7 @@
 // Registry wiring in the console (VITE_REGISTRY_URL), against the DEV ONLY registry/devserver/server.py.
 // 1. The flag-off bundle in docs/console carries no registry code, and the flag-off console makes no registry request.
 // 2. A flag-on console built into .test-artifacts/registry-wiring/build drives sign-in, the outbox list, shares,
-//    delete and the recipient view in Playwright Chromium, then Jobs (5 checks). Run `npm --prefix newweb run build` first (flag off).
+//    delete and the recipient view in Playwright Chromium, then Jobs (10 checks). Run `npm --prefix newweb run build` first (flag off).
 import { createRequire } from 'node:module';
 import { spawn, spawnSync } from 'node:child_process';
 import { createServer } from 'node:http';
@@ -29,6 +29,8 @@ const FORBIDDEN = ['Company registry', 'Test sign-in', 'Export pending proofs', 
   'REGISTRY_URL', 'execute-api', 'amazonaws.com', '__dev/token', 'Your company\'s keys', '/v1/keys', 'hashwing-key-enroll',
   // AC-37: the share record step (applyRegistryRecord) ships only in registry-on builds.
   "Matches the registry's record", "Doesn't match the registry's record for this link", "Files match · doesn't match the link", "This link was withdrawn or couldn't be checked", 'Registry record', 'Checking the share link',
+  // Jobs row actions (R39/AD-15): the saved-ack wording, Refresh's errors, the record actions and the one-record route.
+  'Last confirmed by this device', 'The registry confirmed this record.', 'The registry has no record with this ID', "couldn't confirm this record", 'Make a share link', 'Delete hosted record', '/v1/registrations',
   // Option B, Trust (sender screens ship only behind the registry flag; recipient pieces only behind the constant).
   'Make my pilot key', 'Authorize a pilot key', 'Enroll my pilot key', 'Copy key request', 'HashWing pilot key request', 'hashwing-pilot-key-enroll', '/v1/pilot-keys', 'Remove this pilot key'];
 // Option B recipient pieces: only in a build with PILOT_AUTHORIZATION_ACCEPTED rewritten on (never shipped).
@@ -390,7 +392,7 @@ try {
     assert.ok(bodies.length > 0 && bodies.every((b) => !b.includes('JOBREF-MARKER-91')), 'the job reference is never sent');
     await page.waitForFunction(() => document.querySelector('.registry-announce')?.textContent.includes('flight-a.ulg: Registered'));
     const row = await openRow(page, 'flight-a.ulg');
-    assert.match(await row.locator('.registry-detail').innerText(), /^Registered at \d{4}-\d\d-\d\d \d\d:\d\d:\d\d UTC\. This is the registry's statement, not proof of the files\./);
+    assert.match(await row.locator('.registry-detail').innerText(), /^Last confirmed by this device \d{1,2} [A-Z][a-z]{2},? \d\d:\d\d\. This is the registry's statement, not proof of the files\./, 'a saved ack reads as this device\'s last confirmation');
     assert.match(await page.locator('.registry-summary').innerText(), /^2 registered · 1 not yet registered$/);
     assert.equal(await row.getByRole('button', { name: 'Delete hosted record' }).count(), 0, 'members see no delete');
   });
@@ -398,6 +400,9 @@ try {
 
   await check('AC-25/AC-26: checking the registered receipt shows "Registered at <received_at>" on screen and in the text, Markdown, JSON and PDF reports', async () => {
     const row = await openRow(page, 'flight-a.ulg');
+    const refresh = row.getByRole('button', { name: 'Refresh', exact: true });
+    await refresh.click(); // a saved ack: Refresh shows the registry's own received_at
+    await refresh.waitFor({ state: 'detached' });
     const receivedAt = /Registered at (\d{4}-\d\d-\d\d) (\d\d:\d\d:\d\d) UTC/.exec(await row.locator('.registry-detail').innerText()).slice(1).join('T') + 'Z';
     const value = `Registered at ${receivedAt}`;
     assert.deepEqual(await registryLineOfLastSeal(page, 'flight-a.fseal', new RegExp(`^${value}$`)), [value, REGISTERED_BASIS]);
@@ -1348,7 +1353,7 @@ try {
         assert.equal(facts.Package, `${REG}.fseal`);
         assert.match(facts.Items, /^1 item · [\d,]+ bytes$/);
         assert.ok(facts.Sealed, 'sealed time');
-        assert.match(facts['Registry status'], /^Registered at \d{4}-\d\d-\d\d \d\d:\d\d:\d\d UTC\. This is the registry's statement, not proof of the files\.$/, 'the registry\'s time only');
+        assert.match(facts['Registry status'], /^Last confirmed by this device \d{1,2} [A-Z][a-z]{2},? \d\d:\d\d\. This is the registry's statement, not proof of the files\.$/, 'a saved ack: this device\'s last confirmation');
         await detail.getByRole('button', { name: 'Copy receipt message' }).click();
         await jp.getByText('Receipt message copied.').waitFor();
         assert.match(await jp.evaluate(() => navigator.clipboard.readText()), /fseal-receipt v1 count=/);
@@ -1405,6 +1410,184 @@ try {
         await jp.waitForFunction(() => location.hash === '#/app/jobs');
         assert.equal((await shownJobs()).length, 3);
         assert.equal(await jp.evaluate(() => document.activeElement?.id), 'jobs-status-filter');
+      });
+
+      // Row actions in the Jobs detail (R22, R26, R39/AD-15): Refresh, share links, delete, the {company} label.
+      const STATEMENT = String.raw`This is the registry's statement, not proof of the files\.`;
+      const TIME = String.raw`\d{4}-\d\d-\d\d \d\d:\d\d:\d\d UTC`;
+      const detail = jp.locator('.jobs-detail-row');
+      const openDetail = async (name) => {
+        const button = jobRow(name).getByRole('button', { name: `Details for ${name}.fseal` });
+        if ((await button.getAttribute('aria-expanded')) !== 'true') await button.click();
+        await detail.waitFor();
+        return detail;
+      };
+      const detailLine = () => detail.locator('.jobs-detail-line').innerText();
+      const sealRegistered = () => jp.locator('.registry-row').filter({ has: jp.locator(':scope > summary .status-label', { hasText: /^Registered$/ }) });
+      const gets = async () => (await dev('log')).log.filter((e) => e.route === 'get_registration').length;
+      const dupIds = () => jp.evaluate(() => { const seen = new Set(), dup = []; for (const el of document.querySelectorAll('[id]')) { if (seen.has(el.id)) dup.push(el.id); seen.add(el.id); } return dup; });
+      const waitJobChip = (name, text) => jp.waitForFunction(([n, t]) => [...document.querySelectorAll('.jobs-table tbody tr:not(.jobs-detail-row)')]
+        .some((tr) => tr.querySelector('.jobs-name')?.textContent === `${n}.fseal` && tr.querySelector('.jobs-status')?.textContent === t), [name, text], { timeout: 30000 });
+
+      await check('Jobs (flag on): a registered row reads "Last confirmed by this device {time}" with Refresh and its company label; Refresh asks once, on press, then shows "Registered at {received_at}" on both screens', async () => {
+        await signIn(jp, 'jobs-pilot', 'pilot');
+        await go(jp, 'jobs');
+        await jp.locator('.jobs-status.ok').waitFor({ timeout: 30000 });
+        assert.equal(await jobRow(REG).locator('.jobs-company').innerText(), 'orgA');
+        assert.equal(await jobRow(ATT).locator('.jobs-company').innerText(), 'orgA');
+        assert.equal(await jobRow(LOC).locator('.jobs-company').count(), 0, 'an unassigned proof names no company');
+        assert.equal(await jobChip(REG), 'Registered', 'the chip text is unchanged');
+        const before = await gets();
+        await openDetail(REG);
+        assert.match(await detailLine(), new RegExp(`^Last confirmed by this device \\d{1,2} [A-Z][a-z]{2},? \\d\\d:\\d\\d\\. ${STATEMENT}$`));
+        assert.equal(await detail.getByRole('button', { name: 'Delete hosted record' }).count(), 0, 'members see no delete');
+        await sleep(300);
+        assert.equal(await gets(), before, 'no lookup until Refresh is pressed');
+        const refresh = detail.getByRole('button', { name: 'Refresh', exact: true });
+        await refresh.click();
+        await refresh.waitFor({ state: 'detached' });
+        assert.match(await detailLine(), new RegExp(`^Registered at ${TIME}\\. ${STATEMENT}$`));
+        assert.equal(await jp.evaluate(() => document.activeElement?.className), 'registry-actions', 'focus stays in the detail, never on the body');
+        await detail.getByText('The registry confirmed this record.').waitFor({ state: 'attached' });
+        assert.equal(await gets(), before + 1, 'one GET /v1/registrations/<id>');
+        const received = /Registered at (\S+) (\S+) UTC/.exec(await detailLine()).slice(1).join('T') + 'Z';
+        assert.ok((await dev('registrations?org=orgA')).registrations.some((r) => r.received_at === received), 'the registry\'s own received_at');
+        await go(jp, 'protect');
+        const row = sealRegistered();
+        if (!(await row.evaluate((d) => d.open))) await row.locator(':scope > summary').click();
+        assert.match(await row.locator('.registry-detail').innerText(), new RegExp(`^Registered at ${TIME}\\. ${STATEMENT}`), 'one wording on both screens');
+        assert.equal(await row.getByRole('button', { name: 'Refresh', exact: true }).count(), 0);
+      });
+
+      let shareToken = '';
+      await check('Jobs (flag on): "Make a share link" in the detail offers 7 or 30 days (30 default); Copy and Withdraw work; Seal & send shows the same link; no duplicate ids', async () => {
+        await go(jp, 'jobs');
+        await openDetail(REG);
+        await detail.locator('.registry-share .registry-tech > summary').click();
+        const days = detail.locator('select[id$="-days"]');
+        assert.deepEqual(await days.locator('option').evaluateAll((o) => o.map((x) => x.value)), ['7', '30']);
+        assert.equal(await days.inputValue(), '30', '30 days by default');
+        assert.match(await days.getAttribute('id'), /^jobs-share-/);
+        await detail.getByRole('button', { name: 'Make a share link' }).click();
+        const field = detail.getByLabel('Share link');
+        await field.waitFor();
+        const url = await field.inputValue();
+        assert.match(url, new RegExp(`^${new URL(flagOn.url).origin}/flightseal/console/#/app/verify\\?share=[A-Za-z0-9_-]{43}$`));
+        shareToken = url.split('share=')[1];
+        await detail.getByRole('button', { name: 'Copy link' }).click();
+        await detail.getByText('Link copied').waitFor();
+        assert.equal(await jp.evaluate(() => navigator.clipboard.readText()), url);
+        assert.deepEqual(await dupIds(), [], 'the hidden Seal & send list and Jobs share no id');
+        assert.equal((await fetch(`${base}/v1/shares/${shareToken}`)).status, 200, 'the link opens');
+        await go(jp, 'protect');
+        const row = sealRegistered();
+        if (!(await row.evaluate((d) => d.open))) await row.locator(':scope > summary').click();
+        assert.equal(await row.getByLabel('Share link').inputValue(), url, 'the same link on Seal & send');
+        const stored = await jp.evaluate(() => JSON.stringify({ ...localStorage }) + JSON.stringify({ ...sessionStorage }));
+        assert.ok(!stored.includes(shareToken), 'the share token is never stored');
+        await go(jp, 'jobs'); // leaving Jobs closed the detail; the link is still there to withdraw
+        await openDetail(REG);
+        await detail.getByRole('button', { name: 'Withdraw link' }).click();
+        await detail.getByText(/^Link withdrawn\. It no longer opens\./).waitFor();
+        assert.equal(await jp.evaluate(() => document.activeElement?.textContent), 'Make a share link', 'focus moves to Make a share link, never the body');
+        assert.equal((await fetch(`${base}/v1/shares/${shareToken}`)).status, 404, 'withdrawn');
+        await go(jp, 'protect');
+        assert.equal(await sealRegistered().getByLabel('Share link').count(), 0, 'withdrawn on Seal & send too');
+      });
+
+      await check('Jobs (flag on): axe 0 violations and no horizontal scroll at 320/768/1440 with the record actions open; screenshots', async () => {
+        await go(jp, 'jobs');
+        await openDetail(REG);
+        await detail.getByRole('button', { name: 'Make a share link' }).click();
+        await detail.getByLabel('Share link').waitFor();
+        for (const width of [320, 768, 1440]) {
+          await jp.setViewportSize({ width, height: 900 });
+          const overflow = await jp.evaluate(() => document.documentElement.scrollWidth - innerWidth);
+          assert.ok(overflow <= 0, `jobs actions@${width}: horizontal scroll ${overflow}px`);
+          const small = await detail.locator('button').evaluateAll((bs) => bs.filter((b) => b.offsetParent && b.getBoundingClientRect().height < 44).map((b) => b.textContent));
+          assert.deepEqual(small, [], `jobs actions@${width}: 44px targets`);
+          await axe(jp, `jobs actions@${width}`);
+          await jp.screenshot({ path: join(OUT, `jobs-actions-${width}.png`), fullPage: true });
+        }
+        await jp.setViewportSize({ width: 1440, height: 900 });
+        await detail.getByRole('button', { name: 'Withdraw link' }).click();
+        await detail.getByText(/^Link withdrawn\./).waitFor();
+      });
+
+      await check('Jobs (flag on): a company switch A→B shows no orgA label, status, share link, Refresh or delete; switching back to A restores them', async () => {
+        await go(jp, 'protect');
+        await sealRegistered().getByRole('button', { name: 'Make a share link' }).click(); // a link made under A
+        await sealRegistered().getByLabel('Share link').waitFor();
+        await go(jp, 'help');
+        await jp.locator('#company-registry').getByRole('button', { name: 'Sign out' }).click();
+        await signIn(jp, 'jobs-b', 'pilot', 3600, 'orgB');
+        await go(jp, 'jobs');
+        await openDetail(REG);
+        await detail.getByText('This device has no registry record for this job under the current sign-in.').waitFor({ timeout: 30000 });
+        assert.equal(await jp.locator('.jobs-company').count(), 0, 'no company label from orgA');
+        assert.equal(await jp.locator('.jobs-status.ok, .jobs-status.warn').count(), 0, 'no orgA status');
+        assert.ok(!(await jp.locator('main').innerText()).includes('orgA'), 'orgA appears nowhere on screen');
+        assert.equal(await jp.locator('.registry-actions, .registry-share').count(), 0, 'no share link, Refresh or delete in either list');
+        await go(jp, 'help');
+        await jp.locator('#company-registry').getByRole('button', { name: 'Sign out' }).click();
+        await signIn(jp, 'jobs-pilot', 'pilot');
+        await go(jp, 'jobs');
+        await jp.locator('.jobs-status.ok').waitFor({ timeout: 30000 });
+        assert.equal(await jobChip(REG), 'Registered');
+        assert.equal(await jobRow(REG).locator('.jobs-company').innerText(), 'orgA');
+        await openDetail(REG);
+        assert.match(await detailLine(), /^Last confirmed by this device /, 'a refresh lasts for its sign-in only');
+        assert.equal(await detail.getByLabel('Share link').count(), 0, 'a link made under A is not kept across the switch');
+        await detail.getByRole('button', { name: 'Refresh', exact: true }).waitFor();
+      });
+
+      await check('Jobs (flag on): an admin deletes the hosted record from the detail ("Registered, later deleted", focus on its Details button); Refresh of a record deleted elsewhere marks it deleted too', async () => {
+        const DEL = 'jobs-del.ulg', GONE = 'jobs-gone.ulg';
+        await go(jp, 'help');
+        await jp.locator('#company-registry').getByRole('button', { name: 'Sign out' }).click();
+        await signIn(jp, 'jobs-admin', 'admin');
+        await importSeedA(jp);
+        await sealSmall(jp, DEL);
+        await chipIs(jp, DEL, 'Registered');
+        await sealSmall(jp, GONE);
+        await chipIs(jp, GONE, 'Registered');
+        await go(jp, 'jobs');
+        await waitJobChip(DEL, 'Registered');
+        await openDetail(DEL);
+        assert.match(await detailLine(), /^Last confirmed by this device /);
+        for (const width of [320, 1440]) { // the state most users see: a saved ack, Refresh, share and (admin) delete
+          await jp.setViewportSize({ width, height: 900 });
+          assert.ok((await jp.evaluate(() => document.documentElement.scrollWidth - innerWidth)) <= 0, `jobs admin@${width}: no horizontal scroll`);
+          await axe(jp, `jobs admin@${width}`);
+          await jp.screenshot({ path: join(OUT, `jobs-admin-${width}.png`), fullPage: true });
+        }
+        await jp.setViewportSize({ width: 1440, height: 900 });
+        await detail.getByRole('button', { name: 'Delete hosted record' }).click();
+        const dialog = detail.locator('dialog[open]');
+        await dialog.getByRole('heading', { name: 'Delete the hosted record?' }).waitFor();
+        assert.equal(await jp.evaluate(() => document.activeElement?.textContent), 'Keep it');
+        await dialog.getByRole('button', { name: 'Delete hosted record' }).click();
+        await waitJobChip(DEL, 'Registered, later deleted');
+        await detail.getByText("The registry's record of this receipt was deleted. Links to it no longer open.").waitFor();
+        assert.equal(await jp.evaluate(() => document.activeElement?.getAttribute('aria-label')), `Details for ${DEL}.fseal`, 'focus on that row\'s Details button');
+        // GONE is deleted outside this device; its Refresh finds that out.
+        await openDetail(GONE);
+        await detail.getByRole('button', { name: 'Copy receipt message' }).click();
+        const head = / head=([0-9a-f]{64}) /.exec(await jp.evaluate(() => navigator.clipboard.readText()))[1];
+        const admin = await tokenFor('jobs-admin', 'admin');
+        let rid = null;
+        for (let cursor = ''; rid === null;) {
+          const page = await (await fetch(`${base}/v1/registrations${cursor ? `?cursor=${cursor}` : ''}`, { headers: { authorization: `Bearer ${admin}` } })).json();
+          rid = page.registrations.find((r) => r.head === head)?.registration_id ?? null;
+          if (rid === null && !page.next_cursor) assert.fail('GONE not listed');
+          cursor = page.next_cursor;
+        }
+        assert.equal((await fetch(`${base}/v1/registrations/${rid}`, { method: 'DELETE', headers: { authorization: `Bearer ${admin}` } })).status, 200);
+        assert.equal(await jobChip(GONE), 'Registered', 'nothing changes until Refresh');
+        await detail.getByRole('button', { name: 'Refresh', exact: true }).click();
+        await waitJobChip(GONE, 'Registered, later deleted');
+        assert.equal(await jp.evaluate(() => document.activeElement?.getAttribute('aria-label')), `Details for ${GONE}.fseal`);
+        assert.ok(!(await jp.locator('main').innerText()).includes('Verified'));
       });
     } finally { await jctx.close(); }
   }
