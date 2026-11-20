@@ -4,7 +4,7 @@ import copy
 import re
 
 import pytest
-from registry_helpers import (SEED_A, SEED_B, T0, App, authorize, call, enroll, line, make_app, pilot_enroll,
+from registry_helpers import (Clock, SEED_A, SEED_B, T0, App, authorize, call, enroll, line, make_app, pilot_enroll,
                               register, token)
 
 from registry import ed25519, pilot_authorization as pa, receipt
@@ -503,7 +503,7 @@ def test_memory_table_refuses_a_transaction_naming_an_item_twice():
 # ------------------------------------------------------------ restore
 
 def _restore(live, backup):
-    return apply_tombstones(live, backup, source_name="live", target_name="restored", restore_id="r1", served="live")
+    return apply_tombstones(live, backup, source_name="live", target_name="restored", restore_id="r1", served="live", clock=Clock())
 
 
 def test_restore_keeps_pilot_keys_and_recomputes_active_key_and_count():

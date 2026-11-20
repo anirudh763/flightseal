@@ -26,10 +26,10 @@ The user's request and the owner's RULES.md take precedence over anything here.
 
 ## Test gates (all must pass before you report done)
 - C++: `cmake -S . -B build && cmake --build build -j && ctest --test-dir build` (5 suites).
-- Python: `python3 -m pytest -q` (364 passed and 30 skipped on macOS with Python 3.12 and the CI packages; the skipped fault-shim cases need Linux, and the large manifest case needs `FSEAL_LARGE_HASH=1`). It includes the receipt registry tests.
-- Receipt registry: `python3 -m pytest -q registry/tests` (301 passed; none skipped when `build/fseal` exists). Unit
+- Python: `python3 -m pytest -q` (397 passed and 30 skipped on macOS with Python 3.12 and the CI packages; the skipped fault-shim cases need Linux, and the large manifest case needs `FSEAL_LARGE_HASH=1`). It includes the receipt registry tests.
+- Receipt registry: `python3 -m pytest -q registry/tests` (334 passed; none skipped when `build/fseal` exists). Unit
   tests over an in-memory table, not integration tests.
-- Registry infra: `cd infra && npm ci && npm test` (19 synth assertions, no AWS credentials). Never `cdk deploy` from
+- Registry infra: `cd infra && npm ci && npm test` (21 synth tests, no AWS credentials). Never `cdk deploy` from
   an agent session.
 - Registry LocalStack run (optional, needs Docker): `uv run --no-project --with boto3==1.43.123 python registry/localstack/e2e.py`
   writes `docs/aws/evidence/localstack-4.12.0.json`; the REST v1 stand-in is not the HTTP API.
@@ -55,6 +55,7 @@ The user's request and the owner's RULES.md take precedence over anything here.
 - Measured on the PR #59 head after merging main (2026-11-19, macOS): `node newweb/tests/jobs.mjs` 13/13; `REGISTRY_DEV_URL=http://127.0.0.1:8798 node newweb/tests/registry-wiring.mjs` 34/34; `node --test newweb/tests/registry-session.test.mjs` 14/14; `node newweb/tests/profiles.mjs` 8/8; `npm --prefix newweb run test:browser` 64 checks, 0 failed (`console.mjs` and `manifest-mode.mjs` 51, `jobs.mjs` 13); `node --test tests/web/*.test.mjs` 146/146.
 - Measured on the Trust company keys branch after merging main with #61 (2026-11-19, macOS): `REGISTRY_DEV_URL=http://127.0.0.1:8797 node newweb/tests/registry-wiring.mjs` 43/43; `node --test newweb/tests/*.test.mjs` 157/157 (`company-keys.test.mjs` 10); `node --test tests/web/*.test.mjs` 147/147; `npm --prefix newweb run test:browser` 64 checks, 0 failed; `node newweb/tests/profiles.mjs` 8/8; `REGISTRY_DEV_URL=http://127.0.0.1:8797 node --test newweb/tests/outbox-browser.mjs` 8/8.
 - Measured for #64 after merging main with #65 (2026-11-19, macOS): `node --test newweb/tests/*.test.mjs` 175/175; `node --test newweb/tests/outbox.test.mjs newweb/tests/registry-client.test.mjs` 58/58; `node --test newweb/tests/registry-session.test.mjs` 16/16; `npm --prefix newweb run test:browser` 66 checks, 0 failed (`jobs.mjs` 13); `node newweb/tests/edge-matrix.mjs` 9 ok; `REGISTRY_DEV_URL=http://127.0.0.1:8798 node newweb/tests/registry-wiring.mjs` 47/47 (43 + 2 from #65 + 2 from #64); `REGISTRY_DEV_URL=http://127.0.0.1:8798 node --test newweb/tests/outbox-browser.mjs` 8/8; `node newweb/tests/profiles.mjs` 8/8; `node --test tests/web/*.test.mjs` 147/147. Not re-run: the `REGISTRY_THROTTLE=1` count (23).
+- Measured for R52/R56/R36 (feat/registry-r52-r56-r36, 2026-11-19, macOS, Python 3.12): root pytest 397 passed, 30 skipped; `python3 -m pytest -q registry/tests` 334 passed (`test_registry_scrub.py` 17, `test_registry_shares_list.py` 16); `cd infra && npm ci && npm test` 21/21; LocalStack e2e (exit 1, as before) 27 pass, 2 fail, 2 blocked (the two fails are the known Lambda/REST API persistence rows, the two blocked are the apigatewayv2 and cognito-idp probes; all as before, plus 3 new passes for share list, withdraw by id and scrub). Run pytest with `PYTHONDONTWRITEBYTECODE=1 ... -p no:cacheprovider` so no cache lands in `registry/` (the Lambda asset test fails on it).
 - For every bug fix or new behaviour: a test that fails before the change and passes after it.
 - Report exact commands and real counts. Never report a check you did not run.
 

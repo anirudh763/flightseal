@@ -1,8 +1,9 @@
 import {
-  CfnCondition, CfnOutput, CfnParameter, Duration, Fn, RemovalPolicy, Stack, StackProps,
+  CfnCondition, CfnOutput, CfnParameter, Duration, Fn, RemovalPolicy, Stack, StackProps, Token,
   aws_apigatewayv2 as apigw, aws_apigatewayv2_authorizers as authorizers,
   aws_apigatewayv2_integrations as integrations, aws_budgets as budgets, aws_cognito as cognito,
-  aws_dynamodb as dynamodb, aws_lambda as lambda, aws_logs as logs,
+  aws_dynamodb as dynamodb, aws_events as events, aws_events_targets as targets, aws_lambda as lambda,
+  aws_logs as logs,
 } from 'aws-cdk-lib';
 import { Construct } from 'constructs';
 import { existsSync, readFileSync } from 'node:fs';
@@ -102,6 +103,9 @@ export const ROUTES: Array<[apigw.HttpMethod, string]> = [
   [apigw.HttpMethod.GET, '/v1/epoch'],
   [apigw.HttpMethod.POST, '/v1/shares'],
   [apigw.HttpMethod.DELETE, '/v1/shares/{token}'],
+  // Admin only (checked in the function): list the org's share links and withdraw one by its id, no raw token.
+  [apigw.HttpMethod.GET, '/v1/shares'],
+  [apigw.HttpMethod.DELETE, '/v1/registrations/{id}/shares/{shareId}'],
 ];
 export const PUBLIC_ROUTE: [apigw.HttpMethod, string] = [apigw.HttpMethod.GET, '/v1/shares/{token}'];
 export const PUBLIC_THROTTLE = { rate: 2, burst: 5 };
@@ -150,19 +154,38 @@ export class RegistryStack extends Stack {
       removalPolicy,
     });
 
+    const code = lambda.Code.fromAsset('../registry', { exclude: ['tests', 'localstack', 'devserver', '**/__pycache__'] });
     const fn = new lambda.Function(this, 'Function', {
       runtime: lambda.Runtime.PYTHON_3_12,
       architecture: lambda.Architecture.ARM_64,
       memorySize: 128,
       timeout: Duration.seconds(5),
       handler: 'handler.handler',
-      code: lambda.Code.fromAsset('../registry', { exclude: ['tests', 'localstack', 'devserver', '**/__pycache__'] }),
+      code,
       logGroup,
       environment,
     });
     // Explicit item-level actions only, scoped to this table. TransactWriteItems is authorised through them.
     served.grant(fn, 'dynamodb:GetItem', 'dynamodb:PutItem', 'dynamodb:UpdateItem', 'dynamodb:DeleteItem',
       'dynamodb:Query', 'dynamodb:ConditionCheckItem');
+
+    // R52: once a day, actor IDs older than 90 days become "scrubbed" and expired challenges and envelopes go. Its
+    // own function, so the request function never gets Scan. Every write it makes is conditional.
+    const scrub = new lambda.Function(this, 'ScrubFunction', {
+      runtime: lambda.Runtime.PYTHON_3_12,
+      architecture: lambda.Architecture.ARM_64,
+      memorySize: 128,
+      timeout: Duration.seconds(60),
+      handler: 'registry.scrub.handler',
+      code,
+      logGroup: new logs.LogGroup(this, 'ScrubLogs', { retention: logs.RetentionDays.ONE_WEEK, removalPolicy }),
+      environment: { TABLE_NAME: served.tableName },
+    });
+    served.grant(scrub, 'dynamodb:Scan', 'dynamodb:UpdateItem', 'dynamodb:DeleteItem');
+    new events.Rule(this, 'DailyScrub', {
+      schedule: events.Schedule.rate(Duration.days(1)),
+      targets: [new targets.LambdaFunction(scrub)],
+    });
 
     const userPool = new cognito.UserPool(this, 'Users', {
       featurePlan: cognito.FeaturePlan.LITE,
@@ -218,11 +241,27 @@ export class RegistryStack extends Stack {
         maxAge: Duration.minutes(10),
       },
     });
+    // R56: the budget response. `cdk deploy --parameters TrafficPaused=true` sets every route's throttle to 0 (API
+    // Gateway answers 429; data, users and the stack stay); `=false` restores the limits. A later plain deploy keeps
+    // the parameter's previous value. An operator step, not a cap: the budget alert only emails. Not run on AWS.
+    const trafficPaused = new CfnParameter(this, 'TrafficPaused', {
+      type: 'String',
+      default: 'false',
+      allowedValues: ['false', 'true'],
+      description: 'true pauses all API traffic (throttle 0) and keeps data and users; false serves normally.',
+    });
+    const paused = new CfnCondition(this, 'IsPaused', {
+      expression: Fn.conditionEquals(trafficPaused.valueAsString, 'true'),
+    });
+    const unlessPaused = (value: number) => Fn.conditionIf(paused.logicalId, 0, value);
     const stage = new apigw.HttpStage(this, 'DefaultStage', {
       httpApi: api,
       stageName: '$default',
       autoDeploy: true,
-      throttle: { rateLimit: STAGE_THROTTLE.rate, burstLimit: STAGE_THROTTLE.burst },
+      throttle: {
+        rateLimit: Token.asNumber(unlessPaused(STAGE_THROTTLE.rate)),
+        burstLimit: Token.asNumber(unlessPaused(STAGE_THROTTLE.burst)),
+      },
     });
     const integration = new integrations.HttpLambdaIntegration('Lambda', fn);
     // The client sends the Cognito ID token: custom:org_id and custom:role are in the ID token on the Lite plan.
@@ -237,7 +276,7 @@ export class RegistryStack extends Stack {
     // RouteSettings is a free-form map in CloudFormation, so it is written with its CloudFormation key names.
     (stage.node.defaultChild as apigw.CfnStage).addPropertyOverride('RouteSettings', {
       [`${PUBLIC_ROUTE[0]} ${PUBLIC_ROUTE[1]}`]: {
-        ThrottlingRateLimit: PUBLIC_THROTTLE.rate, ThrottlingBurstLimit: PUBLIC_THROTTLE.burst,
+        ThrottlingRateLimit: unlessPaused(PUBLIC_THROTTLE.rate), ThrottlingBurstLimit: unlessPaused(PUBLIC_THROTTLE.burst),
       },
     });
     stage.node.addDependency(publicRoute); // route settings must name a route that already exists

@@ -311,6 +311,7 @@ def scenarios(url, tok, table, dedupe):
           f"{status} {status2}")
     status, keys = http("GET", url + "/v1/keys", pilot)
     check("list keys", status == 200 and [k["state"] for k in keys.get("keys", [])] == ["active"], f"{status}")
+    share_steps(url, admin, pilot, ack1["registration_id"])
     pilot_steps(url, admin, pilot, seed, envelope, register, dedupe is None)
     env_old = envelope(pilot)
     status, ep = http("POST", url + "/v1/epoch", admin, {})
@@ -320,6 +321,48 @@ def scenarios(url, tok, table, dedupe):
           f"epoch {status} {ep}, register {status2} {out}")
     return {"share_path": share2["path"], "rid": ack1["registration_id"], "pilot": pilot, "ack1": ack1,
             "withdrawn_paths": [share1["path"], share2["path"]], "rid2": ack2["registration_id"]}
+
+
+def share_steps(url, admin, pilot, rid):
+    """R36 through the API: list the org's shares newest first (DynamoDB Query, ScanIndexForward false), one per page,
+    then withdraw the older one by its id (no raw token) and see its link 404."""
+    import hashlib
+
+    time.sleep(1.1)  # the index orders by creation second: after every earlier share of this org
+    _, older = make_share(url, pilot, rid)
+    time.sleep(1.1)
+    _, newer = make_share(url, pilot, rid)
+    ids = [hashlib.sha256(s["path"].rsplit("/", 1)[1].encode()).hexdigest() for s in (newer, older)]
+    status, page = http("GET", url + "/v1/shares?limit=1", admin)
+    status2, page2 = http("GET", url + f"/v1/shares?limit=1&cursor={page.get('next_cursor')}", admin)
+    got = [r.get("share_id") for r in page.get("shares", []) + page2.get("shares", [])]
+    check("list shares (admin), newest first, one per page with a cursor (DynamoDB Query, descending)",
+          status == status2 == 200 and got == ids, f"{status} {status2}; order matches: {got == ids}")
+    denied = http("GET", url + "/v1/shares", pilot)[0]
+    gone = http("DELETE", url + f"/v1/registrations/{rid}/shares/{ids[1]}", admin)
+    link = http("GET", url + older["path"])[0]
+    _, after = http("GET", url + "/v1/shares?limit=2", admin)
+    states = {r.get("share_id"): r.get("state") for r in after.get("shares", [])}
+    check("withdraw a share by its id (admin, no token): link 404, list says withdrawn; a pilot cannot list",
+          (denied, gone[0], gone[1], link, states.get(ids[1]), states.get(ids[0])) == (403, 200, {"withdrawn": True},
+                                                                                     404, "withdrawn", "active"),
+          f"pilot list {denied}, DELETE {gone[0]}, GET link {link}, states {sorted(states.values())}")
+
+
+def scrub_step():
+    """R52 on the DynamoDB API: an actor ID enrolled 91 days ago becomes "scrubbed" with a conditional update;
+    the key's state and dates stay. A throwaway org, so no other scenario sees it."""
+    from registry.scrub import scrub
+    from registry.store import DynamoTable
+
+    table, now = DynamoTable(TABLE, client=client("dynamodb")), int(time.time())
+    item = {"PK": "ORG#orgScrub", "SK": "KEY#" + "e" * 64, "kind": "company", "state": "rotated",
+            "enrolled_at": now - 91 * 86400, "enrolled_by": "sub-e2e", "changed_at": now - 10}
+    table.put(item)
+    first, second = scrub(table, now), scrub(table, now)
+    after = table.get(item["PK"], item["SK"])
+    check("scrub (Scan, conditional UpdateItem in DynamoDB): a 91-day-old actor ID becomes scrubbed, rerun writes 0",
+          first >= 1 and second == 0 and after == {**item, "enrolled_by": "scrubbed"}, f"first {first}, rerun {second}")
 
 
 PILOT_STEPS = ("pilot key enroll (pilot challenge + company-key authorization)", "pilot key register",
@@ -499,6 +542,7 @@ def main():
                url.replace(api_id, "<api-id>").replace(ENDPOINT, "<endpoint>"))
         state = scenarios(url, Dev(secret), TABLE, DEDUPE_SECONDS)
         restore_drill(url, state, lambda_env(secret))
+        scrub_step()
 
         def url_for():
             ids = [i["id"] for i in client("apigateway").get_rest_apis()["items"]]

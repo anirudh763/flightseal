@@ -32,7 +32,7 @@ class Table(Protocol):
     def put(self, item, cond=None): ...
     def update(self, pk, sk, set=None, remove=None, add=None, cond=None): ...
     def delete(self, pk, sk, cond=None): ...
-    def query(self, pk, prefix, limit, start=None): ...
+    def query(self, pk, prefix, limit, start=None, reverse=False): ...
     def scan(self, pk_prefix): ...
     def transact(self, ops): ...
 
@@ -106,9 +106,11 @@ class MemoryTable:
             raise ConditionFailed()
         self.items.pop((pk, sk), None)
 
-    def query(self, pk, prefix, limit, start=None):
+    def query(self, pk, prefix, limit, start=None, reverse=False):
+        """Ascending by SK, or descending with `reverse` (DynamoDB ScanIndexForward=False): `start` is exclusive."""
         self._check("query", pk, prefix)
-        sks = sorted(sk for p, sk in self.items if p == pk and sk.startswith(prefix) and (start is None or sk > start))
+        sks = sorted((sk for p, sk in self.items if p == pk and sk.startswith(prefix)
+                      and (start is None or (sk < start if reverse else sk > start))), reverse=reverse)
         page = sks[:limit]
         last = page[-1] if len(page) == limit else None  # like DynamoDB: a full page always returns a cursor
         return [copy.deepcopy(self.items[(pk, sk)]) for sk in page], last
@@ -268,8 +270,8 @@ class DynamoTable:
     def delete(self, pk, sk, cond=None):
         self._call(self.client.delete_item, **self._delete_kw(pk, sk, cond))
 
-    def query(self, pk, prefix, limit, start=None):
-        kw = {"TableName": self.name, "ConsistentRead": True, "Limit": limit,
+    def query(self, pk, prefix, limit, start=None, reverse=False):
+        kw = {"TableName": self.name, "ConsistentRead": True, "Limit": limit, "ScanIndexForward": not reverse,
               "KeyConditionExpression": "#p = :p AND begins_with(#s, :s)",
               "ExpressionAttributeNames": {"#p": "PK", "#s": "SK"},
               "ExpressionAttributeValues": {":p": {"S": pk}, ":s": {"S": prefix}}}
