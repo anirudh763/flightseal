@@ -203,7 +203,7 @@ test('R52: the scrub function runs daily, 60 s, own 7-day log group, TABLE_NAME 
 
 test('every route has the JWT authorizer except GET /v1/shares/{token}', () => {
   const routes = resources('AWS::ApiGatewayV2::Route').map(([, r]) => r.Properties);
-  assert.equal(routes.length, 18);
+  assert.equal(routes.length, 19);
   for (const key of ['GET /v1/shares', 'DELETE /v1/registrations/{id}/shares/{shareId}']) {
     assert.ok(routes.some((r) => r.RouteKey === key), key);
   }

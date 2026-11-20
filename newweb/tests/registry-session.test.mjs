@@ -247,11 +247,16 @@ test('the Verify time row reads only the last receipt line of a message, the one
 
 test('Jobs status for each outbox state, pending proofs and no record, matched on the receipt line sent to the registry', () => {
   const R = receipt(19), msg = `HashWing receipt for x\nPublic key: ${hex(64, 'b')}\n${R}\n\nKeep this message.`;
-  const base = { owner: 'orgA/u', outbox: {}, listed: true, rows: [], pending: [], online: true };
+  const base = { owner: 'orgA/u', claims: { org: 'orgA' }, outbox: {}, listed: true, rows: [], pending: [], online: true, confirmed: {} };
   const of = (s) => jobStatus(jobsStatusMap(s), msg);
   const row = (extra) => ({ ...base, rows: [{ id: 'x', receipt: R, updated_at: 5, ...extra }] });
-  assert.deepEqual(of(row({ state: 'registered', disposition: 'active', label: 'Registered', received_at: '2026-11-17T10:00:05Z' })),
-    { label: 'Registered', kind: 'ok', group: 'registered', line: "Registered at 2026-11-17 10:00:05 UTC. This is the registry's statement, not proof of the files.", at: null });
+  const reg = { state: 'registered', disposition: 'active', label: 'Registered', registration_id: 'r'.repeat(32), received_at: '2026-11-17T10:00:05Z', acked_at: Date.parse('2026-11-18T09:30:00.123Z') };
+  const { row: kept, ...registered } = of(row(reg));
+  assert.deepEqual(registered, { label: 'Registered', kind: 'ok', group: 'registered', company: 'orgA', at: null,
+    line: `Last confirmed by this device ${new Date(reg.acked_at).toLocaleString('en-GB', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' })}. This is the registry's statement, not proof of the files.` }, 'a saved ack: this device\'s last confirmation, not the registry time');
+  assert.equal(kept.registration_id, reg.registration_id, 'the outbox row rides along for the detail actions');
+  assert.equal(of({ ...row(reg), confirmed: { [reg.registration_id]: '2026-11-17T10:00:05Z' } }).line, "Registered at 2026-11-17 10:00:05 UTC. This is the registry's statement, not proof of the files.", 'after Refresh: the registry\'s own time');
+  assert.ok(of(row({ ...reg, acked_at: undefined })).line.startsWith(`Last confirmed by this device ${new Date(5).toLocaleString('en-GB', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' })}.`), 'no acked_at: updated_at');
   const deleted = of(row({ state: 'registered', disposition: 'deleted', label: 'Registered, later deleted' }));
   assert.deepEqual([deleted.label, deleted.kind, deleted.group], ['Registered, later deleted', 'neutral', 'registered']);
   const attention = of(row({ state: 'needs_attention', reason: 'key_not_enrolled', label: 'Needs attention' }));
@@ -262,11 +267,13 @@ test('Jobs status for each outbox state, pending proofs and no record, matched o
   assert.deepEqual([off.label, off.group], ['Waiting for connection', 'waiting'], 'offline, a new row waits for the connection');
   const pending = (p, owner = 'orgA/u') => of({ ...base, owner, pending: [{ receipt: R, at: 7, ...p }] });
   assert.deepEqual([pending({ owner: null }).label, pending({ owner: null }).group, pending({ owner: null }).at], ['Sealed locally', 'waiting', 7]);
+  assert.deepEqual([pending({ owner: null }).company, pending({ owner: 'orgA/other' }).company, pending({ owner: 'orgA/u' }).company], [undefined, undefined, 'orgA'], 'company only on proofs bound to this sign-in');
+  assert.equal(of({ ...row(reg), owner: null, claims: null }).company, undefined);
   assert.match(pending({ owner: null }).line, /isn't assigned to a company yet/);
   assert.match(pending({ owner: 'orgA/other' }).line, /another registry sign-in/, 'held under another owner');
   assert.equal(of({ ...row({ state: 'registered', label: 'Registered' }), pending: [{ receipt: R, owner: null }] }).label, 'Registered', 'an outbox row wins over a pending one');
   const none = of(base);
-  assert.deepEqual([none.label, none.group, none.at], ['Sealed locally', null, null]);
+  assert.deepEqual([none.label, none.group, none.at, none.company, none.row], ['Sealed locally', null, null, undefined, undefined]);
   assert.match(none.line, /no registry record for this job under the current sign-in/);
   assert.match(of({ ...base, owner: null, outbox: null }).line, /^Sign in to the company registry/, 'signed out: never a stale Registered');
   assert.match(of({ ...base, listed: false }).line, /isn't open yet/);
@@ -315,6 +322,59 @@ test('a proof held because the queue was full is sent when the queue gains room'
     while (Date.now() < end && (r.snapshot().pending.length || !(await r.snapshot().outbox.list()).some((row) => row.receipt === held))) await new Promise((done) => setTimeout(done, 20));
     assert.deepEqual(r.snapshot().pending, [], 'nothing is held any more');
     assert.ok((await r.snapshot().outbox.list()).some((row) => row.receipt === held), 'the held proof is in the outbox');
+  } finally {
+    fetchHandler = offlineFetch;
+    r.logout();
+    await r.setScope('guest');
+  }
+});
+
+test('Refresh asks for one record only when called: active is kept for the session, another record or a 404 is a failure, deleted rewrites the saved ack, a late answer after a sign-in change is dropped', async () => {
+  const r = getRegistry();
+  await r.setScope('profile:refresh');
+  assert.ok(await r.signIn(tokenFor('ref1')));
+  const R = receipt(7001);
+  let answer = null; const asked = [];
+  fetchHandler = async (url) => {
+    const path = new globalThis.URL(url).pathname;
+    if (path === '/v1/epoch') return Response.json({ epoch: 0 });
+    if (path === '/v1/envelopes') return Response.json({ envelope_id: 'e'.repeat(32), expires_at: new Date(Date.now() + 864e5).toISOString(), epoch: 0 }, { status: 201 });
+    if (path.startsWith('/v1/registrations/')) { asked.push(path); return answer(); }
+    return Response.json({ registration_id: '7'.repeat(32), received_at: '2026-11-19T08:00:00Z', count: 7001, head: 'h', key_fingerprint: 'f', disposition: 'active' }, { status: 201 });
+  };
+  try {
+    await r.sealed(R, 'refresh.ulg');
+    const end = Date.now() + 15000;
+    let row;
+    while (Date.now() < end && !(row = r.snapshot().rows.find((x) => x.receipt === R && x.state === 'registered'))) await new Promise((done) => setTimeout(done, 20));
+    assert.ok(row, 'registered');
+    assert.deepEqual(asked, [], 'no lookup until Refresh is pressed');
+    const rid = row.registration_id;
+    answer = () => Response.json({ registration_id: 'f'.repeat(32), disposition: 'active', received_at: '2026-11-19T08:00:00Z' });
+    assert.equal((await r.refreshRecord(row)).ok, false, 'another record\'s answer is a failure');
+    answer = () => Response.json({ error: 'not_found' }, { status: 404 });
+    assert.equal((await r.refreshRecord(row)).res.status, 404);
+    assert.deepEqual(r.snapshot().confirmed, {});
+    answer = () => Response.json({ registration_id: rid, disposition: 'active', received_at: '2026-11-19T08:00:00Z' });
+    assert.deepEqual(await r.refreshRecord(row), { ok: true });
+    assert.deepEqual(r.snapshot().confirmed, { [rid]: '2026-11-19T08:00:00Z' });
+    assert.deepEqual(asked, Array(3).fill(`/v1/registrations/${rid}`));
+    r.setLink(rid, { token: 't', url: 'u', expires: '' }, 'orgA/someone-else');
+    assert.deepEqual(r.snapshot().links, {}, 'a link made under another sign-in is never kept');
+    r.setLink(rid, { token: 't', url: 'u', expires: '' }, r.snapshot().owner);
+    assert.equal(r.snapshot().links[rid].url, 'u');
+    answer = () => Response.json({ registration_id: rid, disposition: 'deleted' });
+    assert.deepEqual(await r.refreshRecord(row), { ok: true, deleted: true });
+    assert.equal((await r.snapshot().outbox.list()).find((x) => x.id === row.id).disposition, 'deleted');
+    let release;
+    answer = () => new Promise((done) => { release = () => done(Response.json({ registration_id: rid, disposition: 'active', received_at: '2026-11-19T08:00:00Z' })); });
+    const late = r.refreshRecord(row);
+    while (!release) await new Promise((done) => setTimeout(done, 5));
+    assert.ok(await r.signIn(tokenFor('ref2')));
+    assert.deepEqual([r.snapshot().links, r.snapshot().confirmed], [{}, {}], 'another sign-in starts with no links and no refreshed records');
+    release();
+    assert.deepEqual(await late, { ok: false, stale: true });
+    assert.deepEqual(r.snapshot().confirmed, {}, 'the late answer is dropped');
   } finally {
     fetchHandler = offlineFetch;
     r.logout();

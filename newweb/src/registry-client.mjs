@@ -89,6 +89,7 @@ export function createRegistryClient({ baseUrl = '', getToken, fetch: doFetch = 
     },
     withdrawShare: (token, opts) => request('DELETE', `/v1/shares/${encodeURIComponent(token)}`, undefined, opts),
     getShare: (token, opts) => request('GET', `/v1/shares/${encodeURIComponent(token)}`, undefined, { ...opts, auth: false }), // public: no sign-in
+    getRegistration: (id, opts) => request('GET', `/v1/registrations/${encodeURIComponent(id)}`, undefined, opts), // PROPOSED route: one record
     deleteRegistration: (id, opts) => request('DELETE', `/v1/registrations/${encodeURIComponent(id)}`, undefined, opts),
     // Company keys (admin routes except the list). Pass opts.token, taken once per press, so one action never spans two sign-ins.
     keyChallenge: (opts) => request('GET', '/v1/keys/challenge', undefined, opts),

@@ -2,7 +2,7 @@
 // Rows come from jobs-store.mjs through App. Without `statusOf` (the registry-off build) every row reads "Sealed locally"
 // and there is no filter or row detail. With the flag on, main.jsx passes `statusOf`, `filters`, `status` and
 // `detailLabel` from registry-ui.jsx (useJobsRegistry), so no registry code or wording ships in this file.
-// Share links and delete hosted record stay in registry-ui.jsx's own list on Seal & send.
+// A status may carry `company` (a small label after the chip); `detailActions(job, status)` fills the row detail's slot.
 import React, { Fragment, useEffect, useRef, useState } from 'react';
 import { CircleDot, HardDrive } from 'lucide-react';
 
@@ -20,13 +20,13 @@ export function jobExport(job) {
   return { name, text: `${JSON.stringify(body, null, 2)}\n` };
 }
 
-const Status = ({ s }) => <span className={`status-label jobs-status${s ? ` ${s.kind}` : ''}`}><CircleDot aria-hidden="true" size={12} />{s?.label || 'Sealed locally'}</span>;
+const Status = ({ s }) => <><span className={`status-label jobs-status${s ? ` ${s.kind}` : ''}`}><CircleDot aria-hidden="true" size={12} />{s?.label || 'Sealed locally'}</span>{s?.company && <> <span className="jobs-company wrap">{s.company}</span></>}</>;
 const COPY_FAILED = "Couldn't copy. Use Export to save the receipt message.";
 
 export const SEAL_RUNNING = 'Finish or cancel the seal in progress first.';
 const REMOVE_FAILED = "Couldn't remove this job. Try again, or reload the page.";
 
-export function JobsPage({ rows, loaded, storage, error, q, page, onUrl, onResume, resumeBlocked, onRemove, onDownload, sealHref, onSeal, statusOf, filters = [], status: rawStatus, detailLabel = 'Status' }) {
+export function JobsPage({ rows, loaded, storage, error, q, page, onUrl, onResume, resumeBlocked, onRemove, onDownload, sealHref, onSeal, statusOf, filters = [], status: rawStatus, detailLabel = 'Status', detailActions }) {
   const [exportError, setExportError] = useState('');
   const [removeError, setRemoveError] = useState('');
   const [copyError, setCopyError] = useState('');
@@ -123,10 +123,10 @@ export function JobsPage({ rows, loaded, storage, error, q, page, onUrl, onResum
               <button id={`job-resume-${job.id}`} type="button" className="button secondary" aria-label={`Resume ${job.name}`} disabled={resumeBlocked} aria-describedby={resumeBlocked ? 'jobs-resume-blocked' : undefined} onClick={() => onResume(job)}>Resume</button>
               <button type="button" className="button secondary" aria-label={`Export ${job.name}`} onClick={() => exportJob(job)}>Export</button>
               <button type="button" className="button secondary" aria-label={`Remove ${job.name}`} onClick={(e) => askRemove(job, e)}>Remove</button>
-              {statusOf && <button type="button" className="button secondary" aria-label={`Details for ${job.name}`} aria-expanded={openId === job.id} aria-controls={`job-detail-${job.id}`} onClick={() => setOpenId(openId === job.id ? null : job.id)}>Details</button>}
+              {statusOf && <button id={`job-details-${job.id}`} type="button" className="button secondary" aria-label={`Details for ${job.name}`} aria-expanded={openId === job.id} aria-controls={`job-detail-${job.id}`} onClick={() => setOpenId(openId === job.id ? null : job.id)}>Details</button>}
             </div></td>
           </tr>
-          {statusOf && openId === job.id && <JobDetail job={job} s={statuses.get(job.id)} label={detailLabel} onCopy={() => copyReceipt(job)} />}
+          {statusOf && openId === job.id && <JobDetail job={job} s={statuses.get(job.id)} label={detailLabel} actions={detailActions?.(job, statuses.get(job.id))} onCopy={() => copyReceipt(job)} />}
           </Fragment>)}</tbody>
         </table>
         {pages > 1 && <div className="actions-row jobs-pages">
@@ -144,7 +144,7 @@ export function JobsPage({ rows, loaded, storage, error, q, page, onUrl, onResum
   </section>;
 }
 
-function JobDetail({ job, s, label, onCopy }) {
+function JobDetail({ job, s, label, actions, onCopy }) {
   const n = Number(job.items) || 0;
   return <tr className="jobs-detail-row" id={`job-detail-${job.id}`}><td colSpan={5}>
     <dl className="detail-grid jobs-detail">
@@ -154,6 +154,7 @@ function JobDetail({ job, s, label, onCopy }) {
       <dt>Sealed</dt><dd className="jobs-num">{when(job.sealedAt)}</dd>
       {s && <><dt>{label}</dt><dd><span className="jobs-detail-line">{s.line}</span>{s.at != null && <span className="field-hint jobs-detail-at"> Updated {when(s.at)}</span>}</dd></>}
     </dl>
+    {actions}
     <div className="actions-row"><button type="button" className="button secondary" onClick={onCopy}>Copy receipt message</button></div>
   </td></tr>;
 }
