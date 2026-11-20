@@ -81,7 +81,7 @@ company key to sign a receipt or an authorization. The same rule applies to the 
 400 `bad_challenge`, 422 `bad_signature` (also covers weak keys, `test_small_order_key_is_rejected_and_cannot_be_enrolled`),
 404 on compromise (unknown or another org's fingerprint, identical body), 503.
 
-### 4.2 PR 3 — Option B routes (all new; 403 `pilot_keys_off` unless the org is switched on)
+### 4.2 PR 3 — Option B routes (all new; challenge and enroll answer 403 `pilot_keys_off` unless the org is switched on; retire works whatever the switch)
 
 Authorization statement (signed by the company key on the company computer):
 
@@ -104,7 +104,7 @@ unchanged (`receipt.parse` rejects extra tokens). Encoding is canonical: base64u
 | --- | --- | --- | --- | --- |
 | `GET /v1/pilot-keys/challenge` | any member | none | `{nonce, expires_at, message}`; `message` = `hashwing-pilot-key-enroll v1\n<org>\n<nonce>`, which the client rebuilds and compares before signing (B1) | 403 `pilot_keys_off` |
 | `POST /v1/pilot-keys` | any member (the pilot, on their own device) | `{public_key, nonce, signature, authorization, authorization_sig}` | 201 `{key_fingerprint, kind:"pilot", state:"active", company_fingerprint, not_after}` | 400 `bad_challenge` (missing, expired, other `sub`, or a company-kind challenge); 422 `bad_signature` (challenge not signed by `public_key`, or weak key); 422 `bad_authorization` (unparsable, `pilot_key` ≠ `public_key`, signature not by `company_key`); 422 `authorization_expired` (`not_after` ≤ registry clock, or > 30 days ahead); 422 `company_key_not_active` (`company_key` is not this org's `ACTIVE_KEY`); 409 `key_exists` (fingerprint ever seen in this org, any state); 409 `pilot_key_limit` |
-| `POST /v1/pilot-keys/<fp>/retire` | admin | `{}` | 200 `{key_fingerprint, state:"retired", changed_at}`; already retired or compromised: 200 with stored state, no write | 404 unknown/other org/not a pilot key |
+| `POST /v1/pilot-keys/<fp>/retire` | admin | `{}` | 200 `{key_fingerprint, state:"retired", changed_at}`; already retired or compromised: 200 with stored state, no write | 404 unknown/other org/not a pilot key. Never `pilot_keys_off`: revocation is never blocked by the switch (decided 2026-11-19, like compromise) |
 | `POST /v1/keys/<fp>/compromised` | admin | unchanged | unchanged; works for both kinds | unchanged |
 | `GET /v1/keys` | member | unchanged | rows gain `kind` (`company`/`pilot`), and for pilot keys `company_fingerprint`, `not_after`. Response gains `pilot_keys` (bool, org switched on) | unchanged |
 
@@ -118,6 +118,22 @@ unchanged (`receipt.parse` rejects extra tokens). Encoding is canonical: base64u
 - Pilot keys never go through `POST /v1/keys`: that route rotates `ACTIVE_KEY`.
 - **Renewal** = a new pilot key and a new authorization, not an extended one `[ASSUMPTION]`. It needs no fingerprint
   re-use rules and keeps authorizations immutable.
+- **Pilot slots (decided 2026-11-19, follow-up to PR #63).** Problem: renewal takes a new slot, and a key whose
+  authorization ended or whose company key was replaced or compromised stayed `active` and kept its slot until an admin
+  retired it, so 10 pilots renewing every 14 days would fill 50 slots in about 10 weeks. Rule: **a slot is held only
+  by a usable pilot key**: state `active`, `not_after` > registry clock, and parent company KEY item `active`. Both
+  ways to stop being usable are permanent: `not_after` is never changed (renewal is a new key), the clock only moves
+  forward, and a replaced or compromised company key never becomes `active` again (its fingerprint is `key_exists`
+  forever; restore keeps the most revoked state). So the registry **retires** such a key to free its slot, with the
+  same transaction an admin retire uses (KEY `state = active` condition → `retired`, tombstone, `PILOT_COUNT` −1). It
+  does this lazily: only when an enroll's transaction fails on the cap, it pages the org's KEY items, retires every
+  active pilot key that is no longer usable, each in its own conditional transaction, then retries that enroll once.
+  Consequences: `PILOT_COUNT.n` stays exactly the number of `active` pilot keys (restore's recount is unchanged); the
+  cap stays one conditional increment, so racing enrolls never pass 50; a retired or compromised key is never touched
+  (the condition is `state = active`), so nothing is revived; lifetimes are unchanged (still at most 30 days, checked
+  at enroll). Switching an org **off** does not free slots, because switching back on restores the keys as they
+  were. A reclaim racing an admin retire or compromise decrements once: whichever transaction commits first wins and
+  the other sees the new state (compromise retries once on that race, so it is never refused).
 - **Register path** (`POST /v1/registrations`): a `kind: pilot` KEY item gets 403 `key_not_active` (which the outbox
   already handles, AD-15) unless the org is in `PILOT_KEYS_ORGS`, its state is `active`, its `not_after` > registry
   clock, and its parent company KEY item is `active`. The state checks are `ConditionCheck` items inside the
@@ -256,8 +272,8 @@ line, which comes from this device's outbox.
 3. Existing one-time-key proofs stay "signer not confirmed". Nothing is retroactively authorized (one-time keys are
    discarded).
 4. Recipients pin nothing new; they need a build with the constant on.
-5. Switching an org off: pilot routes answer `pilot_keys_off`, pilot keys answer `key_not_active` on register, and the
-   data is kept. Recipients' Verify still honours unexpired authorizations while the constant is on.
+5. Switching an org off: the pilot challenge and enroll routes answer `pilot_keys_off`, pilot keys answer
+   `key_not_active` on register, and the data is kept. Retire and compromise still work, so an admin can always revoke. Recipients' Verify still honours unexpired authorizations while the constant is on.
 
 ## 10. Test plan
 
@@ -308,4 +324,5 @@ registered → Verify on a constant-on build.
 1. Authorization lifetime: 14 days default, 30 days maximum, as designed. Neither switch (`PILOT_KEYS_ORGS`, `PILOT_AUTHORIZATION_ACCEPTED`) is turned on outside tests and local development without the owner's explicit yes. In plain words, the trade-off the owner must accept: a stolen or retired pilot key can still read "Verified" until its authorization lapses, and an honest pilot-signed proof drops from "Verified" to "signer not confirmed" once its authorization lapses (14 days by default).
 2. A "removed or marked compromised" signal for recipients: yes, lower-only, on the share view. Not in PRs 1 to 3; listed as a follow-up.
 3. Other admins are told when the company key is replaced or marked compromised: yes, in the app's key list (no email or outside message).
-4. Caps: 50 pilot keys per company, 500 entries in a recipient's compromised list.
+4. Caps: 50 pilot keys per company, 500 entries in a recipient's compromised list. Only usable pilot keys hold one of
+   the 50 (§4.2 "Pilot slots").

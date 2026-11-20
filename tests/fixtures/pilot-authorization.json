@@ -6,7 +6,7 @@
   "max_days": 30,
   "pilot_key_cap": 50,
   "recipient_compromised_cap": 500,
-  "how_to_evaluate": "For each case: find the lines of `line` that start with `line_prefix` without its trailing space. None: no authorization. More than one, or one not exactly `line_prefix` + base64url + '.' + sig: reason malformed. Otherwise check the base64url and sig against `pilot_key` (the key being authorized), `company_key` (the expected company key) and `now` (the checker's own clock, epoch seconds), testing `reasons` in order: malformed unless the authorization is base64url without padding that decodes to exactly the four canonical lines (prefix, pilot_key=<64 lowercase hex>, company_key=<64 lowercase hex>, not_after=<YYYY-MM-DDTHH:MM:SSZ>, a real UTC time, joined by \\n, no trailing newline) and re-encodes to the same characters, and sig is 128 lowercase hex; weak_pilot_key = the statement's pilot_key is small-order, non-canonical or not a curve point; same_key = pilot_key equals company_key in the statement; not_pilot_key = the statement's pilot_key differs from `pilot_key`; bad_signature = sig does not verify under the statement's company_key over the decoded bytes; ended = not_after <= now; too_long = not_after > now + max_days * 86400; not_company_key = the statement's company_key differs from `company_key`. `signed_text` is what was signed; `registry_error` is what POST /v1/pilot-keys answers (with 422).",
+  "how_to_evaluate": "For each case: find the lines of `line` that start with `line_prefix` without its trailing space, at the very first character of the line (no trimming: a line with any character before it, even a space, is not an authorization line). None: no authorization, so `found` is false, reason is no_line and nothing is authorized (signer not confirmed; never treat it as valid); `found` is true otherwise. More than one, or one not exactly `line_prefix` + base64url + '.' + sig: reason malformed. Otherwise check the base64url and sig against `pilot_key` (the key being authorized), `company_key` (the expected company key) and `now` (the checker's own clock, epoch seconds), testing `reasons` in order: malformed unless the authorization is base64url without padding that decodes to exactly the four canonical lines (prefix, pilot_key=<64 lowercase hex>, company_key=<64 lowercase hex>, not_after=<YYYY-MM-DDTHH:MM:SSZ>, a real UTC time, joined by \\n, no trailing newline) and re-encodes to the same characters, and sig is 128 lowercase hex; weak_pilot_key = the statement's pilot_key is small-order, non-canonical or not a curve point; same_key = pilot_key equals company_key in the statement; not_pilot_key = the statement's pilot_key differs from `pilot_key`; bad_signature = sig does not verify under the statement's company_key over the decoded bytes; ended = not_after <= now; too_long = not_after > now + max_days * 86400; not_company_key = the statement's company_key differs from `company_key`. `signed_text` is what was signed; `registry_error` is what POST /v1/pilot-keys answers (with 422).",
   "reasons": [
     {
       "reason": "malformed",
@@ -51,6 +51,7 @@
       "pilot_key": "79b5562e8fe654f94078b112e8a98ba7901f853ae695bed7e0e3910bad049664",
       "company_key": "03a107bff3ce10be1d70dd18e74bc09967e4d6309ba50d5f1ddc8664125531b8",
       "now": 1800000000,
+      "found": true,
       "reason": null,
       "registry_error": null
     },
@@ -63,6 +64,7 @@
       "pilot_key": "79b5562e8fe654f94078b112e8a98ba7901f853ae695bed7e0e3910bad049664",
       "company_key": "03a107bff3ce10be1d70dd18e74bc09967e4d6309ba50d5f1ddc8664125531b8",
       "now": 1800000000,
+      "found": true,
       "reason": null,
       "registry_error": null
     },
@@ -75,6 +77,7 @@
       "pilot_key": "79b5562e8fe654f94078b112e8a98ba7901f853ae695bed7e0e3910bad049664",
       "company_key": "03a107bff3ce10be1d70dd18e74bc09967e4d6309ba50d5f1ddc8664125531b8",
       "now": 1800000000,
+      "found": true,
       "reason": null,
       "registry_error": null
     },
@@ -87,6 +90,7 @@
       "pilot_key": "79b5562e8fe654f94078b112e8a98ba7901f853ae695bed7e0e3910bad049664",
       "company_key": "03a107bff3ce10be1d70dd18e74bc09967e4d6309ba50d5f1ddc8664125531b8",
       "now": 1800000000,
+      "found": true,
       "reason": "ended",
       "registry_error": "authorization_expired"
     },
@@ -99,6 +103,7 @@
       "pilot_key": "79b5562e8fe654f94078b112e8a98ba7901f853ae695bed7e0e3910bad049664",
       "company_key": "03a107bff3ce10be1d70dd18e74bc09967e4d6309ba50d5f1ddc8664125531b8",
       "now": 1800000000,
+      "found": true,
       "reason": "ended",
       "registry_error": "authorization_expired"
     },
@@ -111,6 +116,7 @@
       "pilot_key": "79b5562e8fe654f94078b112e8a98ba7901f853ae695bed7e0e3910bad049664",
       "company_key": "03a107bff3ce10be1d70dd18e74bc09967e4d6309ba50d5f1ddc8664125531b8",
       "now": 1800000000,
+      "found": true,
       "reason": "too_long",
       "registry_error": "authorization_expired"
     },
@@ -123,6 +129,7 @@
       "pilot_key": "79b5562e8fe654f94078b112e8a98ba7901f853ae695bed7e0e3910bad049664",
       "company_key": "43cdc023d22d5f9e107d1a0693457d35d1d10eb7d21c721192f56f5de40665d3",
       "now": 1800000000,
+      "found": true,
       "reason": "not_company_key",
       "registry_error": "company_key_not_active"
     },
@@ -135,6 +142,7 @@
       "pilot_key": "79b5562e8fe654f94078b112e8a98ba7901f853ae695bed7e0e3910bad049664",
       "company_key": "03a107bff3ce10be1d70dd18e74bc09967e4d6309ba50d5f1ddc8664125531b8",
       "now": 1800000000,
+      "found": true,
       "reason": "bad_signature",
       "registry_error": "bad_authorization"
     },
@@ -147,6 +155,7 @@
       "pilot_key": "79b5562e8fe654f94078b112e8a98ba7901f853ae695bed7e0e3910bad049664",
       "company_key": "03a107bff3ce10be1d70dd18e74bc09967e4d6309ba50d5f1ddc8664125531b8",
       "now": 1800000000,
+      "found": true,
       "reason": "bad_signature",
       "registry_error": "bad_authorization"
     },
@@ -159,6 +168,7 @@
       "pilot_key": "79b5562e8fe654f94078b112e8a98ba7901f853ae695bed7e0e3910bad049664",
       "company_key": "03a107bff3ce10be1d70dd18e74bc09967e4d6309ba50d5f1ddc8664125531b8",
       "now": 1800000000,
+      "found": true,
       "reason": "malformed",
       "registry_error": "bad_authorization"
     },
@@ -171,6 +181,7 @@
       "pilot_key": "79b5562e8fe654f94078b112e8a98ba7901f853ae695bed7e0e3910bad049664",
       "company_key": "03a107bff3ce10be1d70dd18e74bc09967e4d6309ba50d5f1ddc8664125531b8",
       "now": 1800000000,
+      "found": true,
       "reason": "malformed",
       "registry_error": "bad_authorization"
     },
@@ -183,6 +194,7 @@
       "pilot_key": "79b5562e8fe654f94078b112e8a98ba7901f853ae695bed7e0e3910bad049664",
       "company_key": "03a107bff3ce10be1d70dd18e74bc09967e4d6309ba50d5f1ddc8664125531b8",
       "now": 1800000000,
+      "found": true,
       "reason": "malformed",
       "registry_error": "bad_authorization"
     },
@@ -195,6 +207,7 @@
       "pilot_key": "79b5562e8fe654f94078b112e8a98ba7901f853ae695bed7e0e3910bad049664",
       "company_key": "03a107bff3ce10be1d70dd18e74bc09967e4d6309ba50d5f1ddc8664125531b8",
       "now": 1800000000,
+      "found": true,
       "reason": "malformed",
       "registry_error": "bad_authorization"
     },
@@ -207,6 +220,7 @@
       "pilot_key": "79b5562e8fe654f94078b112e8a98ba7901f853ae695bed7e0e3910bad049664",
       "company_key": "03a107bff3ce10be1d70dd18e74bc09967e4d6309ba50d5f1ddc8664125531b8",
       "now": 1800000000,
+      "found": true,
       "reason": "malformed",
       "registry_error": "bad_authorization"
     },
@@ -219,6 +233,7 @@
       "pilot_key": "79b5562e8fe654f94078b112e8a98ba7901f853ae695bed7e0e3910bad049664",
       "company_key": "03a107bff3ce10be1d70dd18e74bc09967e4d6309ba50d5f1ddc8664125531b8",
       "now": 1800000000,
+      "found": true,
       "reason": "malformed",
       "registry_error": "bad_authorization"
     },
@@ -231,6 +246,7 @@
       "pilot_key": "79b5562e8fe654f94078b112e8a98ba7901f853ae695bed7e0e3910bad049664",
       "company_key": "03a107bff3ce10be1d70dd18e74bc09967e4d6309ba50d5f1ddc8664125531b8",
       "now": 1800000000,
+      "found": true,
       "reason": "malformed",
       "registry_error": "bad_authorization"
     },
@@ -243,6 +259,7 @@
       "pilot_key": "79b5562e8fe654f94078b112e8a98ba7901f853ae695bed7e0e3910bad049664",
       "company_key": "03a107bff3ce10be1d70dd18e74bc09967e4d6309ba50d5f1ddc8664125531b8",
       "now": 1800000000,
+      "found": true,
       "reason": "malformed",
       "registry_error": "bad_authorization"
     },
@@ -255,6 +272,7 @@
       "pilot_key": "79b5562e8fe654f94078b112e8a98ba7901f853ae695bed7e0e3910bad049664",
       "company_key": "03a107bff3ce10be1d70dd18e74bc09967e4d6309ba50d5f1ddc8664125531b8",
       "now": 1800000000,
+      "found": true,
       "reason": "malformed",
       "registry_error": "bad_authorization"
     },
@@ -267,6 +285,7 @@
       "pilot_key": "79b5562e8fe654f94078b112e8a98ba7901f853ae695bed7e0e3910bad049664",
       "company_key": "03a107bff3ce10be1d70dd18e74bc09967e4d6309ba50d5f1ddc8664125531b8",
       "now": 1800000000,
+      "found": true,
       "reason": "malformed",
       "registry_error": "bad_authorization"
     },
@@ -279,6 +298,7 @@
       "pilot_key": "79b5562e8fe654f94078b112e8a98ba7901f853ae695bed7e0e3910bad049664",
       "company_key": "03a107bff3ce10be1d70dd18e74bc09967e4d6309ba50d5f1ddc8664125531b8",
       "now": 1800000000,
+      "found": true,
       "reason": "malformed",
       "registry_error": "bad_authorization"
     },
@@ -291,6 +311,7 @@
       "pilot_key": "79b5562e8fe654f94078b112e8a98ba7901f853ae695bed7e0e3910bad049664",
       "company_key": "03a107bff3ce10be1d70dd18e74bc09967e4d6309ba50d5f1ddc8664125531b8",
       "now": 1800000000,
+      "found": true,
       "reason": "not_pilot_key",
       "registry_error": "bad_authorization"
     },
@@ -303,6 +324,7 @@
       "pilot_key": "79b5562e8fe654f94078b112e8a98ba7901f853ae695bed7e0e3910bad049664",
       "company_key": "03a107bff3ce10be1d70dd18e74bc09967e4d6309ba50d5f1ddc8664125531b8",
       "now": 1800000000,
+      "found": true,
       "reason": "bad_signature",
       "registry_error": "bad_authorization"
     },
@@ -315,6 +337,7 @@
       "pilot_key": "0100000000000000000000000000000000000000000000000000000000000000",
       "company_key": "03a107bff3ce10be1d70dd18e74bc09967e4d6309ba50d5f1ddc8664125531b8",
       "now": 1800000000,
+      "found": true,
       "reason": "weak_pilot_key",
       "registry_error": "bad_authorization"
     },
@@ -327,6 +350,7 @@
       "pilot_key": "ebffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff7f",
       "company_key": "03a107bff3ce10be1d70dd18e74bc09967e4d6309ba50d5f1ddc8664125531b8",
       "now": 1800000000,
+      "found": true,
       "reason": "weak_pilot_key",
       "registry_error": "bad_authorization"
     },
@@ -339,6 +363,7 @@
       "pilot_key": "03a107bff3ce10be1d70dd18e74bc09967e4d6309ba50d5f1ddc8664125531b8",
       "company_key": "03a107bff3ce10be1d70dd18e74bc09967e4d6309ba50d5f1ddc8664125531b8",
       "now": 1800000000,
+      "found": true,
       "reason": "same_key",
       "registry_error": "bad_authorization"
     },
@@ -351,8 +376,22 @@
       "pilot_key": "79b5562e8fe654f94078b112e8a98ba7901f853ae695bed7e0e3910bad049664",
       "company_key": "03a107bff3ce10be1d70dd18e74bc09967e4d6309ba50d5f1ddc8664125531b8",
       "now": 1800000000,
+      "found": true,
       "reason": "malformed",
       "registry_error": "bad_authorization"
+    },
+    {
+      "name": "leading space before the line",
+      "authorization": "aGFzaHdpbmctcGlsb3QtYXV0aG9yaXphdGlvbiB2MQpwaWxvdF9rZXk9NzliNTU2MmU4ZmU2NTRmOTQwNzhiMTEyZThhOThiYTc5MDFmODUzYWU2OTViZWQ3ZTBlMzkxMGJhZDA0OTY2NApjb21wYW55X2tleT0wM2ExMDdiZmYzY2UxMGJlMWQ3MGRkMThlNzRiYzA5OTY3ZTRkNjMwOWJhNTBkNWYxZGRjODY2NDEyNTUzMWI4Cm5vdF9hZnRlcj0yMDI3LTAxLTI5VDA4OjAwOjAwWg",
+      "authorization_sig": "95b2da973707f2428f6199ba3c376b9a13aa2d3f087b0ac4672e491b30cf4a74872f9da7ab6c9974b36ebc9db4994055b4f708f6831a252c7d495c7b672ba605",
+      "line": " Authorized by company key: aGFzaHdpbmctcGlsb3QtYXV0aG9yaXphdGlvbiB2MQpwaWxvdF9rZXk9NzliNTU2MmU4ZmU2NTRmOTQwNzhiMTEyZThhOThiYTc5MDFmODUzYWU2OTViZWQ3ZTBlMzkxMGJhZDA0OTY2NApjb21wYW55X2tleT0wM2ExMDdiZmYzY2UxMGJlMWQ3MGRkMThlNzRiYzA5OTY3ZTRkNjMwOWJhNTBkNWYxZGRjODY2NDEyNTUzMWI4Cm5vdF9hZnRlcj0yMDI3LTAxLTI5VDA4OjAwOjAwWg.95b2da973707f2428f6199ba3c376b9a13aa2d3f087b0ac4672e491b30cf4a74872f9da7ab6c9974b36ebc9db4994055b4f708f6831a252c7d495c7b672ba605",
+      "signed_text": "hashwing-pilot-authorization v1\npilot_key=79b5562e8fe654f94078b112e8a98ba7901f853ae695bed7e0e3910bad049664\ncompany_key=03a107bff3ce10be1d70dd18e74bc09967e4d6309ba50d5f1ddc8664125531b8\nnot_after=2027-01-29T08:00:00Z",
+      "pilot_key": "79b5562e8fe654f94078b112e8a98ba7901f853ae695bed7e0e3910bad049664",
+      "company_key": "03a107bff3ce10be1d70dd18e74bc09967e4d6309ba50d5f1ddc8664125531b8",
+      "now": 1800000000,
+      "found": false,
+      "reason": "no_line",
+      "registry_error": null
     }
   ]
 }

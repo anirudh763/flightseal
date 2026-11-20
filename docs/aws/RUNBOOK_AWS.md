@@ -119,20 +119,24 @@ confirmed" once it ends.
   change on the function's environment; a later `cdk deploy` that updates the function probably removes it again
   (not verified on AWS). The dev server takes
   `--pilot-keys-orgs orgA` (local only).
-- **Switch off:** remove the org from the list (or the whole variable). The pilot routes answer `pilot_keys_off`,
-  pilot keys get `key_not_active` on register, and every stored pilot key, tombstone and `PILOT_COUNT` is kept, so
-  switching back on restores them as they were. While an org is off, retire also answers `pilot_keys_off`: to revoke a
-  pilot key then, use `POST /v1/keys/<fp>/compromised`.
+- **Switch off:** remove the org from the list (or the whole variable). The pilot challenge and enroll routes answer
+  `pilot_keys_off`, pilot keys get `key_not_active` on register, and every stored pilot key, tombstone and
+  `PILOT_COUNT` is kept, so switching back on restores them as they were (switching off frees no slots). Retire and
+  compromise still work while an org is off, so an admin can always revoke a pilot key.
 - **Enroll:** the pilot makes a key on their own device, the company computer signs an authorization for its public
   key (confirm the full fingerprint with the pilot by phone or in person first), then the pilot calls
   `GET /v1/pilot-keys/challenge` and `POST /v1/pilot-keys`. The authorization must be signed by the org's current
   active company key.
 - **Renewal** is a new pilot key and a new authorization. An authorization is never extended and a fingerprint is
   never enrolled twice.
-- **Expired pilot keys stay `active`** in `GET /v1/keys` and still count toward the 50-key cap until an admin
-  retires them (`POST /v1/pilot-keys/<fp>/retire`); they cannot register. Retire the keys of pilots who leave.
+- **Only usable pilot keys hold one of the 50 slots.** A key whose authorization has ended, or whose company key was
+  replaced or marked compromised, cannot register. When an enroll would pass 50, the registry first retires every such
+  key itself (state `retired`, with a tombstone, as an admin retire would) and then tries once more, so renewals never
+  fill the cap. Until that happens such a key may still show `active` in `GET /v1/keys`. Retire the keys of pilots
+  who leave (`POST /v1/pilot-keys/<fp>/retire`): their keys stay usable until `not_after` otherwise.
 - **Company key replaced or compromised:** pilot keys under the old key stop registering (their parent isn't
-  active). Nothing is rewritten; retire them to free their slots, then authorize new keys under the new company key.
+  active), and their slots are freed the next time an enroll hits the cap. Authorize new keys under the new company
+  key.
 
 ## When the budget alert fires
 

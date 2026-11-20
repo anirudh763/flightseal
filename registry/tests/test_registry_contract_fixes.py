@@ -1,8 +1,12 @@
 """Contract fixes found while building the browser outbox: CORS, idempotent share creation, epoch read and the
 three envelope error codes."""
+import calendar
 import hashlib
+import json
 
-from registry_helpers import SEED_A, call, enroll, envelope, line, make_app, register, share, token
+from registry_helpers import SEED_A, T0, call, enroll, envelope, line, make_app, register, share, token
+
+from registry.app import _seconds_to_next_month
 
 ORIGINS = "https://anirudh763.github.io,http://127.0.0.1:*"
 GOOD, DEV = "https://anirudh763.github.io", "http://127.0.0.1:5173"
@@ -89,6 +93,59 @@ def test_every_404_on_the_public_share_route_has_identical_headers_and_body():
         assert unknown["statusCode"] == 404
         for tail in ("A" * 42, "A" * 129, "bad!token", "", "a/b", "A" * 43 + "/x"):
             assert raw(app, "GET", "/v1/shares/" + tail, {"Origin": origin}) == unknown, tail
+
+
+# ------------------------------------------------------------------ Retry-After
+
+EXPOSE = ("access-control-expose-headers", "retry-after")
+
+
+def test_quota_429_says_when_the_next_utc_month_starts():
+    app, _, clock, pilot = setup(CORS_ORIGINS=ORIGINS, REG_QUOTA_PER_MONTH="1")
+    assert register(app, pilot, line(SEED_A, 5))[0] == 201
+    body = json.dumps({"receipt": line(SEED_A, 6), "idempotency_key": "idem-key-0000000002",
+                       "envelope_id": envelope(app, pilot)})
+    r = raw(app, "POST", "/v1/registrations", {"Origin": GOOD, "Authorization": "Bearer " + pilot}, body)
+    assert (r["statusCode"], json.loads(r["body"])) == (429, {"error": "quota_exceeded"})
+    assert r["headers"]["retry-after"] == str(calendar.timegm((2027, 2, 1, 0, 0, 0)) - T0)  # T0 is 2027-01-15
+    assert r["headers"]["access-control-allow-origin"] == GOOD and EXPOSE in r["headers"].items()
+
+
+def test_seconds_to_next_month_rolls_over_the_year():
+    dec31 = calendar.timegm((2027, 12, 31, 23, 59, 59))
+    assert _seconds_to_next_month(dec31) == 1
+    assert _seconds_to_next_month(calendar.timegm((2027, 3, 1, 0, 0, 0))) == 31 * 86400
+
+
+def test_store_outage_503_says_retry_after_30():
+    app, table, clock, pilot = setup(CORS_ORIGINS=ORIGINS)
+    table.fail = lambda op, pk, sk: True
+    r = raw(app, "GET", "/v1/keys", {"Origin": GOOD, "Authorization": "Bearer " + pilot})
+    assert (r["statusCode"], json.loads(r["body"])) == (503, {"error": "unavailable"})
+    assert r["headers"]["retry-after"] == "30" and EXPOSE in r["headers"].items()
+
+
+def test_restore_pending_503_says_retry_after_30_on_the_share_view_too():
+    app, _, clock = make_app(CORS_ORIGINS=ORIGINS, RESTORED_FROM="old-table")
+    for path, headers in (("/v1/shares/" + "A" * 43, {"Origin": "https://insurer.example"}),
+                          ("/v1/keys", {"Origin": GOOD, "Authorization": "Bearer " + token(clock)})):
+        r = raw(app, "GET", path, headers)
+        assert (r["statusCode"], json.loads(r["body"])) == (503, {"error": "restore_pending"}), path
+        assert r["headers"]["retry-after"] == "30" and EXPOSE in r["headers"].items(), path
+    assert raw(app, "GET", "/v1/shares/" + "A" * 43, {})["headers"]["access-control-allow-origin"] == "*"
+
+
+def test_no_retry_after_on_other_statuses_and_expose_only_with_an_origin_grant():
+    app, _, clock, pilot = setup(CORS_ORIGINS=ORIGINS)
+    for path, auth, status in (("/v1/keys", pilot, 200), ("/v1/keys", None, 401), ("/v1/nope", pilot, 404),
+                               ("/v1/shares/" + "A" * 43, None, 404)):
+        headers = {"Origin": GOOD, **({"Authorization": "Bearer " + auth} if auth else {})}
+        r = raw(app, "GET", path, headers)
+        assert r["statusCode"] == status and "retry-after" not in r["headers"], path
+        assert EXPOSE in r["headers"].items(), path
+    r = raw(app, "GET", "/v1/keys", {"Origin": "https://evil.example", "Authorization": "Bearer " + pilot})
+    assert "access-control-expose-headers" not in r["headers"]
+    assert EXPOSE in preflight(app, GOOD)["headers"].items()
 
 
 # ------------------------------------------------------------------ shares

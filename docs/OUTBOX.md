@@ -116,6 +116,12 @@ idempotency key, which returns the original ack.
 | 429 `quota_exceeded` (the org's monthly quota) | `needs_attention`, `quota_exceeded`, message "Your company's monthly registration limit is reached; this proof is saved and can be exported" | final for the month: no automatic retry; `retryNow(id)` tries again (for example next month) |
 | 503, any other 429 (API Gateway throttling), other 5xx, network error, timeout, a 2xx that is not a readable JSON ack (`bad_response`) | `waiting_for_connection`, `attempts + 1` | a readable `Retry-After` on a 503 or a throttling 429 (seconds or an HTTP date, capped at 15 min) sets the wait, and nothing in the queue is sent before it ends; otherwise backoff: d = min(15 min, 2 s · 2^(n-1)), delay in [d/2, d]; after 10 attempts `needs_attention`, `attempts_exhausted` (retryable) |
 
+Server half of `Retry-After` (ledger R74): the registry sends it in whole seconds on every 503 (30; including `identity_unavailable`, a configuration error the wait won't fix) and on 429
+`quota_exceeded` (seconds until the next UTC month), and exposes it to the console's origin
+(`Access-Control-Expose-Headers: retry-after`). API Gateway's own throttling 429 does not carry it, so a throttled
+request falls back to the backoff above. The outbox reads the header on a 503 or a throttling 429 only; on
+`quota_exceeded` the row stays `needs_attention` whatever the header says.
+
 `retryNow()` with no id sends every queued row now, ignoring backoff, a `Retry-After` wait and `navigator.onLine`. The outbox also
 dispatches on open and on the `online` event. It never creates or retries a share. It mints a new envelope only for
 a row that has none yet, as a once-per-open prefetch, or through an explicit `retryNow(id)` after one of the three
@@ -140,10 +146,9 @@ idempotency window. A malformed `token`, or a page without Web Crypto (not a sec
   never an empty success: if the browser lost its storage, only an earlier export file can bring the rows back.
 - `importProofs(text)` queues the receipt lines from an export file again (anything else is `{ok: false, reason: 'not_an_export'}`). A receipt that was already registered
   gets its original ack back, because the server dedupes by registration id across idempotency keys.
-- `Retry-After` is honoured only when the browser lets the console read it. A console on another origin can read it
-  only if the registry sends `Access-Control-Expose-Headers: retry-after`; today neither `registry/registry/app.py`
-  nor the API Gateway CORS config (`infra/lib/stack.ts`) sends or exposes it, so a cross-origin console uses the
-  backoff above.
+- `Retry-After` is honoured only when the browser lets the console read it. The registry exposes it
+  (`Access-Control-Expose-Headers: retry-after` from `registry/registry/app.py` and the API Gateway CORS config in
+  `infra/lib/stack.ts`); API Gateway's own throttling 429 has no `Retry-After`, so that case uses the backoff above.
 - After `close()`, timers and listeners stop, the in-flight request is aborted, and any late result is dropped.
 - A tab ignores a sign-out message older than its own current sign-in (a delayed message). Each sign-out also records
   when that owner signed out in `localStorage` `hashwing-registry-signouts` (a 32-hex hash of the owner and a time, at

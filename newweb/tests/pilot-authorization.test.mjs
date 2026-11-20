@@ -25,7 +25,7 @@ test('constants match the vector file', () => {
   assert.equal(VECTORS.prefix, PREFIX);
   assert.equal(VECTORS.line_prefix, LINE_PREFIX);
   assert.equal(VECTORS.max_days, MAX_DAYS);
-  assert.ok(VECTORS.cases.length >= 26);
+  assert.ok(VECTORS.cases.length >= 27); // 27 since #66 (found + the leading-space no_line case)
 });
 
 for (const c of VECTORS.cases) {

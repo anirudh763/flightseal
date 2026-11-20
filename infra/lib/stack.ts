@@ -93,8 +93,8 @@ export const ROUTES: Array<[apigw.HttpMethod, string]> = [
   [apigw.HttpMethod.POST, '/v1/keys'],
   [apigw.HttpMethod.GET, '/v1/keys'],
   [apigw.HttpMethod.POST, '/v1/keys/{fp}/compromised'],
-  // Option B pilot keys: every org answers 403 pilot_keys_off unless PILOT_KEYS_ORGS names it, and this stack never
-  // sets PILOT_KEYS_ORGS.
+  // Option B pilot keys: challenge and enroll answer 403 pilot_keys_off unless PILOT_KEYS_ORGS names the org (this
+  // stack never sets it); retire works whatever the switch, so revocation is never blocked.
   [apigw.HttpMethod.GET, '/v1/pilot-keys/challenge'],
   [apigw.HttpMethod.POST, '/v1/pilot-keys'],
   [apigw.HttpMethod.POST, '/v1/pilot-keys/{fp}/retire'],
@@ -212,6 +212,8 @@ export class RegistryStack extends Stack {
         allowMethods: [apigw.CorsHttpMethod.GET, apigw.CorsHttpMethod.POST, apigw.CorsHttpMethod.DELETE,
           apigw.CorsHttpMethod.OPTIONS],
         allowHeaders: ['authorization', 'content-type', 'idempotency-key'],
+        // The app sends Retry-After on its 429/503; API Gateway's own throttling 429 does not carry it.
+        exposeHeaders: ['retry-after'],
         allowCredentials: false,
         maxAge: Duration.minutes(10),
       },
