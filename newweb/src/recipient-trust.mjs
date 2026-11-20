@@ -81,14 +81,18 @@ export const landingLine = (iso) => `Reported landing time: ${iso} (operator-ent
 export function trustLine(trust, sources = {}) {
   const entry = trust?.entry;
   switch (trust?.status) {
-    case 'trusted': return `Signed by a key you trust: ${entry.name} (added from ${sources[entry.source] || entry.source})`;
+    case 'trusted':
+      if (PILOT_AUTHORIZATION_ACCEPTED && trust.via === 'pilot') return `Signed by a pilot key ${entry.name} authorized until ${String(trust.notAfter || '').slice(0, 10)}`;
+      return `Signed by a key you trust: ${entry.name} (added from ${sources[entry.source] || entry.source})`;
     case 'unconfirmed': return `Signed by a key saved for ${entry.name}, but how you confirmed it isn't recorded. Confirm its fingerprint on Trust.`;
     case 'compromised': return `Signed by a key you marked as compromised: ${entry.name}. Don't rely on this proof without checking with the company.`;
     case 'replaced': return `Signed by a key that was replaced for ${entry.name} on ${String(entry.replacedAt || '').slice(0, 10) || 'an unknown date'}. Ask the company whether proofs from that key are still valid.`;
     case 'weak': return "This public key is weak and can't prove anything"; // docs/verifier.js WEAK_KEY_MESSAGE
     case 'wrong-key': return "Not signed by the key you chose. Don't rely on this proof.";
     case 'invalid-signature': return "The signature doesn't match. Don't rely on this proof.";
-    default: return "Valid signature, but this key isn't in your trusted list — confirm its fingerprint through a channel you already know.";
+    default:
+      if (PILOT_AUTHORIZATION_ACCEPTED && trust?.reason === 'authorization-ended') return `The company's authorization for this pilot key ended on ${String(trust.notAfter || '').slice(0, 10)}. Ask the company.`;
+      return "Valid signature, but this key isn't in your trusted list — confirm its fingerprint through a channel you already know.";
   }
 }
 export const TRUST_KIND = { trusted: 'ok', unconfirmed: 'warn', untrusted: 'warn', replaced: 'warn', compromised: 'bad', 'wrong-key': 'bad', 'invalid-signature': 'bad', weak: 'bad' };
@@ -109,6 +113,14 @@ const STATUS = { match: 'Matches', 'bytes-differ': 'Bytes differ', missing: 'Mis
  * still qualifies it). This is the one switch; nothing else reads the decision.
  */
 export const VERIFIED_NEEDS_TRUSTED_KEY = true;
+
+/**
+ * Signing Option B (design §7.2), client switch. false: an `Authorized by company key:` line in a receipt message is
+ * ignored and a pilot-signed proof reads "Files match · signer not confirmed". true: trusted-keys.mjs trustForProof
+ * checks it against a confirmed pin with pilotKeys on. A build constant, so the bundler drops every pilot path while it
+ * is false; tests flip it only by rewriting this line through a Vite plugin. The owner turns it on with PILOT_KEYS_ORGS.
+ */
+export const PILOT_AUTHORIZATION_ACCEPTED = false;
 
 export const NOT_VERIFIED_NEXT = 'Check that you chose the right sealed file, pasted the whole receipt message, and entered the key the sender gave you separately.';
 const plural = (n, one, many) => `${n} ${n === 1 ? one : many}`;

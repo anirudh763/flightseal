@@ -1,4 +1,6 @@
 import { SMALL_ORDER_Y, WEAK_KEY_MESSAGE, parseHex, weakPublicKey } from '../../docs/verifier.js';
+import { PILOT_AUTHORIZATION_ACCEPTED } from './recipient-trust.mjs';
+import { check as checkAuthorization, iso, parseLine } from './pilot-authorization.mjs';
 // Local trusted-companies list (public keys and fingerprints only; never a private key). History is kept: a
 // replaced or compromised key stays listed with its status, so an old proof can still be explained. Removing a
 // company keeps its compromised records.
@@ -67,8 +69,9 @@ function sha256Hex(bytes) {
 const keyFingerprint = (publicKey) => sha256Hex(Uint8Array.from(publicKey.match(/../g), (byte) => Number.parseInt(byte, 16)));
 
 function clean(entry) {
-  const { name, publicKey, fingerprint, source, addedAt, status, confirmedAt, replacedAt, compromisedAt } = entry;
-  return { name, publicKey, fingerprint, source, addedAt, status, ...(confirmedAt ? { confirmedAt } : {}), ...(replacedAt ? { replacedAt } : {}), ...(compromisedAt ? { compromisedAt } : {}) };
+  const { name, publicKey, fingerprint, source, addedAt, status, confirmedAt, replacedAt, compromisedAt, pilotKeys } = entry;
+  // pilotKeys (Option B, "This company uses pilot keys") is kept only when exactly true, so other pins stay byte-identical.
+  return { name, publicKey, fingerprint, source, addedAt, status, ...(confirmedAt ? { confirmedAt } : {}), ...(replacedAt ? { replacedAt } : {}), ...(compromisedAt ? { compromisedAt } : {}), ...(pilotKeys === true ? { pilotKeys } : {}) };
 }
 function read(storage = globalThis.localStorage) {
   let entries;
@@ -178,6 +181,38 @@ export async function trustForKey(publicKey, { storage = globalThis.localStorage
     if (entry) return { status: result, entry, fingerprint };
   }
   return { status: 'untrusted', fingerprint };
+}
+
+/**
+ * Trust for a proof whose receipt message may carry an `Authorized by company key:` line (Option B, design §7.2).
+ * Switch off: exactly trustForKey. Switch on, and only when trustForKey says untrusted: the line's statement must
+ * authorize this key, be signed by its company key, and that company key must be a confirmed active pin with
+ * pilotKeys on; then { status: 'trusted', via: 'pilot', entry, notAfter }. A pin is attributed only once the
+ * company signature checked out, so a forged line can't name a company: compromised and replaced come from a signed
+ * statement, and 'authorization-ended' only after every pin check passed. `now` is the verifier's clock (epoch ms,
+ * like Date.now()); no time from the proof or message is read.
+ */
+export async function trustForProof(publicKey, message, { storage = globalThis.localStorage, cryptoObject = globalThis.crypto, now = Date.now() } = {}) {
+  const base = await trustForKey(publicKey, { storage, cryptoObject });
+  if (!PILOT_AUTHORIZATION_ACCEPTED || base.status !== 'untrusted' || !base.fingerprint) return base;
+  const line = parseLine(message);
+  if (!line.found || line.malformed) return base;
+  const key = String(publicKey).trim().toLowerCase();
+  const { reason, auth } = await checkAuthorization(line.authorization, line.sig, parseHex(key, 32), null, Math.floor(now / 1000));
+  if (![null, 'ended', 'too_long'].includes(reason)) return base;
+  const companyHex = toHex(auth.companyKey);
+  const matches = read(storage).filter((entry) => entry.fingerprint === keyFingerprint(companyHex));
+  const compromised = matches.findLast((entry) => entry.status === 'compromised');
+  if (compromised) return { status: 'compromised', entry: compromised, fingerprint: base.fingerprint };
+  const pin = matches.findLast((entry) => entry.status === 'active' && entry.confirmedAt && entry.pilotKeys === true && (!entry.publicKey || entry.publicKey === companyHex));
+  if (!pin) {
+    const replaced = !matches.some((entry) => entry.status === 'active') && matches.findLast((entry) => entry.status === 'replaced');
+    return replaced ? { status: 'replaced', entry: replaced, fingerprint: base.fingerprint } : base;
+  }
+  const notAfter = iso(auth.notAfter);
+  if (reason === null) return { status: 'trusted', via: 'pilot', entry: pin, notAfter, fingerprint: base.fingerprint };
+  if (reason === 'ended') return { status: 'untrusted', reason: 'authorization-ended', entry: pin, notAfter, fingerprint: base.fingerprint };
+  return base;
 }
 
 export async function matchingTrustedKey(publicKey, { storage = globalThis.localStorage, cryptoObject = globalThis.crypto } = {}) {
