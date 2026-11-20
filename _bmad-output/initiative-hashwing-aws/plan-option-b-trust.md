@@ -118,7 +118,7 @@ deferred: []
 ### 2026-11-20 — Review pass
 - verdicts: 8 findings — high 0, medium 1, low 5, false 2, maybe-false 0
 - findings:
-  - `[false]` `[reject]` Pilot rows and the admin Remove button are not behind `pilot_keys` — by design §4.2/§9.5 retire works whatever the switch so an admin can always revoke; rows exist only in an org that enrolled pilots while switched on, so the demo and every deployment today show none (orgK check).
+  - `[low]` `[reject]` (deliberate deviation, re-logged after the advisor check) Pilot rows and the admin Remove button are not behind `pilot_keys`; true, kept on purpose — by design §4.2/§9.5 retire works whatever the switch so an admin can always revoke; rows exist only in an org that enrolled pilots while switched on, so the demo and every deployment today show none (orgK check).
   - `[medium]` `[patch]` A compromised result from the fingerprint list lost its date in the report (`compromisedAt: null`) — `manifestReport` and main.jsx `keyTrust` now take `trust.compromisedAt` first; test in `pilot-verify.test.mjs` "trustForProof reads the compromised list first…" (fails without the fix).
   - `[low]` `[reject]` After `not_after` an open chosen-company result reads "Files match · signer not confirmed" while a fresh check reads "Not verified" — both fail closed and neither is Verified; aligning them needs re-running the mismatch branch from the timer, more than a direct correction.
   - `[low]` `[patch]` `CompromisedFingerprints` did not follow other tabs — now re-reads on `usePinsVersion` (storage event).
