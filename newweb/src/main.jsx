@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { createRoot } from 'react-dom/client';
 import { Activity, ArrowRight, Building2, Check, Copy, Download, Gauge, ChevronDown, CircleHelp, ClipboardList, FileCheck2, FileLock2, KeyRound, Mail, FlaskConical, List, MapPin, Menu, ShieldCheck, Stamp, UserRound, Video } from 'lucide-react';
 import { hashFile, importFile, IMPORT_MAX_BYTES, VERIFY_MAX_BYTES, verifyFile, sealFile, SEAL_MAX_BYTES, recoverTemporaryOutputs } from '../../docs/wasm/client.mjs';
@@ -1656,7 +1656,7 @@ function App() {
     receiptChecks: result.receiptChecks.map((r) => ({ ...r, count: String(r.count) })),
     source: result.source || null,
     firstFailure: result.indexed.problem ? { type: problemLabel(result.indexed.problem.token), token: result.indexed.problem.token, record: String(result.indexed.problem.record), offset: String(result.indexed.problem.offset), expected: result.indexed.problem.expected ?? null, actual: result.indexed.problem.actual ?? null } : null,
-    keyTrust: shownTrust ? { status: shownTrust.status, line: trustLine(shownTrust, SOURCES), company: shownTrust.entry?.name ?? null, source: shownTrust.entry?.source ?? null, sourceLabel: shownTrust.entry ? SOURCES[shownTrust.entry.source] || shownTrust.entry.source : null, fingerprint: shownTrust.fingerprint || null, addedAt: shownTrust.entry?.addedAt || null, confirmedAt: shownTrust.entry?.confirmedAt || null, replacedAt: shownTrust.entry?.replacedAt || null, compromisedAt: shownTrust.entry?.compromisedAt || null } : null,
+    keyTrust: shownTrust ? { status: shownTrust.status, line: trustLine(shownTrust, SOURCES), company: shownTrust.entry?.name ?? null, source: shownTrust.entry?.source ?? null, sourceLabel: shownTrust.entry ? SOURCES[shownTrust.entry.source] || shownTrust.entry.source : null, fingerprint: shownTrust.fingerprint || null, addedAt: shownTrust.entry?.addedAt || null, confirmedAt: shownTrust.entry?.confirmedAt || null, replacedAt: shownTrust.entry?.replacedAt || null, compromisedAt: shownTrust.compromisedAt || shownTrust.entry?.compromisedAt || null } : null,
     timeProvenance: resultTimes ? { fields: resultTimes } : null,
     fileComparison: fileComparison.length ? { items: fileComparison.map(({ for: _for, ...item }) => ({ ...item, status: item.matches ? 'Matches' : BYTES_DIFFER.title })), bytesDiffer: fileComparison.some((item) => !item.matches) ? BYTES_DIFFER : null } : null,
     report: reportText,
@@ -2222,7 +2222,7 @@ function TrustedCompanies() {
 // Option B, recipient side (only in builds with PILOT_AUTHORIZATION_ACCEPTED): the user's own tick is the only way on.
 function PilotKeysSetting({ entry, onDone, onError }) {
   const [ticked, setTicked] = useState(false);
-  const id = `tc-pilot-${entry.fingerprint.slice(0, 12)}`;
+  const id = `tc-pilot-${useId().replace(/[^A-Za-z0-9_-]/g, '')}`; // one key can be active under two names
   const set = (on) => {
     try { setPilotKeys(entry.name, entry.fingerprint, on, { confirmed: ticked }); setTicked(false); onDone(on ? `${entry.name} now signs through pilots on this device.` : `Pilot keys turned off for ${entry.name}.`); }
     catch (cause) { onError(cause?.message || 'Could not change this setting.'); }
@@ -2236,6 +2236,8 @@ function PilotKeysSetting({ entry, onDone, onError }) {
 function CompromisedFingerprints() {
   const read = () => { try { return { list: listCompromisedFingerprints(), broken: false }; } catch { return { list: [], broken: true }; } };
   const [state, setState] = useState(read);
+  const pinsVersion = usePinsVersion();
+  useEffect(() => { if (pinsVersion) setState(read()); }, [pinsVersion]); // eslint-disable-line react-hooks/exhaustive-deps -- marks from another tab
   const [fingerprint, setFingerprint] = useState('');
   const [note, setNote] = useState('');
   const [error, setError] = useState('');

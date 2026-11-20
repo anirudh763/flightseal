@@ -3,14 +3,14 @@ title: 'Option B browser half, part 2: Trust pilot screens, recipient pilotKeys 
 type: feature
 ticket: ''
 created: '2026-11-19'
-status: in-progress
+status: built
 baseline_revision: '32f0b743d91c0ced75b25809142d57bdaf3a5c20'
 route: full
 route_source: auto
 risk: high
-review: ''
-review_source: ''
-lenses_ran: []
+review: quick
+review_source: pinned
+lenses_ran: [quick]
 review_loop_iteration: 0
 followup_review_recommended: false
 context:
@@ -115,6 +115,18 @@ deferred: []
 
 ## Review Triage Log
 
+### 2026-11-20 — Review pass
+- verdicts: 8 findings — high 0, medium 1, low 5, false 2, maybe-false 0
+- findings:
+  - `[false]` `[reject]` Pilot rows and the admin Remove button are not behind `pilot_keys` — by design §4.2/§9.5 retire works whatever the switch so an admin can always revoke; rows exist only in an org that enrolled pilots while switched on, so the demo and every deployment today show none (orgK check).
+  - `[medium]` `[patch]` A compromised result from the fingerprint list lost its date in the report (`compromisedAt: null`) — `manifestReport` and main.jsx `keyTrust` now take `trust.compromisedAt` first; test in `pilot-verify.test.mjs` "trustForProof reads the compromised list first…" (fails without the fix).
+  - `[low]` `[reject]` After `not_after` an open chosen-company result reads "Files match · signer not confirmed" while a fresh check reads "Not verified" — both fail closed and neither is Verified; aligning them needs re-running the mismatch branch from the timer, more than a direct correction.
+  - `[low]` `[patch]` `CompromisedFingerprints` did not follow other tabs — now re-reads on `usePinsVersion` (storage event).
+  - `[low]` `[patch]` `PilotKeysSetting` id from the fingerprint could repeat when one key is active under two names — now `useId()`.
+  - `[low]` `[patch]` AGENTS.md gate text still said 52 wiring checks and did not list `pilot-keys.test.mjs` — updated with the measured counts.
+  - `[low]` `[patch]` `outbox-browser.mjs` not run against a server started with `--pilot-keys-orgs orgP` — run on the merged head (count in AGENTS.md).
+  - `[false]` `[reject]` An admin without a key loaded sees "Make my pilot key" — that is the pilot step and an admin may also fly; it is its own step with one primary button, and the company flow's button stays disabled until a key is loaded.
+
 ## Design Notes
 
 - "Make my pilot key": the browser sealer (`sealFile`) signs with the PEM held in tab memory, as for the company key, so a key whose private half can't be read could never seal. So the pilot key is generated with `generateEd25519SigningKey` and loaded as this tab's signing key: never saved, never sent, backup only if the pilot presses Download; every signature this PR adds is made through the non-extractable `signerFromPem` import. Say this plainly in the PR.
@@ -131,3 +143,13 @@ deferred: []
 - `npm --prefix newweb run test:browser`; `node newweb/tests/profiles.mjs` -- all pass
 - `REGISTRY_DEV_URL=http://127.0.0.1:8796 node newweb/tests/registry-wiring.mjs` (dev registry: `python3 registry/devserver/server.py --port 8796 --pilot-keys-orgs orgP`) -- all pass
 - `PATH=/Users/anirudhyadav/flightseal/.venv-agent/bin:$PATH node --test tests/web/*.test.mjs` -- all pass
+
+## Auto Run Result
+
+- Summary: Trust pilot screens (Make my pilot key, Copy key request, Enroll my pilot key; Authorize a pilot key on the company computer with fingerprint read-back and 14/30 days), pilot rows with Remove and Mark compromised, the authorization line added to seals, the recipient pilotKeys tick and the 500-entry compromised-fingerprint list, and the chosen-company and typed-key Verify paths, all behind `pilot_keys` (server) and `PILOT_AUTHORIZATION_ACCEPTED = false` (recipient pieces). Merged with main edb014a (#67, #68, #69).
+- Files: `newweb/src/pilot-authorization.mjs`, `company-keys.mjs`, `company-keys.jsx`, `registry-client.mjs`, `trusted-keys.mjs`, `recipient-trust.mjs`, `main.jsx`, `style.css`; tests `pilot-keys.test.mjs` (new), `pilot-verify.test.mjs`, `trusted-keys.test.mjs`, `registry-wiring.mjs`, `pilot-on.vite.config.mjs` (new, test-only); CI; docs (R71, EXPERIENCE, design §7.2, AD-23, AGENTS.md); `docs/console` rebuilt.
+- Review: 5 patches (1 medium, 4 low), 0 deferred, 3 rejected (2 false, 1 low; reasons in the triage log).
+- Follow-up review recommended: false (patched: 0 high, 1 medium).
+- Verification on the merged head: newweb unit 240/240; tests/web 153/153; test:browser 66, 0 failed; profiles 8/8; edge-matrix 9 ok; registry-wiring 65/65 and outbox-browser 8/8 against the dev registry on 8796 with `--pilot-keys-orgs orgP`; registry pytest 335; ctest 5/5; console rebuild clean, both greps, no new strings in the flag-off console.
+- Residual risks: the pilot key and its authorization live in tab memory (lost on reload; a re-imported key has no screen to paste the line back); an open chosen-company result after `not_after` reads "signer not confirmed" while a re-run reads "Not verified" (both fail closed); Python `pilot_authorization.parse` still accepts years below 1000 (the browser refuses; the registry refuses them as ended).
+

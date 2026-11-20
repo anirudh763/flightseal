@@ -242,6 +242,9 @@ test('trustForProof reads the compromised list first: the pilot key, or the sign
     assert.equal(trust.listed, true);
     assert.equal(headline(onTrust, trust), 'Signed by a key marked compromised');
     assert.equal(onTrust.trustLine(trust), "Signed by a key you marked as compromised on 2026-11-01. Don't rely on this proof without checking with the company.");
+    // The report carries the same date as the line (review: it read null for a list mark).
+    const json = JSON.parse(onTrust.manifestReport({ sealedName: 'f.manifest.fseal', trust, keyFingerprint: trust.fingerprint, head: 'c'.repeat(64), items: [], extras: [], locals: [] }).json);
+    assert.equal(JSON.stringify(json).includes('"compromisedAt":"2026-11-01'), true, JSON.stringify(json));
   }
   // A plain trusted company key on the list reads compromised too.
   const storage = await pins({ key: OTHER, name: 'Beta' });
