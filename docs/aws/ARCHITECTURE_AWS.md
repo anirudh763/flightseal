@@ -312,7 +312,7 @@ Recorded 2026-11-17 before any code, from the release brief (ledger R36, R39, R4
 | `GET /v1/registrations/{rid}/shares` | any member of the org | path rid (32 hex) | the `GET /v1/shares` row shape (see Shares) | The same index, filtered to one registration. It does not rely on `REG.share_hashes`, because a restore can re-create a registration with `share_hashes: []` while a withdrawn share stub still points at it. Another org's rid is the same 404 as an unknown one. |
 | `GET /v1/registrations/{rid}` | any member of the org | path rid | `{registration_id, state, received_at, disposition, recovery_version}` | The signed-in lookup behind Refresh. Deleted: `disposition: "deleted"`, no `received_at`. |
 | `GET /v1/recovery` | any member | none | `{recovery_version}` | The function's `RESTORE_ID`, an opaque string (empty before any restore) that `registry.restore` generates and never reuses. Clients compare it for equality with what they saved, never for order. Nothing is stored in the table for it. Every ack also returns it. |
-| `POST /v1/shares` (change) | unchanged | `expires_days` 1 to 30 | unchanged | 400 above 30. The cap applies at creation; reads check the stored `expires_at`, so an existing longer link keeps its expiry. No registry is deployed, so no production link exists to migrate. The transaction gains the index item and the journal creation record: five items (SHARE, SIDEM, the REG update, the index item, the journal record); registration becomes four (REG, IDEM, QUOTA, the journal record). The cost audit counts both. |
+| `POST /v1/shares` (change) | unchanged | `expires_days` 1 to 30 | unchanged | 400 above 30. The cap applies at creation; reads check the stored `expires_at`, so an existing longer link keeps its expiry. No registry is deployed, so no production link exists to migrate. The transaction already has the index item (four items today: SHARE, the REG update, SIDEM, the index item, built with R36); the journal creation record would make it five, and registration four (REG, IDEM, QUOTA, the journal record). The cost audit counts the four-item share transaction today. |
 
 Proposed stored items (not built; added to "Stored" when built): the security journal (spine AD-20): a second on-demand table holding a copy of every TOMB item and a creation record for each registration and share (org, id, original `received_at` or `created_at` and `expires_at`, fingerprint, head, count; never a token), written in the same transaction as the item it records, with PITR, deletion protection and RETAIN in production and `enrolled_by` scrubbed after 90 days like the KEY items. Restore applies the union of served-table and journal tombstones with the most revoked state per target (spine AD-20).
 
@@ -384,6 +384,18 @@ no TTL (a share hash must stay claimed; see Shares).
 
 Any DynamoDB error while reading share, registration, key, idempotency, envelope or restore-marker state is a 503;
 nothing is served from a partial read. All reads are strongly consistent.
+
+## Cost and the budget pause (R56)
+
+$5 a month is a target, not a cap ([COST.md](COST.md)). The optional budget (only with `BudgetEmail`) sends email
+when actual spend passes 80 % or forecast spend passes 100 %; it stops nothing. The response is an operator step:
+`cdk deploy --parameters TrafficPaused=true` sets the `$default` stage's default route throttle and the public share
+route's throttle to rate 0, burst 0, and `TrafficPaused=false` restores rate 2, burst 5. The table, tombstones, user
+pool and identities are untouched, nothing else in the template reads the parameter, and later plain deploys keep its
+previous value ([RUNBOOK_AWS.md](RUNBOOK_AWS.md) "When the budget alert fires"). Until someone runs it, and while
+billing data catches up (hours), spend continues. The pause is not wired to the budget automatically. Synthesised
+and asserted only: how API Gateway answers a throttle of 0 (expected: its own 429) and whether those requests are
+billed are not verified. The Lambda's 503 `paused` and the outbox's waiting state (spine AD-18) are not built.
 
 ## Not built
 

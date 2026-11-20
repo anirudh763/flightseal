@@ -321,9 +321,9 @@ erDiagram
 | Option B pilot keys | `app.py`, `restore.py`, `recipient-trust.mjs` | AD-23, AD-24 |
 | R73 restored-table checks | `restore.py`, RUNBOOK_AWS.md | AD-12 |
 | R51 production backups and retention | `infra/lib/stack.ts` | AD-12 |
-| R52 90-day actor IDs | `app.py` scrub job, `restore.py` | AD-2 |
+| R52 90-day actor IDs | `scrub.py` (daily `ScrubFunction`), `restore.py`, `app.py` `_tomb_for` | AD-2 |
 | R54 share length | `app.py` `create_share`, `registry-ui.jsx` | AD-9 |
-| R56 reversible traffic pause | `infra/lib/stack.ts`, RUNBOOK_AWS.md | AD-18 |
+| R56 reversible traffic pause | `infra/lib/stack.ts` `TrafficPaused`, RUNBOOK_AWS.md | AD-18 |
 | R10 identity adapter | `identity.py`, `infra/`, console sign-in | AD-3, AD-16, AD-17 |
 | R11 static hosting | GitHub Pages; Amplify artifacts prepared | AD-1 |
 

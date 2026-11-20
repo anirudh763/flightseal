@@ -73,7 +73,7 @@ request, billed at 0.125 GB.
 | Daily scrub (R52) | 30 invocations × at most 60 s × 0.125 GB; two strongly consistent Scans a day of a table under 1 MB (at most about 512 RRU a day) | under $0.003 |
 | EventBridge schedule | one rule, 30 scheduled invocations | not priced here (no fixed fee) |
 | AWS Budgets | one cost budget with email alerts | $0.00 |
-| **Total** | | **about $0.05** |
+| **Total** | | **about $0.06** (about $0.05 before the share list index item and the daily scrub) |
 
 ## Error and retry scenario
 
