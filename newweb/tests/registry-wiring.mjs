@@ -1692,7 +1692,22 @@ try {
       await bPanel.getByRole('button', { name: 'Enroll my pilot key' }).click();
       await bPanel.getByText('Your pilot key is enrolled. Seals from this tab carry its authorization.').waitFor({ timeout: 15000 });
     };
-    let companyKey, pilotKey, pilotHandover, pilotSealed, endDay;
+    let companyKey, pilotKey, pilotHandover, pilotSealed, pilotList, endDay;
+    const verifyList = async ({ company = '', typed = '' } = {}, want) => {
+      await go(cp, 'verify');
+      await cp.locator('#check-file').setInputFiles(pilotList.path);
+      await cp.locator('#check-text').fill(pilotList.handover);
+      await cp.locator('#check-originals').waitFor({ state: 'attached' });
+      if (await cp.locator('#check-company').count()) await cp.locator('#check-company').selectOption(company);
+      await cp.locator('details.check-options').evaluate((d) => { d.open = true; });
+      await cp.locator('#check-key').fill(typed);
+      await cp.locator('#check-originals').setInputFiles(pilotList.originals);
+      await cp.getByRole('button', { name: 'Check files' }).click();
+      const outcome = cp.locator('.manifest-outcome');
+      try { await cp.waitForFunction((h) => document.querySelector('.manifest-outcome #verdict-heading')?.textContent === h, want, { timeout: 60000 }); }
+      catch { assert.fail(`list: wanted ${want}, got ${await outcome.innerText().catch(() => '(none)')}`); }
+      return outcome;
+    };
     const verifyPilot = async ({ company = '', typed = '' } = {}, want) => {
       await go(cp, 'verify');
       await cp.locator('#check-file').setInputFiles(pilotSealed);
@@ -1735,6 +1750,10 @@ try {
         await aPanel.getByText("This is your company key. Authorize the pilot's own key instead.").waitFor();
         await ap.locator('#pilot-request').fill(request);
         await aPanel.locator('.pilot-step code.fingerprint').waitFor();
+        await ap.locator('#pilot-read-back').check();
+        await ap.locator('#pilot-request').fill(`${request.trimEnd()}`); // still the same key, but the paste changed
+        await aPanel.locator('.pilot-step code.fingerprint').waitFor();
+        assert.equal(await ap.locator('#pilot-read-back').isChecked(), false, 'a changed paste clears the tick');
         assert.equal(await aPanel.locator('.pilot-step code.fingerprint').innerText(), (await fpHex(ap, pilotKey)).match(/.{4}/g).join(' '));
         assert.equal(await aPanel.getByLabel('14 days').isChecked(), true);
         for (const width of [320, 1440]) { await ap.setViewportSize({ width, height: 900 }); await aPanel.screenshot({ path: join(OUT, `pilot-authorize-${width}.png`) }); }
@@ -1765,6 +1784,22 @@ try {
         const [download] = await Promise.all([bp.waitForEvent('download'), bp.getByRole('button', { name: 'Download sealed file' }).click()]);
         pilotSealed = join(OUT, 'pilot-flight.fseal'); await download.saveAs(pilotSealed);
         await chipIs(bp, 'pilot-flight.ulg', 'Registered');
+      });
+
+      await check('list path: a two-file list sealed with the pilot key carries the authorization line once and registers', async () => {
+        const line = pilotHandover.split('\n').find((l) => l.startsWith('Authorized by company key: '));
+        await sealMore(bp);
+        await bp.getByLabel('Large files: fingerprint only, files stay where they are').check();
+        const originals = [{ name: 'p1.mp4', mimeType: 'video/mp4', buffer: Buffer.from(`p1 ${Date.now()}`) }, { name: 'p2.mp4', mimeType: 'video/mp4', buffer: Buffer.from(`p2 ${Date.now()}`) }];
+        await bp.locator('#manifest-files').setInputFiles(originals);
+        await bp.getByRole('button', { name: 'Seal the list', exact: true }).click();
+        await bp.locator('#manifest-handover-text').waitFor({ timeout: 60000 });
+        const handover = await bp.locator('#manifest-handover-text').inputValue();
+        assert.equal(handover.split('\n').filter((l) => l === line).length, 1, handover);
+        const [download] = await Promise.all([bp.waitForEvent('download'), bp.getByRole('button', { name: 'Download sealed list' }).click()]);
+        pilotList = { path: join(OUT, 'pilot-list.manifest.fseal'), handover, originals };
+        await download.saveAs(pilotList.path);
+        await chipIs(bp, '2 files', 'Registered', 60000);
       });
 
       await check('30 days: a second pilot key authorized for 30 days enrolls (the clock margin keeps it under 30 days)', async () => {
@@ -1801,6 +1836,13 @@ try {
           assert.ok(report.includes(`Key trust: ${line}`), 'the report says the same');
         }
         await axe(cp, 'pilot Verified');
+        for (const how of [{ company: 'Pilot Co' }, { typed: companyKey }]) {
+          const outcome = await verifyList(how, 'Verified');
+          await outcome.locator('.trust-line', { hasText: line }).waitFor();
+          const report = await exportOf(cp, 'Download text report', 'no-token-in-this-context', outcome);
+          assert.match(report, /^Result: Verified\. /, `list ${JSON.stringify(how)}`);
+          assert.ok(report.includes(`Key trust: ${line}`));
+        }
       });
 
       await check('recipient: pilot keys off reads "Files match · signer not confirmed" (and Not verified for the chosen company); a marked fingerprint reads compromised', async () => {
@@ -1878,6 +1920,21 @@ try {
           await page.setViewportSize({ width: 1440, height: 900 });
           for (const step of await panel.locator('.pilot-step').all()) assert.ok((await step.locator('.button.primary').count()) <= 1, `${label}: one primary button per step`);
         }
+        await go(cp, 'help'); // the recipient's pilot-keys control and compromised list
+        const trusted = cp.locator('.trusted-companies');
+        await trusted.getByText('Compromised fingerprints').waitFor();
+        await trusted.getByRole('button', { name: /pilot keys: Pilot Co/ }).waitFor();
+        for (const width of [320, 768, 1440]) {
+          await cp.setViewportSize({ width, height: 900 });
+          const overflow = await cp.evaluate(() => document.documentElement.scrollWidth - innerWidth);
+          assert.ok(overflow <= 0, `recipient trust@${width}: horizontal scroll ${overflow}px`);
+          const small = await trusted.locator('button, input[type=text]').evaluateAll((bs) => bs.filter((b) => b.offsetParent !== null).map((b) => [b.textContent || b.id, b.getBoundingClientRect().height]).filter(([, h]) => h < 44));
+          assert.deepEqual(small, [], `recipient trust@${width}: controls under 44px`);
+          await cp.mouse.move(0, 0); await sleep(300);
+          await axe(cp, `recipient trust@${width}`);
+          await trusted.screenshot({ path: join(OUT, `pilot-recipient-trust-${width}.png`) });
+        }
+        await cp.setViewportSize({ width: 1440, height: 900 });
       });
     } finally { await actx.close(); await bctx.close(); await cctx.close(); }
   }

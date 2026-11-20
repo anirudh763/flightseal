@@ -244,7 +244,7 @@ export function CompanyKeysPanel({ signingKey, onMakeKey, onPilotAuthorization }
         </li>;
       })}</ul>}
       {list.truncated && <p className="field-hint">Showing the first 1,000 keys.</p>}
-      {list.status === 'ok' && <p className="field-hint">Only the company computer holds this key. Pilots on other devices seal with a one-time key, which reads 'signer not confirmed'.</p>}
+      {list.status === 'ok' && !pilotOn && <p className="field-hint">Only the company computer holds this key. Pilots on other devices seal with a one-time key, which reads 'signer not confirmed'.</p>}
       {actions}
       <Note note={note} />
       {pilotOn && !isActive && <PilotDevice r={r} signingKey={signingKey} loaded={loaded} unreadable={unreadable} mine={mine} online={online} onMakeKey={onMakeKey} onPilotAuthorization={onPilotAuthorization} reload={load} />}
