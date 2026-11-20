@@ -30,14 +30,19 @@ const FORBIDDEN = ['Company registry', 'Test sign-in', 'Export pending proofs', 
   // AC-37: the share record step (applyRegistryRecord) ships only in registry-on builds.
   "Matches the registry's record", "Doesn't match the registry's record for this link", "Files match · doesn't match the link", "This link was withdrawn or couldn't be checked", 'Registry record', 'Checking the share link',
   // Jobs row actions (R39/AD-15): the saved-ack wording, Refresh's errors, the record actions and the one-record route.
-  'Last confirmed by this device', 'The registry confirmed this record.', 'The registry has no record with this ID', "couldn't confirm this record", 'Make a share link', 'Delete hosted record', '/v1/registrations'];
+  'Last confirmed by this device', 'The registry confirmed this record.', 'The registry has no record with this ID', "couldn't confirm this record", 'Make a share link', 'Delete hosted record', '/v1/registrations',
+  // Option B, Trust (sender screens ship only behind the registry flag; recipient pieces only behind the constant).
+  'Make my pilot key', 'Authorize a pilot key', 'Enroll my pilot key', 'Copy key request', 'HashWing pilot key request', 'hashwing-pilot-key-enroll', '/v1/pilot-keys', 'Remove this pilot key'];
+// Option B recipient pieces: only in a build with PILOT_AUTHORIZATION_ACCEPTED rewritten on (never shipped).
+const RECIPIENT = ['signs through pilots', 'Turn on pilot keys', 'hashwing_compromised_fingerprints', 'Mark fingerprint compromised', 'Compromised fingerprints', 'Signed by a pilot key that'];
+const BUILD_PILOT = join(OUT, 'build-pilot');
 const JWT = /eyJ[\w-]+\.eyJ[\w-]+\./; // any signed token (a pasted dev token is an HS256 JWT)
 const LINK_DEAD = "This link doesn't open. It may have been withdrawn or expired, or it was copied incompletely. Ask the sender for a new link.";
 const SEED_A_PEM = `-----BEGIN PRIVATE KEY-----\n${Buffer.concat([Buffer.from('302e020100300506032b657004220420', 'hex'), Buffer.from([...Array(32).keys()])]).toString('base64')}\n-----END PRIVATE KEY-----\n`;
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const checks = [];
 const errors = [];
-let base, devServer, lock, browser, flagOff, flagOn;
+let base, devServer, lock, browser, flagOff, flagOn, pilotOn;
 let flightA = null; // the registered small-file seal and its receipt message, for the client's check
 let twoFiles = null; // the registered two-file list, its receipt message, key and originals (AC-37 list path)
 let offline = false; // while a check holds the context offline, no-SW static loads (the icon) fail too
@@ -182,12 +187,12 @@ function walk(dir) { return readdirSync(dir).flatMap((f) => { const p = join(dir
 
 // /flightseal/console/* from the flag-on build, everything else from docs/ (the wasm engine, samples).
 const TYPES = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript', '.mjs': 'text/javascript', '.css': 'text/css', '.wasm': 'application/wasm', '.json': 'application/json', '.svg': 'image/svg+xml', '.png': 'image/png', '.woff2': 'font/woff2', '.txt': 'text/plain', '.webmanifest': 'application/manifest+json' };
-function serveFlagOn() {
+function serveFlagOn(build = BUILD) {
   const server = createServer(async (req, res) => {
     let path;
     try { path = decodeURIComponent(new URL(req.url, 'http://x').pathname); } catch { return res.writeHead(400).end(); }
     if (!path.startsWith('/flightseal/')) return res.writeHead(404).end();
-    const [root, rest] = path.startsWith('/flightseal/console/') ? [BUILD, path.slice('/flightseal/console'.length)] : [DOCS, path.slice('/flightseal'.length)];
+    const [root, rest] = path.startsWith('/flightseal/console/') ? [build, path.slice('/flightseal/console'.length)] : [DOCS, path.slice('/flightseal'.length)];
     const file = normalize(join(root, rest.endsWith('/') ? `${rest}index.html` : rest));
     if (!file.startsWith(root + sep)) return res.writeHead(403).end();
     try { res.writeHead(200, { 'content-type': TYPES[extname(file)] || 'application/octet-stream' }).end(await readFile(file)); }
@@ -200,7 +205,7 @@ try {
   await check('flag-off bundle (docs/console) carries no registry strings, URL, dev token or HS256 secret: the build and the committed files', async () => {
     const hits = [];
     const scan = (label, text) => {
-      for (const s of FORBIDDEN) if (text.includes(s)) hits.push(`${label}: ${s}`);
+      for (const s of [...FORBIDDEN, ...RECIPIENT]) if (text.includes(s)) hits.push(`${label}: ${s}`);
       if (JWT.test(text)) hits.push(`${label}: a JWT`);
     };
     for (const file of walk(join(DOCS, 'console'))) scan(file, readFileSync(file, 'latin1'));
@@ -214,7 +219,7 @@ try {
 
   if (process.env.REGISTRY_DEV_URL) base = process.env.REGISTRY_DEV_URL.replace(/\/+$/, '');
   else {
-    devServer = spawn(process.env.PYTHON || 'python3', [resolve(ROOT, '../registry/devserver/server.py'), '--port', '0'], { stdio: ['ignore', 'pipe', 'inherit'] });
+    devServer = spawn(process.env.PYTHON || 'python3', [resolve(ROOT, '../registry/devserver/server.py'), '--port', '0', '--pilot-keys-orgs', 'orgP'], { stdio: ['ignore', 'pipe', 'inherit'] });
     base = await new Promise((ok, reject) => {
       let out = '';
       devServer.stdout.on('data', (c) => { out += c; const m = /READY (\S+)/.exec(out); if (m) ok(m[1]); });
@@ -224,11 +229,23 @@ try {
   await dev('reset');
   const built = spawnSync(join(ROOT, 'node_modules/.bin/vite'), ['build', '--outDir', BUILD, '--emptyOutDir'], { cwd: ROOT, env: { ...process.env, VITE_REGISTRY_URL: base }, encoding: 'utf8' });
   assert.equal(built.status, 0, `flag-on build failed: ${built.stderr}`);
+  // The same flag on, with the recipient constant rewritten on by tests/pilot-on.vite.config.mjs (fails if it doesn't match).
+  const builtPilot = spawnSync(join(ROOT, 'node_modules/.bin/vite'), ['build', '--config', 'tests/pilot-on.vite.config.mjs', '--outDir', BUILD_PILOT, '--emptyOutDir'], { cwd: ROOT, env: { ...process.env, VITE_REGISTRY_URL: base }, encoding: 'utf8' });
+  assert.equal(builtPilot.status, 0, `constant-on build failed: ${builtPilot.stderr}`);
   flagOff = await serve(0, '/flightseal');
   flagOn = await serveFlagOn();
+  pilotOn = await serveFlagOn(BUILD_PILOT);
   lock = await acquireBrowserLock();
   const chromePath = process.env.CHROME_PATH || (process.platform === 'darwin' ? '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome' : undefined);
   browser = await chromium.launch({ headless: true, ...(chromePath ? { executablePath: chromePath } : {}) });
+
+  await check('flag-on build with the constant off has none of the recipient pilot strings; the constant-on test build has them', async () => {
+    const scan = (dir) => walk(dir).map((f) => readFileSync(f, 'latin1')).join('\n');
+    const off = scan(BUILD), on = scan(BUILD_PILOT);
+    assert.deepEqual(RECIPIENT.filter((s) => off.includes(s)), [], 'constant off');
+    assert.deepEqual(RECIPIENT.filter((s) => !on.includes(s)), [], 'constant on (the rewrite really happened)');
+    assert.ok(off.includes('Make my pilot key'), 'the sender screens are in every flag-on build');
+  });
 
   await check('flag off: no registry UI, request or outbox database; Trust has trusted companies and the signing key; "Not registered" stays', async () => {
     const ctx = await newContext();
@@ -1806,7 +1823,303 @@ try {
         console.log(`  contrast (Replace with this key, 320px; transition: ${transition}): ${JSON.stringify(ratios)}`);
         for (const [state, ratio] of Object.entries(ratios)) assert.ok(ratio >= 4.5, `${state}: ${ratio}:1`);
       });
+      await check('non-pilot org (orgK, pilot_keys false): no pilot string or button on Trust, for an admin with a key loaded', async () => {
+        await go(kp, 'help');
+        await keyRows().first().waitFor();
+        const text = await panel.innerText();
+        for (const s of ['Your pilot key', 'Make my pilot key', 'Copy key request', 'Enroll my pilot key', 'Authorize a pilot key', 'Sign the authorization', 'Pilot key', 'Remove']) assert.ok(!text.includes(s), `orgK shows ${s}`);
+        assert.equal(await panel.locator('.pilot-step, #pilot-key-request, #pilot-request, #pilot-authorization').count(), 0);
+        assert.equal(await panel.locator('.button.primary').count(), 1);
+      });
     } finally { await kctx.close(); }
+  }
+
+  // Option B on Trust and Verify (org orgP, the only org the dev server has pilot keys on), on the constant-on test build.
+  {
+    const listP = await (async () => { const t = await tokenFor('p-check', 'pilot', 600, 'orgP'); return (await fetch(`${base}/v1/keys`, { headers: { authorization: `Bearer ${t}` } })).json(); })();
+    const pilotSwitch = listP.pilot_keys === true;
+    const actx = await newContext(), bctx = await newContext(), cctx = await newContext();
+    const ap = watch(await actx.newPage(), 'pilot-admin'), bp = watch(await bctx.newPage(), 'pilot-device'), cp = watch(await cctx.newPage(), 'pilot-recipient');
+    const aPanel = ap.locator('#company-keys'), bPanel = bp.locator('#company-keys');
+    const DAY = String.raw`\d{4}-\d\d-\d\d`;
+    const pilotPosts = [];
+    bp.on('request', (r) => { if (r.method() === 'POST' && new URL(r.url()).pathname === '/v1/pilot-keys') pilotPosts.push(JSON.parse(r.postData() || '{}')); });
+    const fpHex = (page, hex) => page.evaluate(async (h) => [...new Uint8Array(await crypto.subtle.digest('SHA-256', Uint8Array.from(h.match(/../g), (b) => parseInt(b, 16))))].map((b) => b.toString(16).padStart(2, '0')).join(''), hex);
+    const generateOn = async (page) => {
+      await go(page, 'help');
+      await page.getByRole('button', { name: 'Generate Ed25519 key' }).click();
+      await page.waitForFunction(() => /public key [0-9a-f]{64}/.test(document.querySelector('.signing-key-controls [role="status"]')?.textContent || ''));
+    };
+    const keyOf = async (page) => /public key ([0-9a-f]{64})/.exec(await page.locator('.signing-key-controls [role="status"]').innerText())[1];
+    const makeKey = async () => {
+      await go(bp, 'help');
+      await bPanel.getByRole('button', { name: 'Make my pilot key' }).click();
+      await bp.locator('#pilot-key-request').waitFor();
+      return bp.locator('#pilot-key-request').inputValue();
+    };
+    const authorizeOn = async (request, days) => {
+      await go(ap, 'help');
+      await ap.locator('#pilot-request').fill(request);
+      const sign = aPanel.getByRole('button', { name: 'Sign the authorization' });
+      await aPanel.getByText("Read it back to the pilot. Don't authorize a key from the same message alone.").waitFor();
+      assert.equal(await sign.isDisabled(), true, 'not before the read-back tick');
+      await ap.locator('#pilot-read-back').check();
+      if (days === 30) await aPanel.getByLabel('30 days').check();
+      await sign.click();
+      await ap.locator('#pilot-authorization-line').waitFor();
+      return ap.locator('#pilot-authorization-line').inputValue();
+    };
+    const enrollOn = async (line) => {
+      await go(bp, 'help');
+      await bp.locator('#pilot-authorization').fill(line);
+      await bPanel.getByRole('button', { name: 'Enroll my pilot key' }).click();
+      await bPanel.getByText('Your pilot key is enrolled. Seals from this tab carry its authorization.').waitFor({ timeout: 15000 });
+    };
+    let companyKey, pilotKey, pilotHandover, pilotSealed, pilotList, endDay;
+    const verifyList = async ({ company = '', typed = '' } = {}, want) => {
+      await go(cp, 'verify');
+      await cp.locator('#check-file').setInputFiles(pilotList.path);
+      await cp.locator('#check-text').fill(pilotList.handover);
+      await cp.locator('#check-originals').waitFor({ state: 'attached' });
+      if (await cp.locator('#check-company').count()) await cp.locator('#check-company').selectOption(company);
+      await cp.locator('details.check-options').evaluate((d) => { d.open = true; });
+      await cp.locator('#check-key').fill(typed);
+      await cp.locator('#check-originals').setInputFiles(pilotList.originals);
+      await cp.getByRole('button', { name: 'Check files' }).click();
+      const outcome = cp.locator('.manifest-outcome');
+      try { await cp.waitForFunction((h) => document.querySelector('.manifest-outcome #verdict-heading')?.textContent === h, want, { timeout: 60000 }); }
+      catch { assert.fail(`list: wanted ${want}, got ${await outcome.innerText().catch(() => '(none)')}`); }
+      return outcome;
+    };
+    const verifyPilot = async ({ company = '', typed = '' } = {}, want) => {
+      await go(cp, 'verify');
+      await cp.locator('#check-file').setInputFiles(pilotSealed);
+      await cp.locator('#check-text').fill(pilotHandover);
+      if (await cp.locator('#check-company').count()) await cp.locator('#check-company').selectOption(company);
+      await cp.locator('details.check-options').evaluate((d) => { d.open = true; });
+      await cp.locator('#check-key').fill(typed);
+      await cp.getByRole('button', { name: 'Check files' }).click();
+      try { await cp.waitForFunction((h) => document.querySelector('#verdict-heading')?.textContent === h, want, { timeout: 30000 }); }
+      catch { assert.fail(`wanted ${want}, got ${await cp.locator('#verdict-heading').innerText().catch(() => '(none)')}: ${await cp.locator('.verdict').innerText().catch(() => '')}`); }
+    };
+    try {
+      await check('pilot org: the company computer enrolls the company key; the pilot makes a key and copies a request with public data only', async () => {
+        assert.ok(pilotSwitch, `the dev registry must be started with --pilot-keys-orgs orgP (GET /v1/keys for orgP: ${JSON.stringify(listP)})`);
+        await ap.goto(`${pilotOn.url}#/app/help`); await bp.goto(`${pilotOn.url}#/app/help`);
+        await signIn(ap, 'p-admin', 'admin', 3600, 'orgP');
+        await generateOn(ap);
+        await aPanel.getByRole('button', { name: 'Enroll this key' }).click();
+        await aPanel.getByText("This key is now your company's active key.").waitFor();
+        companyKey = await keyOf(ap);
+        await aPanel.getByRole('heading', { name: 'Authorize a pilot key' }).waitFor();
+        await signIn(bp, 'p-pilot', 'pilot', 3600, 'orgP');
+        await bPanel.getByRole('heading', { name: 'Your pilot key' }).waitFor();
+        assert.equal(await bPanel.getByRole('heading', { name: 'Authorize a pilot key' }).count(), 0, 'members never see the company computer step');
+        const request = await makeKey();
+        pilotKey = await keyOf(bp);
+        assert.equal(request, `HashWing pilot key request\npublic_key=${pilotKey}\nfingerprint=${(await fpHex(bp, pilotKey)).match(/.{4}/g).join(' ')}\n`);
+        assert.ok(!/PRIVATE/.test(request));
+      });
+
+      await check('authorize: a tampered or company-key request is refused; the read-back fingerprint is computed from the key; 14 days by default', async () => {
+        const request = await bp.locator('#pilot-key-request').inputValue();
+        await go(ap, 'help');
+        await ap.locator('#pilot-request').fill(request.replace(/fingerprint=\S+/, 'fingerprint=0000'));
+        await aPanel.getByText("The request's fingerprint doesn't match its key. Ask the pilot to copy the request again.").waitFor();
+        await ap.locator('#pilot-request').fill(`${request}extra=1\n`);
+        await aPanel.getByText("This isn't a pilot key request. Paste the whole request the pilot copied, unchanged.").waitFor();
+        assert.equal(await aPanel.locator('.pilot-step code.fingerprint').count(), 0, 'no fingerprint shown for a refused request');
+        await ap.locator('#pilot-request').fill(`HashWing pilot key request\npublic_key=${companyKey}\nfingerprint=${(await fpHex(ap, companyKey)).match(/.{4}/g).join(' ')}\n`);
+        await aPanel.getByText("This is your company key. Authorize the pilot's own key instead.").waitFor();
+        await ap.locator('#pilot-request').fill(request);
+        await aPanel.locator('.pilot-step code.fingerprint').waitFor();
+        await ap.locator('#pilot-read-back').check();
+        await ap.locator('#pilot-request').fill(`${request.trimEnd()}`); // still the same key, but the paste changed
+        await aPanel.locator('.pilot-step code.fingerprint').waitFor();
+        assert.equal(await ap.locator('#pilot-read-back').isChecked(), false, 'a changed paste clears the tick');
+        assert.equal(await aPanel.locator('.pilot-step code.fingerprint').innerText(), (await fpHex(ap, pilotKey)).match(/.{4}/g).join(' '));
+        assert.equal(await aPanel.getByLabel('14 days').isChecked(), true);
+        for (const width of [320, 1440]) { await ap.setViewportSize({ width, height: 900 }); await aPanel.screenshot({ path: join(OUT, `pilot-authorize-${width}.png`) }); }
+        await ap.setViewportSize({ width: 1440, height: 900 });
+      });
+
+      await check('enroll: the pilot pastes the authorization and enrolls (exactly five fields); the row reads Pilot key, ending on its date; a pilot seal registers and carries the line', async () => {
+        const line = await authorizeOn(await bp.locator('#pilot-key-request').inputValue(), 14);
+        assert.match(line, /^Authorized by company key: [A-Za-z0-9_-]+\.[0-9a-f]{128}$/);
+        endDay = new Date(Date.now() + 14 * 86400_000 - 600_000).toISOString().slice(0, 10);
+        await go(bp, 'help');
+        await bp.locator('#pilot-authorization').fill('Authorized by company key: nope');
+        await bPanel.getByRole('button', { name: 'Enroll my pilot key' }).click();
+        await bPanel.getByText("This isn't a complete authorization line. Paste the whole line the company computer gave you.").waitFor();
+        assert.equal(pilotPosts.length, 0, 'a bad line sends nothing');
+        await enrollOn(line);
+        assert.equal(pilotPosts.length, 1);
+        assert.deepEqual(Object.keys(pilotPosts[0]).sort(), ['authorization', 'authorization_sig', 'nonce', 'public_key', 'signature']);
+        const fp = await fpHex(bp, pilotKey);
+        const row = bPanel.locator('.company-keys > li').filter({ hasText: fp.match(/.{4}/g).join(' ') });
+        await row.getByText(new RegExp(`^Pilot key · company key [0-9a-f ]{19} · ends on ${endDay}$`)).waitFor();
+        assert.equal(await bPanel.getByText('This pilot key is enrolled.').count(), 0, 'one enrolled message, not two');
+        for (const width of [320, 1440]) { await bp.setViewportSize({ width, height: 900 }); await bPanel.screenshot({ path: join(OUT, `pilot-device-${width}.png`) }); }
+        await bp.setViewportSize({ width: 1440, height: 900 });
+        await sealSmall(bp, 'pilot-flight.ulg');
+        pilotHandover = await bp.locator('#handover-text').inputValue();
+        assert.equal(pilotHandover.split('\n').filter((l) => l === line).length, 1, 'the authorization line is in the receipt message');
+        const [download] = await Promise.all([bp.waitForEvent('download'), bp.getByRole('button', { name: 'Download sealed file' }).click()]);
+        pilotSealed = join(OUT, 'pilot-flight.fseal'); await download.saveAs(pilotSealed);
+        await chipIs(bp, 'pilot-flight.ulg', 'Registered');
+      });
+
+      await check('list path: a two-file list sealed with the pilot key carries the authorization line once and registers', async () => {
+        const line = pilotHandover.split('\n').find((l) => l.startsWith('Authorized by company key: '));
+        await sealMore(bp);
+        await bp.getByLabel('Large files: fingerprint only, files stay where they are').check();
+        const originals = [{ name: 'p1.mp4', mimeType: 'video/mp4', buffer: Buffer.from(`p1 ${Date.now()}`) }, { name: 'p2.mp4', mimeType: 'video/mp4', buffer: Buffer.from(`p2 ${Date.now()}`) }];
+        await bp.locator('#manifest-files').setInputFiles(originals);
+        await bp.getByRole('button', { name: 'Seal the list', exact: true }).click();
+        await bp.locator('#manifest-handover-text').waitFor({ timeout: 60000 });
+        const handover = await bp.locator('#manifest-handover-text').inputValue();
+        assert.equal(handover.split('\n').filter((l) => l === line).length, 1, handover);
+        const [download] = await Promise.all([bp.waitForEvent('download'), bp.getByRole('button', { name: 'Download sealed list' }).click()]);
+        pilotList = { path: join(OUT, 'pilot-list.manifest.fseal'), handover, originals };
+        await download.saveAs(pilotList.path);
+        await chipIs(bp, '2 files', 'Registered', 60000);
+      });
+
+      await check('30 days: a second pilot key authorized for 30 days enrolls (the clock margin keeps it under 30 days)', async () => {
+        await go(bp, 'help');
+        await bp.getByRole('button', { name: 'Clear key', exact: true }).click();
+        const request = await makeKey();
+        const line = await authorizeOn(request, 30);
+        await enrollOn(line);
+        const log = (await dev('log')).log.filter((e) => e.org === 'orgP' && e.route === 'pilot_enroll');
+        assert.deepEqual(log.map((e) => e.status), [201, 201]);
+        const thirty = new Date(Date.now() + 30 * 86400_000 - 600_000).toISOString().slice(0, 10);
+        await bPanel.getByText(new RegExp(`ends on ${thirty}$`)).waitFor();
+      });
+
+      await check('recipient: "Turn on pilot keys" needs the tick; then Verify with the company chosen, and with its key typed, reads Verified with the pilot line, report Result = headline', async () => {
+        await cp.goto(`${pilotOn.url}#/app/help`);
+        await cp.locator('#tc-name').fill('Pilot Co');
+        await cp.locator('#tc-fingerprint').fill(await fpHex(cp, companyKey));
+        await cp.getByLabel('phone call with a known contact', { exact: true }).check();
+        await cp.locator('#tc-confirmed').check();
+        await cp.getByRole('button', { name: 'Add company' }).click();
+        const turnOn = cp.getByRole('button', { name: 'Turn on pilot keys: Pilot Co' });
+        await turnOn.click();
+        await cp.getByText('Tick the box to confirm this company signs through pilots.').waitFor();
+        await cp.getByLabel('I confirmed this company signs through pilots').check();
+        await turnOn.click();
+        await cp.getByText('Uses pilot keys').waitFor();
+        const line = `Signed by a pilot key that Pilot Co authorized until ${endDay}`;
+        for (const how of [{ company: 'Pilot Co' }, { typed: companyKey }]) {
+          await verifyPilot(how, 'Verified');
+          await cp.waitForFunction((t) => document.querySelector('.verdict .trust-line')?.textContent === t, line, { timeout: 10000 });
+          const report = await exportOf(cp, 'Download text report', 'no-token-in-this-context');
+          assert.match(report, /^Result: Verified\. /, JSON.stringify(how));
+          assert.ok(report.includes(`Key trust: ${line}`), 'the report says the same');
+        }
+        await axe(cp, 'pilot Verified');
+        for (const how of [{ company: 'Pilot Co' }, { typed: companyKey }]) {
+          const outcome = await verifyList(how, 'Verified');
+          await outcome.locator('.trust-line', { hasText: line }).waitFor();
+          const report = await exportOf(cp, 'Download text report', 'no-token-in-this-context', outcome);
+          assert.match(report, /^Result: Verified\. /, `list ${JSON.stringify(how)}`);
+          assert.ok(report.includes(`Key trust: ${line}`));
+        }
+      });
+
+      await check('recipient: pilot keys off reads "Files match · signer not confirmed" (and Not verified for the chosen company); a marked fingerprint reads compromised', async () => {
+        await go(cp, 'help');
+        await cp.getByRole('button', { name: 'Turn off pilot keys: Pilot Co' }).click();
+        await cp.getByRole('button', { name: 'Turn on pilot keys: Pilot Co' }).waitFor();
+        await verifyPilot({}, 'Files match · signer not confirmed');
+        await verifyPilot({ company: 'Pilot Co' }, 'Not verified');
+        await go(cp, 'help');
+        await cp.getByLabel('I confirmed this company signs through pilots').check();
+        await cp.getByRole('button', { name: 'Turn on pilot keys: Pilot Co' }).click();
+        await cp.getByText('Uses pilot keys').waitFor();
+      });
+
+      await check('a pilot Verified left open drops to "Files match · signer not confirmed" when its authorization ends (fake clock)', async () => {
+        await cp.clock.install();
+        await cp.reload(); await cp.locator('#page-help').waitFor();
+        await verifyPilot({ company: 'Pilot Co' }, 'Verified');
+        await cp.clock.fastForward(15 * 86400_000);
+        await cp.waitForFunction(() => document.querySelector('#verdict-heading')?.textContent === 'Files match · signer not confirmed', null, { timeout: 15000 });
+        await cp.getByText(`The company's authorization for this pilot key ended on ${endDay}. Ask the company.`).waitFor();
+      });
+
+      await check('recipient: a fingerprint on the compromised list reads "Signed by a key marked compromised"; it survives a reload', async () => {
+        await go(cp, 'help');
+        await cp.locator('#tc-burned-fp').fill(await fpHex(cp, pilotKey));
+        await cp.locator('#tc-burned-note').fill('lost tablet');
+        await cp.getByRole('button', { name: 'Mark fingerprint compromised' }).click();
+        await cp.getByText(/^Marked compromised on \d{4}-\d\d-\d\d · lost tablet$/).waitFor();
+        await cp.reload(); await cp.locator('#page-help').waitFor();
+        await cp.getByText(/· lost tablet$/).waitFor();
+        await verifyPilot({}, 'Signed by a key marked compromised');
+        await axe(cp, 'compromised list');
+      });
+
+      await check('admin: Remove and Mark compromised on pilot rows focus "Keep it" and Escape cancels; confirming reads "Removed on" / "Marked compromised on"', async () => {
+        await go(ap, 'help'); // sign in again to reload the list (a page reload would drop the company key from tab memory)
+        await ap.locator('#company-registry').getByRole('button', { name: 'Sign out' }).click();
+        await signIn(ap, 'p-admin', 'admin', 3600, 'orgP');
+        const rows = aPanel.locator('.company-keys > li').filter({ hasText: 'Pilot key ·' });
+        await rows.nth(1).waitFor();
+        for (const [i, button, title, done] of [[0, 'Remove', 'Remove this pilot key?', 'Removed on'], [1, 'Mark compromised', 'Mark this key compromised?', 'Marked compromised on']]) {
+          const row = rows.nth(i);
+          const fp = await row.locator('.fingerprint').innerText();
+          const trigger = row.getByRole('button', { name: button, exact: true });
+          await trigger.click();
+          const dialog = aPanel.locator('dialog[open]');
+          await dialog.getByRole('heading', { name: title }).waitFor();
+          assert.equal(await ap.evaluate(() => document.activeElement?.textContent), 'Keep it');
+          await axe(ap, `${button} dialog`);
+          await ap.keyboard.press('Escape');
+          await dialog.waitFor({ state: 'detached' });
+          assert.equal(await ap.evaluate(() => document.activeElement?.textContent), button, 'focus returns to the trigger');
+          await trigger.click();
+          await dialog.getByRole('button', { name: button, exact: true }).click();
+          await aPanel.locator('.company-keys > li').filter({ hasText: fp }).getByText(new RegExp(`^${done} ${DAY}$`)).waitFor();
+        }
+      });
+
+      await check('pilot screens: axe 0, no horizontal scroll and 44px buttons at 320/768/1440 (company computer and pilot device)', async () => {
+        await go(bp, 'help');
+        await bp.getByRole('button', { name: 'Clear key', exact: true }).click();
+        await makeKey();
+        await authorizeOn(await bp.locator('#pilot-key-request').inputValue(), 14);
+        for (const [page, panel, label] of [[ap, aPanel, 'company computer'], [bp, bPanel, 'pilot device']]) {
+          for (const width of [320, 768, 1440]) {
+            await page.setViewportSize({ width, height: 900 });
+            const overflow = await page.evaluate(() => document.documentElement.scrollWidth - innerWidth);
+            assert.ok(overflow <= 0, `${label}@${width}: horizontal scroll ${overflow}px`);
+            const small = await panel.locator('button').evaluateAll((bs) => bs.filter((b) => b.offsetParent !== null).map((b) => [b.textContent, b.getBoundingClientRect().height]).filter(([, h]) => h < 44));
+            assert.deepEqual(small, [], `${label}@${width}: buttons under 44px`);
+            await page.mouse.move(0, 0); await sleep(300);
+            await axe(page, `${label}@${width}`);
+          }
+          await page.setViewportSize({ width: 1440, height: 900 });
+          for (const step of await panel.locator('.pilot-step').all()) assert.ok((await step.locator('.button.primary').count()) <= 1, `${label}: one primary button per step`);
+        }
+        await go(cp, 'help'); // the recipient's pilot-keys control and compromised list
+        const trusted = cp.locator('.trusted-companies');
+        await trusted.getByText('Compromised fingerprints').waitFor();
+        await trusted.getByRole('button', { name: /pilot keys: Pilot Co/ }).waitFor();
+        for (const width of [320, 768, 1440]) {
+          await cp.setViewportSize({ width, height: 900 });
+          const overflow = await cp.evaluate(() => document.documentElement.scrollWidth - innerWidth);
+          assert.ok(overflow <= 0, `recipient trust@${width}: horizontal scroll ${overflow}px`);
+          const small = await trusted.locator('button, input[type=text]').evaluateAll((bs) => bs.filter((b) => b.offsetParent !== null).map((b) => [b.textContent || b.id, b.getBoundingClientRect().height]).filter(([, h]) => h < 44));
+          assert.deepEqual(small, [], `recipient trust@${width}: controls under 44px`);
+          await cp.mouse.move(0, 0); await sleep(300);
+          await axe(cp, `recipient trust@${width}`);
+          await trusted.screenshot({ path: join(OUT, `pilot-recipient-trust-${width}.png`) });
+        }
+        await cp.setViewportSize({ width: 1440, height: 900 });
+      });
+    } finally { await actx.close(); await bctx.close(); await cctx.close(); }
   }
 
   await check('no console or page errors', async () => { assert.deepEqual(errors, []); });
@@ -1815,6 +2128,7 @@ try {
   await releaseBrowserLock(lock);
   flagOff?.server.close();
   flagOn?.server.close();
+  pilotOn?.server.close();
   devServer?.kill();
   writeFileSync(join(OUT, 'report.json'), JSON.stringify({ checks, total: checks.length, passed: checks.filter((c) => c.passed).length, errors }, null, 2));
 }

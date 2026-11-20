@@ -57,12 +57,33 @@ export function parse(b64) {
     fields[name] = lines[i + 1].slice(name.length + 1);
   }
   const m = DATE.exec(fields.not_after);
-  if (!HEX64.test(fields.pilot_key) || !HEX64.test(fields.company_key) || !m) return null;
+  // Years below 1000 are refused as malformed (Date.UTC maps 0-99 to 19xx, and no real authorization is that old).
+  if (!HEX64.test(fields.pilot_key) || !HEX64.test(fields.company_key) || !m || +m[1] < 1000) return null;
   const notAfter = Date.UTC(+m[1], +m[2] - 1, +m[3], +m[4], +m[5], +m[6]) / 1000;
   if (!Number.isFinite(notAfter)) return null;
   const auth = { pilotKey: fromHex(fields.pilot_key), companyKey: fromHex(fields.company_key), notAfter };
   if (encode(statementText(auth.pilotKey, auth.companyKey, auth.notAfter)) !== b64) return null; // second 60, years < 100, loose bits
   return auth;
+}
+
+/** The signed bytes of a statement (company computer, design §6): built here only, never taken from a paste. */
+export const statementBytes = (pilotKey, companyKey, notAfter) => new TextEncoder().encode(statementText(pilotKey, companyKey, notAfter));
+export const toLine = (b64, sig) => `${LINE_PREFIX}${b64}.${sig}`;
+/** Days-from-now lifetime, 10 minutes short so a clock a few minutes ahead of the registry never runs past 30 days. */
+export const notAfterFor = (days, nowSec) => Math.floor(nowSec) + days * DAY - 600;
+
+/**
+ * The company computer's one builder: signs the statement for `pilotKey` under `companyKey` with `sign(bytes) -> hex`,
+ * then checks the result round-trips through check() before returning the line. Throws Error(reason) otherwise.
+ */
+export async function authorize(pilotKey, companyKey, notAfter, sign, nowSec) {
+  if (weakKey(pilotKey)) throw new Error('weak_pilot_key');
+  if (same(pilotKey, companyKey)) throw new Error('same_key');
+  const b64 = encode(statementText(pilotKey, companyKey, notAfter));
+  const sig = await sign(statementBytes(pilotKey, companyKey, notAfter));
+  const { reason } = await check(b64, sig, pilotKey, companyKey, nowSec);
+  if (reason) throw new Error(reason);
+  return toLine(b64, sig);
 }
 
 const same = (a, b) => a.length === b.length && a.every((v, i) => v === b[i]);

@@ -82,10 +82,12 @@ export function trustLine(trust, sources = {}) {
   const entry = trust?.entry;
   switch (trust?.status) {
     case 'trusted':
-      if (PILOT_AUTHORIZATION_ACCEPTED && trust.via === 'pilot') return `Signed by a pilot key ${entry.name} authorized until ${String(trust.notAfter || '').slice(0, 10)}`;
+      if (PILOT_AUTHORIZATION_ACCEPTED && trust.via === 'pilot') return `Signed by a pilot key that ${entry.name} authorized until ${String(trust.notAfter || '').slice(0, 10)}`;
       return `Signed by a key you trust: ${entry.name} (added from ${sources[entry.source] || entry.source})`;
     case 'unconfirmed': return `Signed by a key saved for ${entry.name}, but how you confirmed it isn't recorded. Confirm its fingerprint on Trust.`;
-    case 'compromised': return `Signed by a key you marked as compromised: ${entry.name}. Don't rely on this proof without checking with the company.`;
+    case 'compromised':
+      if (PILOT_AUTHORIZATION_ACCEPTED && trust.listed) return `Signed by a key you marked as compromised on ${String(trust.compromisedAt || '').slice(0, 10)}. Don't rely on this proof without checking with the company.`;
+      return `Signed by a key you marked as compromised: ${entry.name}. Don't rely on this proof without checking with the company.`;
     case 'replaced': return `Signed by a key that was replaced for ${entry.name} on ${String(entry.replacedAt || '').slice(0, 10) || 'an unknown date'}. Ask the company whether proofs from that key are still valid.`;
     case 'weak': return "This public key is weak and can't prove anything"; // docs/verifier.js WEAK_KEY_MESSAGE
     case 'wrong-key': return "Not signed by the key you chose. Don't rely on this proof.";
@@ -121,6 +123,24 @@ export const VERIFIED_NEEDS_TRUSTED_KEY = true;
  * is false; tests flip it only by rewriting this line through a Vite plugin. The owner turns it on with PILOT_KEYS_ORGS.
  */
 export const PILOT_AUTHORIZATION_ACCEPTED = false;
+
+/**
+ * Step 6 (Verify with a chosen company or a typed company key): a pilot proof counts for that company only when
+ * trustForProof said trusted via pilot under a pin with exactly that fingerprint (`companyFingerprint`), or whose
+ * signed statement names exactly that key (`companyKey`, 64 hex). Fails closed otherwise, and always with the switch off.
+ */
+export function pilotAccepted(trust, { companyFingerprint = '', companyKey = '' } = {}) {
+  if (!PILOT_AUTHORIZATION_ACCEPTED || trust?.status !== 'trusted' || trust.via !== 'pilot' || (!companyFingerprint && !companyKey)) return false;
+  if (companyFingerprint && trust.entry?.fingerprint !== companyFingerprint) return false;
+  if (companyKey && trust.companyKey !== String(companyKey).trim().toLowerCase()) return false;
+  return true;
+}
+/** Milliseconds until a pilot authorization ends (for re-checking an open result), clamped to setTimeout's range; null otherwise. */
+export function pilotRecheckDelay(trust, now = Date.now()) {
+  if (!PILOT_AUTHORIZATION_ACCEPTED || trust?.via !== 'pilot' || !trust.notAfter) return null;
+  const at = Date.parse(trust.notAfter);
+  return Number.isNaN(at) ? null : Math.min(Math.max(at - now + 1000, 0), 2 ** 31 - 1);
+}
 
 export const NOT_VERIFIED_NEXT = 'Check that you chose the right sealed file, pasted the whole receipt message, and entered the key the sender gave you separately.';
 const plural = (n, one, many) => `${n} ${n === 1 ? one : many}`;
@@ -258,7 +278,7 @@ export function manifestReport({ sealedName = '', trust, sources = {}, keyFinger
     `- Sealed list: ${sealedName}`, '- Manifest: verified (signature checked)', `- Key trust: ${line}`,
     ...(entry ? [`- Key source: ${sources[entry.source] || entry.source}`] : []), `- Key fingerprint: \`SHA-256 ${groups(keyFingerprint)}\``, `- Chain head: \`${head}\``,
   ].join('\n')}\n\n## Times\n\n${fields.map((field) => `- ${field.label}: ${field.value} (${field.basis})`).join('\n')}\n\n## Files\n\n${[...itemLines, ...extraLines].map((l) => (l.startsWith('  ') ? `  - ${l.trim()}` : `- ${l}`)).join('\n')}\n${differs ? `\n## ${BYTES_DIFFER.title}\n\n${BYTES_DIFFER.text}\n` : ''}`;
-  const keyTrust = { status: trust?.status || 'untrusted', line, company: entry?.name ?? null, source: entry?.source ?? null, sourceLabel: entry ? (sources[entry.source] || entry.source) : null, addedAt: entry?.addedAt || null, confirmedAt: entry?.confirmedAt || null, replacedAt: entry?.replacedAt || null, compromisedAt: entry?.compromisedAt || null, fingerprint: keyFingerprint || null };
+  const keyTrust = { status: trust?.status || 'untrusted', line, company: entry?.name ?? null, source: entry?.source ?? null, sourceLabel: entry ? (sources[entry.source] || entry.source) : null, addedAt: entry?.addedAt || null, confirmedAt: entry?.confirmedAt || null, replacedAt: entry?.replacedAt || null, compromisedAt: trust?.compromisedAt || entry?.compromisedAt || null, fingerprint: keyFingerprint || null };
   const json = JSON.stringify({
     result: resultLine, kind: 'hashwing-manifest-check', sealedFile: sealedName, verdict: { key: result.key, headline: result.headline, sentence: result.sentence }, ...(record ? { record } : {}), manifestVerified: true, head, keyTrust,
     timeProvenance: { fields, intervalMs: reportedInterval(landings.length === 1 ? landings[0] : '', sealedAt).ms },

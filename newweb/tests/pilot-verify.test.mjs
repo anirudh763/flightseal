@@ -83,7 +83,7 @@ test('switch on, every check passes: Verified, with the pilot line (key pin and 
     assert.equal(trust.entry.name, 'Acme Air');
     assert.match(trust.notAfter, /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$/);
     assert.equal(headline(onTrust, trust), 'Verified');
-    assert.equal(onTrust.trustLine(trust), `Signed by a pilot key Acme Air authorized until ${trust.notAfter.slice(0, 10)}`);
+    assert.equal(onTrust.trustLine(trust), `Signed by a pilot key that Acme Air authorized until ${trust.notAfter.slice(0, 10)}`);
     assert.doesNotMatch(onTrust.trustLine(trust), /a key you trust/);
   }
   const atMax = vector('valid at exactly max_days');
@@ -170,4 +170,115 @@ test('pins keep pilotKeys only when exactly true; other pins stay byte-identical
   const before = plain.getItem(STORE);
   offKeys.markCompromised('Gamma', await fp(OTHER), { storage: plain, now: AT });
   assert.equal(plain.getItem(STORE), before.replace('"status":"active"', '"status":"compromised"').replace('}]', ',"compromisedAt":"2026-11-01T00:00:00.000Z"}]'));
+});
+
+// Part 2: the recipient's setter, the compromised-fingerprint list and the step-6 helper, switch on.
+const BURNED = 'hashwing_compromised_fingerprints_v1';
+const FP_COMPANY = await fp(COMPANY), FP_OTHER = await fp(OTHER), FP_PILOT = await fp(PILOT);
+const hexFp = (i) => i.toString(16).padStart(64, '0');
+
+test('pilotKeys setter: only with the tick, on an active confirmed pin that is not compromised; fires PINS_CHANGED', async () => {
+  const storage = await pins({ key: COMPANY }, { key: OTHER, name: 'Beta', confirmedAt: undefined });
+  let fired = 0; const on = () => { fired++; };
+  globalThis.addEventListener?.(onKeys.PINS_CHANGED, on);
+  try {
+    assert.throws(() => onKeys.setPilotKeys('Acme Air', FP_COMPANY, true, { storage }), /Tick the box/);
+    assert.throws(() => onKeys.setPilotKeys('Beta', FP_OTHER, true, { confirmed: true, storage }), /Confirm this company/);
+    assert.throws(() => onKeys.setPilotKeys('Nobody', FP_COMPANY, true, { confirmed: true, storage }), /No active saved company/);
+    const set = onKeys.setPilotKeys('Acme Air', FP_COMPANY, true, { confirmed: true, storage });
+    assert.equal(set.pilotKeys, true);
+    assert.equal(onKeys.listTrustedHistory({ storage })[0].pilotKeys, true);
+    if (globalThis.addEventListener) assert.ok(fired >= 1, 'PINS_CHANGED');
+    assert.equal((await onKeys.trustForProof(PILOT, message(valid.line), opts(storage))).status, 'trusted');
+    assert.equal('pilotKeys' in onKeys.setPilotKeys('Acme Air', FP_COMPANY, false, { storage }), false);
+    assert.equal((await onKeys.trustForProof(PILOT, message(valid.line), opts(storage))).status, 'untrusted');
+  } finally { globalThis.removeEventListener?.(onKeys.PINS_CHANGED, on); }
+  const replaced = await pins(companyPin({ status: 'replaced', replacedAt: AT, pilotKeys: undefined }));
+  assert.throws(() => onKeys.setPilotKeys('Acme Air', FP_COMPANY, true, { confirmed: true, storage: replaced }), /No active saved company/);
+  const listed = await pins({ key: COMPANY });
+  onKeys.markFingerprintCompromised(FP_COMPANY, { storage: listed, now: AT });
+  assert.throws(() => onKeys.setPilotKeys('Acme Air', FP_COMPANY, true, { confirmed: true, storage: listed }), /compromised/);
+});
+
+test('compromised list: survives a reload, re-adding is a no-op keeping the first mark, a bad fingerprint is refused', async () => {
+  const storage = new MemoryStorage();
+  const first = onKeys.markFingerprintCompromised(`SHA-256: ${(FP_PILOT).match(/.{4}/g).join(' ')}`, { note: 'lost laptop', storage, now: AT });
+  assert.deepEqual(first, { fingerprint: FP_PILOT, compromisedAt: AT, note: 'lost laptop' });
+  const again = onKeys.markFingerprintCompromised(FP_PILOT, { note: 'other', storage, now: '2026-12-01T00:00:00.000Z' });
+  assert.deepEqual(again, first, 'never overwritten');
+  assert.deepEqual(onKeys.listCompromisedFingerprints({ storage }), [first], 'read back from storage, as after a reload');
+  assert.throws(() => onKeys.markFingerprintCompromised('abc', { storage }), /64 hexadecimal digits/);
+  assert.throws(() => onKeys.markFingerprintCompromised(hexFp(1), { note: 'x'.repeat(201), storage }), /under 200/);
+});
+
+test('compromised list cap 500: the 501st new entry is refused plainly, existing marks stay, re-adding a listed one still succeeds', async () => {
+  const storage = new MemoryStorage();
+  storage.setItem(BURNED, JSON.stringify(Array.from({ length: 500 }, (_, i) => ({ fingerprint: hexFp(i + 1), compromisedAt: AT }))));
+  const before = storage.getItem(BURNED);
+  assert.throws(() => onKeys.markFingerprintCompromised(hexFp(9999), { storage }), /^Error: This list is full/);
+  assert.equal(storage.getItem(BURNED), before);
+  assert.equal(onKeys.markFingerprintCompromised(hexFp(7), { storage }).fingerprint, hexFp(7));
+  assert.equal(onKeys.listCompromisedFingerprints({ storage }).length, 500);
+});
+
+test('a malformed compromised list never loses entries and fails closed (never trusted)', async () => {
+  for (const raw of ['{', '[{"fingerprint":"zz","compromisedAt":"x"}]', JSON.stringify(Array.from({ length: 501 }, (_, i) => ({ fingerprint: hexFp(i), compromisedAt: AT }))), '{"a":1}']) {
+    const storage = await pins(companyPin(), { key: OTHER, name: 'Beta' });
+    storage.setItem(BURNED, raw);
+    assert.throws(() => onKeys.listCompromisedFingerprints({ storage }), /unreadable/);
+    assert.throws(() => onKeys.markFingerprintCompromised(hexFp(1), { storage }), /unreadable/);
+    assert.equal(storage.getItem(BURNED), raw, 'nothing written over it');
+    assert.equal((await onKeys.trustForProof(PILOT, message(valid.line), opts(storage))).status, 'untrusted', 'pilot proof');
+    assert.equal((await onKeys.trustForProof(OTHER, message(''), opts(storage))).status, 'untrusted', 'a trusted company key is not trusted either');
+  }
+});
+
+test('trustForProof reads the compromised list first: the pilot key, or the signed statement\'s company key', async () => {
+  for (const key of [PILOT, COMPANY]) {
+    const storage = await pins(companyPin());
+    onKeys.markFingerprintCompromised((key === PILOT ? FP_PILOT : FP_COMPANY), { storage, now: AT });
+    const trust = await onKeys.trustForProof(PILOT, message(valid.line), opts(storage));
+    assert.equal(trust.status, 'compromised', key === PILOT ? 'pilot' : 'company');
+    assert.equal(trust.listed, true);
+    assert.equal(headline(onTrust, trust), 'Signed by a key marked compromised');
+    assert.equal(onTrust.trustLine(trust), "Signed by a key you marked as compromised on 2026-11-01. Don't rely on this proof without checking with the company.");
+    // The report carries the same date as the line (review: it read null for a list mark).
+    const json = JSON.parse(onTrust.manifestReport({ sealedName: 'f.manifest.fseal', trust, keyFingerprint: trust.fingerprint, head: 'c'.repeat(64), items: [], extras: [], locals: [] }).json);
+    assert.equal(JSON.stringify(json).includes('"compromisedAt":"2026-11-01'), true, JSON.stringify(json));
+  }
+  // A plain trusted company key on the list reads compromised too.
+  const storage = await pins({ key: OTHER, name: 'Beta' });
+  onKeys.markFingerprintCompromised(FP_OTHER, { storage, now: AT });
+  assert.equal((await onKeys.trustForProof(OTHER, message(''), opts(storage))).status, 'compromised');
+  // A forged line naming a listed company key is not attributed to it.
+  const forged = await pins(companyPin());
+  onKeys.markFingerprintCompromised(FP_COMPANY, { storage: forged, now: AT });
+  assert.equal((await onKeys.trustForProof(PILOT, message(vector('signed by another key').line), opts(forged))).status, 'untrusted');
+});
+
+test('step 6 helper: a pilot result counts only for the exact company fingerprint or the exact typed company key; switch off never', async () => {
+  const trust = await onKeys.trustForProof(PILOT, message(valid.line), opts(await pins(companyPin())));
+  assert.equal(trust.companyKey, COMPANY);
+  assert.equal(onTrust.pilotAccepted(trust, { companyFingerprint: FP_COMPANY }), true);
+  assert.equal(onTrust.pilotAccepted(trust, { companyKey: COMPANY.toUpperCase() }), true);
+  assert.equal(onTrust.pilotAccepted(trust, { companyFingerprint: FP_OTHER }), false);
+  assert.equal(onTrust.pilotAccepted(trust, { companyKey: OTHER }), false);
+  assert.equal(onTrust.pilotAccepted(trust, {}), false);
+  assert.equal(onTrust.pilotAccepted({ ...trust, via: undefined }, { companyKey: COMPANY }), false);
+  assert.equal(onTrust.pilotAccepted({ status: 'untrusted', reason: 'authorization-ended', entry: trust.entry }, { companyFingerprint: FP_COMPANY }), false);
+  assert.equal(offTrust.pilotAccepted(trust, { companyFingerprint: FP_COMPANY, companyKey: COMPANY }), false);
+});
+
+test('an open pilot Verified is re-checked when the authorization ends: the delay, its clamp, and the drop', async () => {
+  const storage = await pins(companyPin());
+  const trust = await onKeys.trustForProof(PILOT, message(valid.line), opts(storage));
+  const end = Date.parse(trust.notAfter);
+  assert.equal(onTrust.pilotRecheckDelay(trust, end - 5000), 6000, 'fires just after not_after');
+  assert.equal(onTrust.pilotRecheckDelay(trust, end + 9000), 0);
+  assert.equal(onTrust.pilotRecheckDelay(trust, end - 40 * 86400_000), 2 ** 31 - 1, 'clamped to setTimeout range');
+  assert.equal(onTrust.pilotRecheckDelay({ status: 'trusted', entry: trust.entry }), null, 'not a pilot result');
+  assert.equal(offTrust.pilotRecheckDelay(trust, end - 5000), null, 'switch off');
+  const later = await onKeys.trustForProof(PILOT, message(valid.line), opts(storage, end - 5000 + onTrust.pilotRecheckDelay(trust, end - 5000)));
+  assert.equal(headline(onTrust, later), 'Files match · signer not confirmed');
+  assert.equal(onTrust.trustLine(later), `The company's authorization for this pilot key ended on ${trust.notAfter.slice(0, 10)}. Ask the company.`);
 });

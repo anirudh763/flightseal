@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { createRoot } from 'react-dom/client';
 import { Activity, ArrowRight, Building2, Check, Copy, Download, Gauge, ChevronDown, CircleHelp, ClipboardList, FileCheck2, FileLock2, KeyRound, Mail, FlaskConical, List, MapPin, Menu, ShieldCheck, Stamp, UserRound, Video } from 'lucide-react';
 import { hashFile, importFile, IMPORT_MAX_BYTES, VERIFY_MAX_BYTES, verifyFile, sealFile, SEAL_MAX_BYTES, recoverTemporaryOutputs } from '../../docs/wasm/client.mjs';
@@ -30,10 +30,10 @@ import { deleteJobsDb, openJobsStore } from './jobs-store.mjs';
 import { LinkStep, VERIFY_OPENS_ON, VerifyChooser } from './verify-start.jsx';
 import { createEncryptedProfileBackup, inspectEncryptedProfileBackup, commitBackupRestore, previewBackupRestore } from './profile-backup.mjs';
 import { createSyncProvider } from './sync-provider.mjs';
-import { CONFIRM_MESSAGE, PINS_CHANGED, SOURCES, addTrustedCompany, fingerprintHex, formatFingerprint, listTrustedHistory, listTrustedKeys, markCompromised, pinTrustedKey, removeTrustedKey, trustForKey, trustForProof } from './trusted-keys.mjs';
+import { CONFIRM_MESSAGE, PINS_CHANGED, SOURCES, addTrustedCompany, fingerprintHex, formatFingerprint, listCompromisedFingerprints, listTrustedHistory, listTrustedKeys, markCompromised, markFingerprintCompromised, pinTrustedKey, removeTrustedKey, setPilotKeys, trustForKey, trustForProof } from './trusted-keys.mjs';
 import { RegistryBarLink, RegistryBoundary, RegistryPanel, RegistryShareNote, RegistrySigningLine, SealedOnDevice, ShareRecordPanel, getRegistry, useRegistryRecordCheck, useShareRecord, useJobsRegistry, registryLogout, registryScope, registrySealStart, registrySealed, useRegistryTimeField, useRegistryUnsent } from './registry-ui.jsx';
 import { CompanyKeysPanel } from './company-keys.jsx';
-import { BYTES_DIFFER, PILOT_AUTHORIZATION_ACCEPTED, TRUST_KIND, composeNote, countsLine, offersOriginal, pairFiles, verdict, landingLine, manifestReport, parseLandingLine, parseNote, parseSealedLine, timeFields, toIsoFromLocal, trustLine } from './recipient-trust.mjs';
+import { BYTES_DIFFER, PILOT_AUTHORIZATION_ACCEPTED, TRUST_KIND, composeNote, countsLine, offersOriginal, pairFiles, pilotAccepted, pilotRecheckDelay, verdict, landingLine, manifestReport, parseLandingLine, parseNote, parseSealedLine, timeFields, toIsoFromLocal, trustLine } from './recipient-trust.mjs';
 
 const syncProvider = createSyncProvider({ supabaseUrl: import.meta.env.VITE_SUPABASE_URL, supabaseAnonKey: import.meta.env.VITE_SUPABASE_ANON_KEY });
 
@@ -180,6 +180,13 @@ function App() {
   const [copyCompare, setCopyCompare] = useState(null); // { for: result, name, bytes, sha256, expected, matches }
   const [keyTrust, setKeyTrust] = useState(null); // { for: result, status, entry? }
   const pinsVersion = usePinsVersion();
+  const [trustTick, setTrustTick] = useState(0); // bumps when a pilot authorization on screen ends, to re-read the trust
+  useEffect(() => { // a page left open never keeps Verified past the authorization's not_after
+    const delay = pilotRecheckDelay(keyTrust);
+    if (delay == null) return undefined;
+    const timer = setTimeout(() => setTrustTick((n) => n + 1), delay);
+    return () => clearTimeout(timer);
+  }, [keyTrust]);
   // A registry share token rides only in the URL fragment and is read from the current route, so the record panel
   // shows only while the link is open. Never stored or logged.
   const shareToken = __REGISTRY_URL__ && route.screen === 'verify' ? (linkToken || route.params.get('share')) : null;
@@ -237,6 +244,9 @@ function App() {
   const [sealSourceOriginal, setSealSourceOriginal] = useState(null);
   const [csvDraft, setCsvDraft] = useState(null);
   const [signingKey, setSigningKey] = useState(null);
+  // Option B: the enrolled pilot key's authorization line, kept for this exact signing-key object only (tab memory).
+  const [pilotAuth, setPilotAuth] = useState(null);
+  const pilotLine = __REGISTRY_URL__ && pilotAuth?.key === signingKey ? pilotAuth.line : '';
   const [sealInterval, setSealInterval] = useState(1000);
   const [sealOutput, setSealOutput] = useState(null);
   const [sealOutputAcknowledged, setSealOutputAcknowledged] = useState(false);
@@ -1227,6 +1237,7 @@ function App() {
       const landing = toIsoFromLocal(protectLanding);
       const lines = handoverText({ ...packed, receipts: sealed.receipts, publicKey: sealed.publicKey, sealedAt: new Date().toISOString(), checkUrl: `${location.origin}${location.pathname}#/app/verify` }).split('\n');
       if (landing) lines.splice(2, 0, landingLine(landing)); // right after "Sealed:"; embedded mode has no signed slot for it
+      if (__REGISTRY_URL__) withPilotLine(lines, pilotLine);
       const fingerprint = await fingerprintHex(sealed.publicKey);
       if (op !== runRef.current) return;
       setProtectTimes(null);
@@ -1276,9 +1287,14 @@ function App() {
     if (!receipts || !publicKey) { failCheck('check-text', 'Paste the receipt message you received when the flight was sealed. Without it, a rewritten file cannot be told apart from the original.'); return; }
     // The key that must have signed: one typed under More options, else the chosen company's, else the one in the
     // message (then the result can't be green: the signer isn't confirmed).
-    const anchor = checkAnchorKey(publicKey);
+    let anchor = checkAnchorKey(publicKey);
     const expected = companyFingerprint();
-    const mismatch = expected && (await fingerprintHex(anchor).catch(() => '')) !== expected;
+    // Option B (step 6): a typed company key that isn't the message's key still checks a pilot proof under the message
+    // key, but only when that proof's signed authorization names exactly the typed key under a pilot-keys pin.
+    if (PILOT_AUTHORIZATION_ACCEPTED && anchor !== publicKey && pilotAccepted(await trustForProof(publicKey, checkText).catch(() => null), { companyKey: anchor })) anchor = publicKey;
+    let mismatch = expected && (await fingerprintHex(anchor).catch(() => '')) !== expected;
+    // ...and a chosen company accepts a pilot of its own, through a pin with exactly that fingerprint.
+    if (PILOT_AUTHORIZATION_ACCEPTED && mismatch && pilotAccepted(await trustForProof(anchor, checkText).catch(() => null), { companyFingerprint: expected })) mismatch = false;
     const verified = await runVerify(checkFile, receipts, anchor, checkFile.name, null, (message) => failCheck('check-file', message), PILOT_AUTHORIZATION_ACCEPTED ? checkText : '');
     if (!verified) return;
     if (mismatch) { setCompanyMismatch({ for: verified, name: checkCompany }); setProtectTimes({ for: verified, sealedAt: parseSealedLine(checkText), landing: parseLandingLine(checkText) }); setProtectResult(verified); return; } // never offers the original for another company's key
@@ -1515,7 +1531,7 @@ function App() {
     let live = true;
     (PILOT_AUTHORIZATION_ACCEPTED ? trustForProof(result.key, result.message) : trustForKey(result.key)).then((trust) => { if (live) setKeyTrust({ ...trust, for: result }); }, () => {});
     return () => { live = false; };
-  }, [result, pinsVersion]);
+  }, [result, pinsVersion, trustTick]);
   const protectView = !!result && result === protectResult;
   const registryLine = __REGISTRY_URL__ ? useRegistryTimeField(protectView ? result.receipts : '', { fromLink: !!shareToken }) : null; // eslint-disable-line react-hooks/rules-of-hooks -- a build-time constant
   // AC-37: one share fetch feeds the record panel and both Verify paths; the check compares it with the receipt line.
@@ -1640,7 +1656,7 @@ function App() {
     receiptChecks: result.receiptChecks.map((r) => ({ ...r, count: String(r.count) })),
     source: result.source || null,
     firstFailure: result.indexed.problem ? { type: problemLabel(result.indexed.problem.token), token: result.indexed.problem.token, record: String(result.indexed.problem.record), offset: String(result.indexed.problem.offset), expected: result.indexed.problem.expected ?? null, actual: result.indexed.problem.actual ?? null } : null,
-    keyTrust: shownTrust ? { status: shownTrust.status, line: trustLine(shownTrust, SOURCES), company: shownTrust.entry?.name ?? null, source: shownTrust.entry?.source ?? null, sourceLabel: shownTrust.entry ? SOURCES[shownTrust.entry.source] || shownTrust.entry.source : null, fingerprint: shownTrust.fingerprint || null, addedAt: shownTrust.entry?.addedAt || null, confirmedAt: shownTrust.entry?.confirmedAt || null, replacedAt: shownTrust.entry?.replacedAt || null, compromisedAt: shownTrust.entry?.compromisedAt || null } : null,
+    keyTrust: shownTrust ? { status: shownTrust.status, line: trustLine(shownTrust, SOURCES), company: shownTrust.entry?.name ?? null, source: shownTrust.entry?.source ?? null, sourceLabel: shownTrust.entry ? SOURCES[shownTrust.entry.source] || shownTrust.entry.source : null, fingerprint: shownTrust.fingerprint || null, addedAt: shownTrust.entry?.addedAt || null, confirmedAt: shownTrust.entry?.confirmedAt || null, replacedAt: shownTrust.entry?.replacedAt || null, compromisedAt: shownTrust.compromisedAt || shownTrust.entry?.compromisedAt || null } : null,
     timeProvenance: resultTimes ? { fields: resultTimes } : null,
     fileComparison: fileComparison.length ? { items: fileComparison.map(({ for: _for, ...item }) => ({ ...item, status: item.matches ? 'Matches' : BYTES_DIFFER.title })), bytesDiffer: fileComparison.some((item) => !item.matches) ? BYTES_DIFFER : null } : null,
     report: reportText,
@@ -1908,7 +1924,7 @@ function App() {
             details={<>{protectSealed.savedKey && <SenderFingerprint fingerprint={protectSealed.fingerprint} />}<details className="report-details handoff-about"><summary>What is this? <ChevronDown size={17} aria-hidden="true" /></summary><div className="manifest-options-body prose"><p>{protectSealed.savedKey ? 'Signed with the key loaded under Trust. Anyone holding that private key can sign other files, so keep its backup private.' : 'The signing key was made for this file only and was discarded, never stored or exported, so no further receipt can be made with it.'} Anyone can seal a different file with another key; that is why the receipt you send now is what counts later. Sealing shows the file has not changed since now; it cannot show what happened before you sealed it.</p></div></details></>}
             shareNote={__REGISTRY_URL__ ? <RegistryShareNote /> : null}
             onSealMore={sealMoreProtect} />}
-          <ManifestSeal hidden={protectMode !== 'manifest' || !!resumedJob} output={manifestOutput} jobScope={localScope} newJobId={newJobId} onJob={(row, scope) => { setResumedJob(null); setPendingResume(null); addJob(row, scope); }} ask={!!pendingResume && protectMode === 'manifest'} onKeep={() => setPendingResume(null)} onRunning={setManifestRunning} setOutput={setManifestOutput} carry={carryToLarge} common={sealCommon} jobRef={jobRef} signingKey={signingKey} onActiveChange={setManifestSealActive} onUnsaved={setManifestUnsaved} onSealed={__REGISTRY_URL__ ? registrySealed : undefined} onDone={setManifestSealed} onSealMore={() => { setJobRef(''); afterSealMore(); }} shareNote={__REGISTRY_URL__ ? <RegistryShareNote /> : null} />
+          <ManifestSeal hidden={protectMode !== 'manifest' || !!resumedJob} output={manifestOutput} jobScope={localScope} newJobId={newJobId} onJob={(row, scope) => { setResumedJob(null); setPendingResume(null); addJob(row, scope); }} ask={!!pendingResume && protectMode === 'manifest'} onKeep={() => setPendingResume(null)} onRunning={setManifestRunning} setOutput={setManifestOutput} carry={carryToLarge} common={sealCommon} jobRef={jobRef} signingKey={signingKey} pilotLine={pilotLine} onActiveChange={setManifestSealActive} onUnsaved={setManifestUnsaved} onSealed={__REGISTRY_URL__ ? registrySealed : undefined} onDone={setManifestSealed} onSealMore={() => { setJobRef(''); afterSealMore(); }} shareNote={__REGISTRY_URL__ ? <RegistryShareNote /> : null} />
         </div></section>
       </section>
       {/* Every build lists jobs here (AC-60); the flag-on build keeps registry-ui's list here (assign, retry, export/import, share, delete) and shows registry statuses on Jobs. */}
@@ -1997,7 +2013,7 @@ function App() {
 
       {screen === 'video' && <section className="screen"><section className="panel"><div className="panel-head"><Video aria-hidden="true" size={18} /><h2>Local clip</h2></div><div className="panel-body video-grid"><label className="field-label" htmlFor="video-input">Video file</label><input id="video-input" type="file" accept="video/*" onChange={(e) => inspectVideo(e.target.files?.[0] || null)} /><video ref={videoRef} src={videoUrl || undefined} controls playsInline aria-label="Selected local video preview" onLoadedMetadata={(e) => { const media = e.currentTarget; const url = videoUrlRef.current; const metadata = { duration: media.duration, width: media.videoWidth, height: media.videoHeight }; if (!url || media.currentSrc !== url) return; setVideoInfo((v) => v && v.url === url ? { ...v, ...metadata, state: 'Browser metadata available. Codec identification is unknown.' } : v); }} onCanPlay={() => setVideoInfo((v) => v && ({ ...v, playable: true }))} onError={() => setVideoInfo((v) => v && ({ ...v, playable: false, state: 'The browser could not read metadata or play this stream. Codec identification is unknown.' }))} />{result && <div className="video-sync-controls"><p className="field-hint">Timestamps may be boot-relative. Alignment is a playback aid, not signed capture-time proof.</p><label className="field-label" htmlFor="video-record-range">Record</label><input id="video-record-range" type="range" min="0" max={Math.max(0, totalRows - 1)} value={Math.min(selectedRecord, Math.max(0, totalRows - 1))} disabled={totalRows < 2} onChange={(e) => { const next = Number(e.target.value); setSelectedRecord(next); setPage(Math.floor(next / PAGE_SIZE)); }} /><p><strong>Selected record {fmtBig(selectedRecord)}</strong>{selectedTelemetryPoint ? ` · telemetry from record ${fmtBig(selectedTelemetryPoint.record)} at ${fmtBig(selectedTelemetryPoint.timestampUs)} µs` : selectedTimestamp == null ? ' · timestamp unavailable' : ` · ${fmtBig(selectedTimestamp)} µs`}{selectedTelemetryPoint?.sourceOffset == null ? '' : ` · source byte ${selectedTelemetryPoint.sourceOffset}`}</p><p>Time base: {firstTimestamp == null ? 'unavailable' : `${fmtBig(firstTimestamp)} µs at first telemetry sample`}</p><label className="field-label" htmlFor="video-offset">Manual offset (seconds)</label><input id="video-offset" type="number" step="any" value={videoOffset} onChange={(e) => setVideoOffset(e.target.value)} /><button className="button primary" type="button" disabled={!videoInfo?.duration || selectedTimestamp == null || firstTimestamp == null} onClick={syncVideo}>Sync to record</button></div>}{videoInfo && <div className="video-meta" role="status"><strong>{videoInfo.name}</strong><span>{fmtBytes(videoInfo.size)}</span>{videoInfo.duration != null && <span>{Number.isFinite(videoInfo.duration) ? `${videoInfo.duration.toFixed(2)} seconds` : 'Duration unavailable'}</span>}{videoInfo.width && <span>{videoInfo.width} × {videoInfo.height} pixels</span>}<p>{videoInfo.state}</p>{videoInfo.syncMessage && <p>{videoInfo.syncMessage}</p>}<p>Video stays local. Codec is not inferred when unavailable.</p></div>}{!result && <p className="muted">Verify a log to align video.</p>}</div></section></section>}
 
-      {screen === 'help' && <section className="screen help-layout"><section className="panel trust-wide"><div className="panel-head"><Building2 aria-hidden="true" size={18} /><h2 id="trusted-companies-title">Trusted companies</h2></div><div className="panel-body"><TrustedCompanies /></div></section><section className="panel trust-wide"><div className="panel-head"><KeyRound aria-hidden="true" size={18} /><h2 id="your-signing-key-title">Your signing key</h2></div><div className="panel-body">{signingKeyControls}</div></section>{__REGISTRY_URL__ && <RegistryBoundary><RegistryPanel /></RegistryBoundary>}{__REGISTRY_URL__ && <RegistryBoundary><CompanyKeysPanel signingKey={signingKey} /></RegistryBoundary>}<section className="panel"><div className="panel-head"><CircleHelp aria-hidden="true" size={18} /><h2>Trust and limits</h2></div><div className="panel-body prose"><h3>Formats</h3><p>HashWing verifies .fseal logs, FlightSeal receipt v1 files, and supported PX4 ULog captures. Sealed output remains compatible with FlightSeal tools.</p><h3>Integrity and authenticity</h3><p>Sealing happens after download; it does not prove acquisition time or sensor truth. An intact chain confirms internal links only. A supplied public key is not automatically a trusted identity. Receipt v1 has no signed issue time. PX4 samples contain selected decoded records, not every byte of the original ULog. A chain head is not a whole-file SHA-256 digest.</p><h3>Independent witness</h3><p>Coverage reports how many records supplied receipts cover. Detecting a shortened or rebuilt log requires an independent holder to retain those receipts. Confirm the public key with that holder through another channel.</p><h3>Failures</h3><p>Verification stops at the first inconsistent record. A chain break identifies the first bad link, not every changed record. A torn tail may indicate an interrupted write. HashWing does not repair supplied files.</p><h3>Local handling</h3><p>Files are analyzed on this device. Save current run uploads the selected source, checked log, receipts and report to your private server workspace when available. Private signing keys and video are excluded. Exported verification reports contain verdicts, counts and hashes, not record payloads. The C++/OpenSSL WebAssembly engine checks the chain; a separate JavaScript index loads record details. Engine version appears in each report. The app shell and included samples are cached after online setup; the full PX4 sample is fetched separately and may not be available offline. This AI-assisted project requires human review of generated code and documentation.</p><h3>Reports</h3><p>PDF exports carry ordered heading and paragraph tags plus document language, but are not certified PDF/UA. The screen-reader workflow has not been validated; use the text report as the accessible reading alternative or JSON for structured data.</p><p><a className="standalone-link" href="https://github.com/anirudh763/flightseal" target="_blank" rel="noreferrer">Source and issue tracker</a></p></div></section><section className="panel limits-panel"><div className="panel-head"><h2>Limits</h2></div><div className="panel-body"><dl><dt>Verify file size</dt><dd>{fmtBytes(MAX_UI_BYTES)}</dd><dt>Native import limit</dt><dd>{fmtBytes(IMPORT_MAX_BYTES)}</dd><dt>Seal TSV/TXT source</dt><dd>{fmtBytes(SEAL_MAX_BYTES)}</dd><dt>Seal &amp; send file</dt><dd>{fmtBytes(RAW_MAX_BYTES)}</dd><dt>Manifest items</dt><dd>{MANIFEST_LIMITS.maxItems}</dd><dt>Manifest payload</dt><dd>64 KiB</dd><dt>CSV/JSON/.tlog conversion</dt><dd>16 MiB</dd><dt>Receipt text</dt><dd>4 MiB</dd><dt>Records per page</dt><dd>50</dd><dt>Telemetry plot</dt><dd>1,000 sampled points</dd><dt>Payload display</dt><dd>4 KiB per record</dd></dl></div></section></section>}
+      {screen === 'help' && <section className="screen help-layout"><section className="panel trust-wide"><div className="panel-head"><Building2 aria-hidden="true" size={18} /><h2 id="trusted-companies-title">Trusted companies</h2></div><div className="panel-body"><TrustedCompanies /></div></section><section className="panel trust-wide"><div className="panel-head"><KeyRound aria-hidden="true" size={18} /><h2 id="your-signing-key-title">Your signing key</h2></div><div className="panel-body">{signingKeyControls}</div></section>{__REGISTRY_URL__ && <RegistryBoundary><RegistryPanel /></RegistryBoundary>}{__REGISTRY_URL__ && <RegistryBoundary><CompanyKeysPanel signingKey={signingKey} onMakeKey={generateSigningKey} onPilotAuthorization={(key, line) => setPilotAuth({ key, line })} /></RegistryBoundary>}<section className="panel"><div className="panel-head"><CircleHelp aria-hidden="true" size={18} /><h2>Trust and limits</h2></div><div className="panel-body prose"><h3>Formats</h3><p>HashWing verifies .fseal logs, FlightSeal receipt v1 files, and supported PX4 ULog captures. Sealed output remains compatible with FlightSeal tools.</p><h3>Integrity and authenticity</h3><p>Sealing happens after download; it does not prove acquisition time or sensor truth. An intact chain confirms internal links only. A supplied public key is not automatically a trusted identity. Receipt v1 has no signed issue time. PX4 samples contain selected decoded records, not every byte of the original ULog. A chain head is not a whole-file SHA-256 digest.</p><h3>Independent witness</h3><p>Coverage reports how many records supplied receipts cover. Detecting a shortened or rebuilt log requires an independent holder to retain those receipts. Confirm the public key with that holder through another channel.</p><h3>Failures</h3><p>Verification stops at the first inconsistent record. A chain break identifies the first bad link, not every changed record. A torn tail may indicate an interrupted write. HashWing does not repair supplied files.</p><h3>Local handling</h3><p>Files are analyzed on this device. Save current run uploads the selected source, checked log, receipts and report to your private server workspace when available. Private signing keys and video are excluded. Exported verification reports contain verdicts, counts and hashes, not record payloads. The C++/OpenSSL WebAssembly engine checks the chain; a separate JavaScript index loads record details. Engine version appears in each report. The app shell and included samples are cached after online setup; the full PX4 sample is fetched separately and may not be available offline. This AI-assisted project requires human review of generated code and documentation.</p><h3>Reports</h3><p>PDF exports carry ordered heading and paragraph tags plus document language, but are not certified PDF/UA. The screen-reader workflow has not been validated; use the text report as the accessible reading alternative or JSON for structured data.</p><p><a className="standalone-link" href="https://github.com/anirudh763/flightseal" target="_blank" rel="noreferrer">Source and issue tracker</a></p></div></section><section className="panel limits-panel"><div className="panel-head"><h2>Limits</h2></div><div className="panel-body"><dl><dt>Verify file size</dt><dd>{fmtBytes(MAX_UI_BYTES)}</dd><dt>Native import limit</dt><dd>{fmtBytes(IMPORT_MAX_BYTES)}</dd><dt>Seal TSV/TXT source</dt><dd>{fmtBytes(SEAL_MAX_BYTES)}</dd><dt>Seal &amp; send file</dt><dd>{fmtBytes(RAW_MAX_BYTES)}</dd><dt>Manifest items</dt><dd>{MANIFEST_LIMITS.maxItems}</dd><dt>Manifest payload</dt><dd>64 KiB</dd><dt>CSV/JSON/.tlog conversion</dt><dd>16 MiB</dd><dt>Receipt text</dt><dd>4 MiB</dd><dt>Records per page</dt><dd>50</dd><dt>Telemetry plot</dt><dd>1,000 sampled points</dd><dt>Payload display</dt><dd>4 KiB per record</dd></dl></div></section></section>}
       {(!canonicalPage || canonicalPage === 'settings') && (offlineStatus || waitingUpdate || installKind !== 'none') && <details className="install-tools" onKeyDown={closeDisclosure}><summary>Offline and installation</summary><section className="offline-controls" aria-label="Offline and installation controls"><p className="offline-note" role="status">{offlineStatus || (offlineReady ? 'Offline verifier is ready on this device.' : 'Offline use needs a one-time online preparation.')}</p><div className="offline-control-actions"><button type="button" className="button secondary" onClick={prepareOffline}>Prepare offline</button>{waitingUpdate && <button type="button" className="button secondary" onClick={activateWaitingUpdate}>Apply safe update</button>}<button type="button" className="button secondary" onClick={installApp}>{installKind === 'ios' ? 'Add to Home Screen help' : installPrompt ? 'Install HashWing' : 'Install help'}</button><button type="button" className="text-action" onClick={() => setFeedbackDialogOpen(true)}>Report a bug</button></div></section></details>}
     </main>
     <FooterLinks onFeedback={() => setFeedbackDialogOpen(true)} onInstall={installApp} />
@@ -2065,6 +2081,11 @@ function usePinsVersion() {
     return () => { window.removeEventListener(PINS_CHANGED, bump); window.removeEventListener('storage', bump); };
   }, []);
   return version;
+}
+// Option B: the stored pilot authorization line goes right after the receipt lines (before the first blank line).
+function withPilotLine(lines, line) {
+  if (line) lines.splice(lines.indexOf(''), 0, line);
+  return lines;
 }
 const PICKABLE_SOURCES = Object.entries(SOURCES).filter(([key]) => key !== 'not-recorded');
 // A key marked compromised under any name is never offered for use, even if another name still pins it.
@@ -2190,9 +2211,52 @@ function TrustedCompanies() {
         {!entry.confirmedAt && !burned.has(entry.fingerprint) && <button className="text-action" type="button" aria-label={`Confirm: ${entry.name}`} onClick={() => { setName(entry.name); setFingerprint(formatFingerprint(entry.fingerprint)); setSource(''); setConfirmed(false); sourceChoice.current?.querySelector('input')?.focus(); }}>Confirm</button>}
         <button className="text-action" type="button" aria-label={`Remove: ${entry.name}`} onClick={() => setPending({ kind: 'remove', entry, text: `Remove ${entry.name} from this browser? A key you marked as compromised stays recorded as compromised.` })}>Remove</button>
       </div>
+      {PILOT_AUTHORIZATION_ACCEPTED && entry.confirmedAt && !burned.has(entry.fingerprint) && <PilotKeysSetting entry={entry} onDone={(text) => { setError(''); setMessage(text); setEntries(read()); }} onError={(text) => { setMessage(''); setError(text); }} />}
     </li>)}</ul> : <p className="field-hint">No trusted companies yet.</p>}
     {entries.length > 0 && <details className="report-details"><summary>Key history <ChevronDown size={17} aria-hidden="true" /></summary><ul className="company-history">{entries.map((entry, index) => <li key={index}><strong className="wrap">{entry.name}</strong> <code className="fingerprint">{formatFingerprint(entry.fingerprint)}</code> <span>{entry.status === 'active' && burned.has(entry.fingerprint) ? 'Marked compromised under another name' : historyStatus(entry)} · from {SOURCES[entry.source] || entry.source} · {entry.confirmedAt ? 'confirmed by you' : 'not confirmed'}</span>{!active.some((item) => item.name.toLowerCase() === entry.name.toLowerCase()) && entries.some((item) => item.status !== 'compromised' && item.name.toLowerCase() === entry.name.toLowerCase()) && entries.findIndex((item) => item.name.toLowerCase() === entry.name.toLowerCase()) === index && <button className="text-action" type="button" aria-label={`Remove: ${entry.name}`} onClick={() => setPending({ kind: 'remove', entry, text: `Remove ${entry.name} from this browser? A key you marked as compromised stays recorded as compromised.` })}>Remove</button>}</li>)}</ul></details>}
+    {PILOT_AUTHORIZATION_ACCEPTED && <CompromisedFingerprints />}
     <details className="report-details"><summary>What is this? <ChevronDown size={17} aria-hidden="true" /></summary><div className="prose"><p>A trusted company is a name and key fingerprint you got from that company through a channel you already know: its website, a contract or invoice, or a phone call with someone you know there.</p><p>A proof says "Signed by a key you trust" only when its key matches an active entry here. A key that arrives inside a receipt message is never trusted just because it is there. This list stays in this browser.</p></div></details>
+  </section>;
+}
+
+// Option B, recipient side (only in builds with PILOT_AUTHORIZATION_ACCEPTED): the user's own tick is the only way on.
+function PilotKeysSetting({ entry, onDone, onError }) {
+  const [ticked, setTicked] = useState(false);
+  const id = `tc-pilot-${useId().replace(/[^A-Za-z0-9_-]/g, '')}`; // one key can be active under two names
+  const set = (on) => {
+    try { setPilotKeys(entry.name, entry.fingerprint, on, { confirmed: ticked }); setTicked(false); onDone(on ? `${entry.name} now signs through pilots on this device.` : `Pilot keys turned off for ${entry.name}.`); }
+    catch (cause) { onError(cause?.message || 'Could not change this setting.'); }
+  };
+  if (entry.pilotKeys) return <div className="actions-row"><span className="field-hint">Uses pilot keys</span><button className="button secondary" type="button" aria-label={`Turn off pilot keys: ${entry.name}`} onClick={() => set(false)}>Turn off pilot keys</button></div>;
+  return <div className="actions-row">
+    <label className="check-row" htmlFor={id}><input id={id} type="checkbox" checked={ticked} onChange={(e) => setTicked(e.target.checked)} />I confirmed this company signs through pilots</label>
+    <button className="button secondary" type="button" aria-label={`Turn on pilot keys: ${entry.name}`} onClick={() => set(true)}>Turn on pilot keys</button>
+  </div>;
+}
+function CompromisedFingerprints() {
+  const read = () => { try { return { list: listCompromisedFingerprints(), broken: false }; } catch { return { list: [], broken: true }; } };
+  const [state, setState] = useState(read);
+  const pinsVersion = usePinsVersion();
+  useEffect(() => { if (pinsVersion) setState(read()); }, [pinsVersion]); // eslint-disable-line react-hooks/exhaustive-deps -- marks from another tab
+  const [fingerprint, setFingerprint] = useState('');
+  const [note, setNote] = useState('');
+  const [error, setError] = useState('');
+  const [message, setMessage] = useState('');
+  const add = () => {
+    setError(''); setMessage('');
+    try { const entry = markFingerprintCompromised(fingerprint, { note }); setFingerprint(''); setNote(''); setState(read()); setMessage(`Marked compromised on ${entry.compromisedAt.slice(0, 10)}.`); }
+    catch (cause) { setError(cause?.message || 'Could not mark this fingerprint.'); }
+  };
+  return <section className="pilot-step" aria-labelledby="tc-burned-title"><h3 id="tc-burned-title">Compromised fingerprints</h3>
+    <label className="field-label" htmlFor="tc-burned-fp">Key fingerprint <span>(SHA-256, for a pilot key the company told you about)</span></label>
+    <input id="tc-burned-fp" type="text" className="mono-input" value={fingerprint} autoComplete="off" spellCheck="false" aria-invalid={error ? 'true' : undefined} aria-describedby={error ? 'tc-burned-error' : undefined} onChange={(e) => setFingerprint(e.target.value)} />
+    <label className="field-label" htmlFor="tc-burned-note">Note <span>(optional)</span></label>
+    <input id="tc-burned-note" type="text" value={note} maxLength={200} onChange={(e) => setNote(e.target.value)} />
+    <div className="actions-row"><button className="button secondary" type="button" onClick={add}>Mark fingerprint compromised</button></div>
+    {error && <p id="tc-burned-error" className="field-hint receipt-error" role="alert">{error}</p>}
+    {message && <p className="field-hint" role="status">{message}</p>}
+    {state.broken && <p className="field-hint receipt-error">This list can't be read, so no proof reads Verified through a pilot key until it is fixed.</p>}
+    {state.list.length > 0 && <ul className="company-history" aria-label="Compromised fingerprints">{state.list.map((entry) => <li key={entry.fingerprint}><code className="fingerprint">{formatFingerprint(entry.fingerprint)}</code> <span>Marked compromised on {entry.compromisedAt.slice(0, 10)}{entry.note ? ` · ${entry.note}` : ''}</span></li>)}</ul>}
   </section>;
 }
 
@@ -2468,7 +2532,7 @@ const friendlyLimit = (cause) => cause instanceof RangeError && /exceeds 65536 b
 // Every part not yet saved had its download started (a click, not proof): the unsaved-work gate can then offer "I saved it".
 const startedAll = (r) => ['file', 'receipt'].every((k) => r.saved?.[k] || r.requested?.[k]);
 
-function ManifestSeal({ hidden, output, setOutput, carry, common, jobRef, signingKey, onActiveChange, onUnsaved, onSealed, onDone, onSealMore, shareNote, jobScope, newJobId, onJob, ask, onKeep, onRunning }) {
+function ManifestSeal({ hidden, output, setOutput, carry, common, jobRef, signingKey, pilotLine = '', onActiveChange, onUnsaved, onSealed, onDone, onSealMore, shareNote, jobScope, newJobId, onJob, ask, onKeep, onRunning }) {
   const [files, setFiles] = useState([]);
   const [includeNames, setIncludeNames] = useState(false);
   const [notes, setNotes] = useState({});
@@ -2541,7 +2605,8 @@ function ManifestSeal({ hidden, output, setOutput, carry, common, jobRef, signin
       const base = `hashwing-${stamp()}`;
       const fingerprint = await fingerprintHex(sealed.publicKey);
       const jobId = newJobId();
-      const handover = manifestHandoverText({ items: items.length, receipts: sealed.receipts, publicKey: sealed.publicKey, sealedAt: new Date().toISOString() });
+      let handover = manifestHandoverText({ items: items.length, receipts: sealed.receipts, publicKey: sealed.publicKey, sealedAt: new Date().toISOString() });
+      if (__REGISTRY_URL__ && pilotLine) handover = withPilotLine(handover.split('\n'), pilotLine).join('\n');
       const total = hashed.reduce((sum, item) => sum + item.bytes, 0);
       setOutput({
         jobId, base, publicKey: sealed.publicKey, fingerprint, items: items.length, total, savedKey: !!signingKey?.privateKeyPem, saved: { file: false, receipt: false }, names: files.map((file) => file.name), jobRef: jobRef.trim(),
@@ -2654,6 +2719,14 @@ function ManifestCheck({ sealed, text, fromLink, recordCheck, anchor, keyConflic
     });
     return () => { live = false; };
   }, [pinsVersion, outcome]); // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => { // a pilot-signed Verified drops when its authorization ends, even on a page left open
+    const delay = outcome?.verified ? pilotRecheckDelay(outcome.trust) : null;
+    if (delay == null) return undefined;
+    const timer = setTimeout(() => {
+      trustForProof(outcome.publicKey, text).catch(() => ({ status: 'untrusted' })).then((trust) => setOutcome((current) => current === outcome ? { ...current, trust, report: reportFor(trust, current) } : current));
+    }, delay);
+    return () => clearTimeout(timer);
+  }, [outcome]); // eslint-disable-line react-hooks/exhaustive-deps
   const run = async () => {
     const revision = ++revisionRef.current;
     const controller = new AbortController(); controllerRef.current = controller;
@@ -2661,14 +2734,22 @@ function ManifestCheck({ sealed, text, fromLink, recordCheck, anchor, keyConflic
     if (keyConflict) { onFieldError('check-text', 'This message names more than one public key. Paste only the receipt message you received when the files were sealed.'); return; }
     setRunning(true);
     try {
-      const verified = await verifySealedManifest(sealed, text, anchor); // a weak key returns { verified: false, reason: WEAK_KEY_MESSAGE }
+      let key = anchor;
+      if (PILOT_AUTHORIZATION_ACCEPTED) { // step 6, typed company key: as runProtectCheck
+        const stated = parseHandover(text).publicKey;
+        if (stated && key !== stated && pilotAccepted(await trustForProof(stated, text).catch(() => null), { companyKey: key })) key = stated;
+        if (revision !== revisionRef.current) return;
+      }
+      const verified = await verifySealedManifest(sealed, text, key); // a weak key returns { verified: false, reason: WEAK_KEY_MESSAGE }
       if (revision !== revisionRef.current) return;
       if (!verified.verified) { setOutcome({ verified: false, reason: verified.reason, run: revision, focus: {} }); return; }
       const fingerprint = await fingerprintHex(verified.publicKey);
       if (companyFingerprint && fingerprint !== companyFingerprint) { // never falls back to another key; a compromised signer still reads compromised
         const trust = await (PILOT_AUTHORIZATION_ACCEPTED ? trustForProof(verified.publicKey, text) : trustForKey(verified.publicKey)).catch(() => ({ status: 'untrusted' }));
-        if (revision === revisionRef.current) setOutcome({ verified: false, mismatch: company, trust, run: revision, focus: {} });
-        return;
+        if (!pilotAccepted(trust, { companyFingerprint })) { // a pilot of the chosen company (step 6) goes on to the files
+          if (revision === revisionRef.current) setOutcome({ verified: false, mismatch: company, trust, run: revision, focus: {} });
+          return;
+        }
       }
       const hashed = await hashAll(locals, controller.signal, setProgress);
       if (revision !== revisionRef.current) return;

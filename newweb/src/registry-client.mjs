@@ -95,6 +95,10 @@ export function createRegistryClient({ baseUrl = '', getToken, fetch: doFetch = 
     keyChallenge: (opts) => request('GET', '/v1/keys/challenge', undefined, opts),
     enrollKey: (body, opts) => request('POST', '/v1/keys', body, opts),
     listKeys: ({ cursor } = {}, opts) => request('GET', `/v1/keys${cursor ? `?cursor=${encodeURIComponent(cursor)}` : ''}`, undefined, opts),
+    // Pilot keys (Option B): any member gets a challenge and enrolls their own key; an admin retires one.
+    pilotKeyChallenge: (opts) => request('GET', '/v1/pilot-keys/challenge', undefined, opts),
+    enrollPilotKey: (body, opts) => request('POST', '/v1/pilot-keys', body, opts),
+    retirePilotKey: (fp, opts) => request('POST', `/v1/pilot-keys/${encodeURIComponent(fp)}/retire`, {}, opts),
     compromiseKey: (fp, opts) => request('POST', `/v1/keys/${encodeURIComponent(fp)}/compromised`, {}, opts),
   };
 }

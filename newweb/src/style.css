@@ -1039,6 +1039,8 @@ input[type=datetime-local] { width: 100%; max-width: 320px; min-width: 0; min-he
 .company-list li { display: grid; gap: 4px; padding: 10px 0; border-bottom: 1px solid var(--line); min-width: 0; }
 .company-history li { display: grid; gap: 2px; padding: 6px 0; border-bottom: 1px solid var(--line); font-size: .84rem; overflow-wrap: anywhere; }
 .company-history .fingerprint { display: inline; }
+.pilot-step { display: grid; gap: 6px; margin-top: 16px; padding-top: 12px; border-top: 1px solid var(--line); min-width: 0; }
+.pilot-step h3, .pilot-step p { margin: 0; }
 .manifest-item-options { display: grid; gap: 6px; padding-bottom: 6px; border-bottom: 1px solid var(--line); }
 @media (max-width: 480px) { .time-fields > div { grid-template-columns: minmax(0, 1fr); } }
 /* Trust page panels and the registry UI (rendered only when VITE_REGISTRY_URL is set) */

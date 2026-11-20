@@ -8,7 +8,7 @@ const STORAGE_KEY = 'flightseal_trusted_keys_v1';
 export const PINS_CHANGED = 'hashwing-trusted-keys-changed';
 // ponytail: compromised records are never removed, so they count toward this cap for good; add a separate
 // compromised-fingerprint list if a user ever fills 64 entries.
-const MAX_KEYS = 64; // history entries count
+const MAX_KEYS = 64; // history entries count (the separate compromised-fingerprint list below has its own cap)
 const HEX64 = /^[a-f0-9]{64}$/;
 const ISO = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,3})?Z$/;
 const STATUSES = new Set(['active', 'replaced', 'compromised']);
@@ -190,18 +190,29 @@ export async function trustForKey(publicKey, { storage = globalThis.localStorage
  * pilotKeys on; then { status: 'trusted', via: 'pilot', entry, notAfter }. A pin is attributed only once the
  * company signature checked out, so a forged line can't name a company: compromised and replaced come from a signed
  * statement, and 'authorization-ended' only after every pin check passed. `now` is the verifier's clock (epoch ms,
- * like Date.now()); no time from the proof or message is read.
+ * like Date.now()); no time from the proof or message is read. Switch on, the compromised-fingerprint list is read
+ * first: the receipt key on it, or (once the signature checked out) the statement's company key, gives
+ * { status: 'compromised', listed: true, compromisedAt }. A pilot result also carries `companyKey` (64 hex), so a
+ * typed company key can be compared byte for byte.
  */
 export async function trustForProof(publicKey, message, { storage = globalThis.localStorage, cryptoObject = globalThis.crypto, now = Date.now() } = {}) {
   const base = await trustForKey(publicKey, { storage, cryptoObject });
-  if (!PILOT_AUTHORIZATION_ACCEPTED || base.status !== 'untrusted' || !base.fingerprint) return base;
+  if (!PILOT_AUTHORIZATION_ACCEPTED || !base.fingerprint) return base;
+  let listed;
+  try { listed = new Map(readCompromised(storage).map((e) => [e.fingerprint, e])); }
+  catch { return base.status === 'trusted' || base.status === 'unconfirmed' ? { status: 'untrusted', fingerprint: base.fingerprint } : base; } // unreadable list: fail closed, never trusted
+  const burned = (fp) => listed.has(fp) && { status: 'compromised', listed: true, compromisedAt: listed.get(fp).compromisedAt, fingerprint: base.fingerprint };
+  if (burned(base.fingerprint)) return burned(base.fingerprint); // the fingerprint list is checked first
+  if (base.status !== 'untrusted') return base;
   const line = parseLine(message);
   if (!line.found || line.malformed) return base;
   const key = String(publicKey).trim().toLowerCase();
   const { reason, auth } = await checkAuthorization(line.authorization, line.sig, parseHex(key, 32), null, Math.floor(now / 1000));
   if (![null, 'ended', 'too_long'].includes(reason)) return base;
   const companyHex = toHex(auth.companyKey);
-  const matches = read(storage).filter((entry) => entry.fingerprint === keyFingerprint(companyHex));
+  const companyFp = keyFingerprint(companyHex);
+  if (burned(companyFp)) return burned(companyFp); // only after the company signature checked out
+  const matches = read(storage).filter((entry) => entry.fingerprint === companyFp);
   const compromised = matches.findLast((entry) => entry.status === 'compromised');
   if (compromised) return { status: 'compromised', entry: compromised, fingerprint: base.fingerprint };
   const pin = matches.findLast((entry) => entry.status === 'active' && entry.confirmedAt && entry.pilotKeys === true && (!entry.publicKey || entry.publicKey === companyHex));
@@ -210,9 +221,68 @@ export async function trustForProof(publicKey, message, { storage = globalThis.l
     return replaced ? { status: 'replaced', entry: replaced, fingerprint: base.fingerprint } : base;
   }
   const notAfter = iso(auth.notAfter);
-  if (reason === null) return { status: 'trusted', via: 'pilot', entry: pin, notAfter, fingerprint: base.fingerprint };
+  if (reason === null) return { status: 'trusted', via: 'pilot', entry: pin, notAfter, companyKey: companyHex, fingerprint: base.fingerprint };
   if (reason === 'ended') return { status: 'untrusted', reason: 'authorization-ended', entry: pin, notAfter, fingerprint: base.fingerprint };
   return base;
+}
+
+/**
+ * "This company uses pilot keys" (Option B), set only by the user's own tick on Trust: no import, backup or sync path
+ * writes it (profile-backup.mjs carries only the profile and workspace keys; pins are written only here). Turning it on
+ * needs `confirmed` and an active, confirmed pin whose fingerprint isn't marked compromised anywhere. Switch off:
+ * refused, so nothing in a shipped build can set it.
+ */
+export function setPilotKeys(name, fingerprintInput, on, { confirmed = false, storage = globalThis.localStorage } = {}) {
+  if (!PILOT_AUTHORIZATION_ACCEPTED) throw new Error('Pilot keys are not accepted in this copy of HashWing.');
+  const fingerprint = normalizeFingerprint(fingerprintInput);
+  const entries = read(storage);
+  const entry = entries.find((item) => sameName(item.name, String(name)) && item.fingerprint === fingerprint && item.status === 'active');
+  if (!entry) throw new Error('No active saved company has that name and key.');
+  if (on) {
+    if (confirmed !== true) throw new Error('Tick the box to confirm this company signs through pilots.');
+    if (!entry.confirmedAt) throw new Error('Confirm this company\'s fingerprint first.');
+    if (entries.some((item) => item.status === 'compromised' && item.fingerprint === fingerprint) || readCompromised(storage).some((item) => item.fingerprint === fingerprint)) throw new Error('This key was marked as compromised.');
+    entry.pilotKeys = true;
+  } else delete entry.pilotKeys;
+  write(storage, entries);
+  return clean(entry);
+}
+
+// Fingerprints marked compromised on their own (Option B, design §5): pilot keys a recipient never pinned. Never
+// dropped (R35), cap 500. A list that can't be read whole is an error, never a shorter list: trustForProof then fails
+// closed, and nothing is written over it.
+const COMPROMISED_KEY = 'hashwing_compromised_fingerprints_v1';
+export const MAX_COMPROMISED = 500;
+const NOTE_MAX = 200;
+function readCompromised(storage) {
+  const raw = storage.getItem(COMPROMISED_KEY);
+  if (raw == null) return [];
+  let list;
+  try { list = JSON.parse(raw); } catch { list = null; }
+  const ok = Array.isArray(list) && list.length <= MAX_COMPROMISED && list.every((e) => e && typeof e === 'object' && HEX64.test(e.fingerprint) && typeof e.compromisedAt === 'string' && ISO.test(e.compromisedAt) && (e.note === undefined || (typeof e.note === 'string' && e.note.length <= NOTE_MAX)));
+  if (!ok) throw new Error('The compromised fingerprint list is unreadable. Nothing was changed.');
+  return list;
+}
+export function listCompromisedFingerprints({ storage = globalThis.localStorage } = {}) {
+  if (!PILOT_AUTHORIZATION_ACCEPTED) return [];
+  return readCompromised(storage);
+}
+/** Adds one; an already listed fingerprint is kept as it was (its first date and note) and returned. */
+export function markFingerprintCompromised(fingerprintInput, { note = '', now = new Date().toISOString(), storage = globalThis.localStorage } = {}) {
+  if (!PILOT_AUTHORIZATION_ACCEPTED) throw new Error('Pilot keys are not accepted in this copy of HashWing.');
+  const fingerprint = normalizeFingerprint(fingerprintInput);
+  const text = String(note || '').trim();
+  if (text.length > NOTE_MAX) throw new Error(`Keep the note under ${NOTE_MAX} characters.`);
+  const list = readCompromised(storage);
+  const existing = list.find((e) => e.fingerprint === fingerprint);
+  if (existing) return existing;
+  if (list.length >= MAX_COMPROMISED) throw new Error(`This list is full: it keeps ${MAX_COMPROMISED} fingerprints, and none is ever removed. Nothing was added.`);
+  const entry = { fingerprint, compromisedAt: now, ...(text ? { note: text } : {}) };
+  const out = JSON.stringify([...list, entry]);
+  storage.setItem(COMPROMISED_KEY, out);
+  if (storage.getItem(COMPROMISED_KEY) !== out) throw new Error('The compromised fingerprint could not be verified after storage.');
+  if (typeof globalThis.dispatchEvent === 'function') globalThis.dispatchEvent(new Event(PINS_CHANGED));
+  return entry;
 }
 
 export async function matchingTrustedKey(publicKey, { storage = globalThis.localStorage, cryptoObject = globalThis.crypto } = {}) {
