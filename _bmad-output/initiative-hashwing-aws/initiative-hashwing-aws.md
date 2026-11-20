@@ -205,7 +205,7 @@ Merged on 2026-11-19 and 2026-11-20, each with all 16 GitHub checks green on its
 
 Checked in this pass:
 - `tools/fseal_py.py` never reads receipts files (it only scans `.fseal` chains), so it cannot disagree with the CLI on an "Authorized by company key:" line.
-- R52 covers every stored actor id: `enrolled_by` on KEY items and key tombstones is scrubbed after 90 days; the `sub` on ENV# and CHAL# items is deleted with the item once it expires (`registry/registry/app.py:426`, `:457`; `registry/registry/scrub.py`).
+- R52 covers every stored actor id: `enrolled_by` on KEY items and key tombstones is scrubbed after 90 days; the `sub` on ENV# and CHAL# items is deleted with the item once it expires (`registry/registry/app.py:439` ENV#, `:470` CHAL#; `enrolled_by` at `:507`, `:552` and the tombstones at `:510`, `:553`; `registry/registry/scrub.py`; an unfiltered `grep -n "ident\.sub" registry/registry/*.py` on edb014a finds no other stored id).
 
 Open, for the owner:
 - AC-57: on a company switch, #69 keeps the local Jobs rows and hides only the other company's registry details (status, label, share links, Refresh, Delete). Read literally, AC-57 hides the rows too. Owner to confirm.
