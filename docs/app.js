@@ -1,7 +1,7 @@
 // UI for the FlightSeal verifier. All checking is in verifier.js; this file reads files, renders the screens and
 // keeps the screen and the loaded example in the URL hash (#/records/150?sample=tampered) so a view can be shared.
 import {
-  scanLog, parseReceipts, checkReceipts, summarize, cliReport, blobSource, readRecord, parseHex, ed25519Supported,
+  scanLog, parseReceiptFile, checkReceipts, summarize, cliReport, blobSource, readRecord, parseHex, ed25519Supported,
   decodeReceipts, PROBLEM_TEXT, RECEIPT_TEXT, MAGIC,
 } from "./verifier.js";
 
@@ -388,11 +388,12 @@ async function verify() {
   }
   state.busy = true;
   renderStates();
-  let receipts = null, key = null, receiptError = null, emptyReceipts = false;
+  let receipts = null, key = null, receiptError = null, emptyReceipts = false, pilotAuthorization = false;
   if (state.receipts) {
     if (state.receipts.error) receiptError = state.receipts.error;
     else {
-      const parsed = parseReceipts(state.receipts.text);
+      const parsed = parseReceiptFile(state.receipts.text);
+      pilotAuthorization = parsed.pilotAuthorization;
       if (parsed.error) receiptError = `${state.receipts.name}, line ${parsed.error.line}: not a receipt. Nothing was checked against the receipts.`;
       else if (parsed.receipts.length === 0) emptyReceipts = true, receiptError = `${state.receipts.name} contains no receipts, so nothing was checked against receipts.`;
       else receipts = parsed.receipts;
@@ -432,7 +433,7 @@ async function verify() {
     if (abort.signal.aborted) throw new DOMException("verification cancelled", "AbortError"); // never a verdict after Cancel
     const summary = summarize(scan, check);
     state.busy = false;
-    state.result = { scan, check, summary, source, receiptError, emptyReceipts };
+    state.result = { scan, check, summary, source, receiptError, emptyReceipts, pilotAuthorization: pilotAuthorization && !!check };
     render();
   } catch (e) {
     if (run !== state.run) return;
@@ -667,7 +668,7 @@ function render() {
   renderChainSummary(r);
   renderReceipts(r);
 
-  $("report").textContent = cliReport(state.log.name, scan, check);
+  $("report").textContent = cliReport(state.log.name, scan, check, { pilotAuthorization: r.pilotAuthorization });
   $("report-wrap").hidden = false;
 
   $("show-break").hidden = !scan.problem || scan.status === "bad-header";
