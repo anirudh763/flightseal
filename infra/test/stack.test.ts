@@ -24,8 +24,14 @@ function resources(type: string): Array<[string, any]> {
   return Object.entries(json.Resources as Record<string, any>).filter(([, r]) => r.Type === type);
 }
 
+function fnByHandler(handler: string): any {
+  const found = resources('AWS::Lambda::Function').filter(([, r]) => r.Properties.Handler === handler);
+  assert.equal(found.length, 1, handler);
+  return found[0];
+}
+
 test('Lambda: python3.12, arm64, 128 MB, 5 s, cognito adapter, no DEV_ variables', () => {
-  t.resourceCountIs('AWS::Lambda::Function', 1);
+  t.resourceCountIs('AWS::Lambda::Function', 2); // the request function and the R52 scrub
   t.hasResourceProperties('AWS::Lambda::Function', {
     Runtime: 'python3.12',
     Architectures: ['arm64'],
@@ -34,7 +40,7 @@ test('Lambda: python3.12, arm64, 128 MB, 5 s, cognito adapter, no DEV_ variables
     Handler: 'handler.handler',
     Environment: { Variables: { IDENTITY_ADAPTER: 'cognito', TABLE_NAME: Match.anyValue() } },
   });
-  const [[, fn]] = resources('AWS::Lambda::Function');
+  const [, fn] = fnByHandler('handler.handler');
   assert.deepEqual(Object.keys(fn.Properties.Environment.Variables).sort(),
     ['COGNITO_CLIENT_ID', 'COGNITO_ISSUER', 'IDENTITY_ADAPTER', 'TABLE_NAME']);
   assert.ok(!JSON.stringify(json).includes('DEV_'), 'no DEV_ setting anywhere in the template');
@@ -107,12 +113,16 @@ test('dev (the default) stays disposable: no PITR window, no deletion protection
   assert.throws(() => new RegistryStack(new App(), 'Bad', { stage: 'production' as any }), /not 'dev' or 'prod'/);
 });
 
-test('IAM: only item actions, only on the table ARN, never Resource "*"', () => {
-  const policies = resources('AWS::IAM::Policy');
-  assert.equal(policies.length, 1);
-  const statements = policies[0][1].Properties.PolicyDocument.Statement;
-  const allowed = new Set(['dynamodb:GetItem', 'dynamodb:PutItem', 'dynamodb:UpdateItem', 'dynamodb:DeleteItem',
-    'dynamodb:Query', 'dynamodb:ConditionCheckItem']);
+/** The policy statements attached to the role of the function with this handler. */
+function statementsFor(handler: string): any[] {
+  const [, fn] = fnByHandler(handler);
+  const role = fn.Properties.Role['Fn::GetAtt'][0];
+  const policies = resources('AWS::IAM::Policy').filter(([, p]) => p.Properties.Roles.some((r: any) => r.Ref === role));
+  assert.equal(policies.length, 1, handler);
+  return policies[0][1].Properties.PolicyDocument.Statement;
+}
+
+function assertOnlyTableActions(statements: any[], allowed: Set<string>) {
   for (const s of statements) {
     const actions = [s.Action].flat();
     assert.ok(actions.every((a: string) => allowed.has(a)), `unexpected actions ${actions}`);
@@ -120,6 +130,17 @@ test('IAM: only item actions, only on the table ARN, never Resource "*"', () => 
     assert.ok(res.length > 0 && res.every((r: unknown) => r !== '*'));
     assert.match(JSON.stringify(res), /TableXXXXXXXX|Table[0-9A-F]{8}/);
   }
+}
+
+test('IAM: only item actions, only on the table ARN, never Resource "*"; only the scrub function may Scan', () => {
+  assert.equal(resources('AWS::IAM::Policy').length, 2);
+  const request = statementsFor('handler.handler');
+  assertOnlyTableActions(request, new Set(['dynamodb:GetItem', 'dynamodb:PutItem', 'dynamodb:UpdateItem',
+    'dynamodb:DeleteItem', 'dynamodb:Query', 'dynamodb:ConditionCheckItem']));
+  assert.ok(!JSON.stringify(request).includes('dynamodb:Scan'), 'the request function never scans');
+  const scrub = statementsFor('registry.scrub.handler');
+  assertOnlyTableActions(scrub, new Set(['dynamodb:Scan', 'dynamodb:UpdateItem', 'dynamodb:DeleteItem']));
+  const policies = resources('AWS::IAM::Policy');
   for (const [, r] of [...policies, ...resources('AWS::IAM::Role')]) {
     assert.ok(!JSON.stringify(r).includes('"Resource":"*"'));
   }
@@ -142,17 +163,50 @@ test('Cognito: Lite plan, no self sign-up, case-insensitive sign-in, invitations
   assert.equal(client.Properties.GenerateSecret, false);
 });
 
-test('HTTP API: default stage throttled at rate 2, burst 5 (sized for about 5 users)', () => {
+const unlessPaused = (value: number) => ({ 'Fn::If': ['IsPaused', 0, value] });
+
+test('HTTP API: default stage throttled at rate 2, burst 5 (sized for about 5 users), 0 while paused', () => {
   t.hasResourceProperties('AWS::ApiGatewayV2::Stage', {
     StageName: '$default',
     AutoDeploy: true,
-    DefaultRouteSettings: { ThrottlingRateLimit: 2, ThrottlingBurstLimit: 5 },
+    DefaultRouteSettings: { ThrottlingRateLimit: unlessPaused(2), ThrottlingBurstLimit: unlessPaused(5) },
   });
+});
+
+test('R56: TrafficPaused (default false) pauses both throttles, the stage default and the public route, and nothing else', () => {
+  t.hasParameter('TrafficPaused', { Type: 'String', Default: 'false', AllowedValues: ['false', 'true'] });
+  assert.deepEqual(json.Conditions.IsPaused, { 'Fn::Equals': [{ Ref: 'TrafficPaused' }, 'true'] });
+  const [[, stage]] = resources('AWS::ApiGatewayV2::Stage');
+  for (const settings of [stage.Properties.DefaultRouteSettings, stage.Properties.RouteSettings['GET /v1/shares/{token}']]) {
+    assert.deepEqual(settings.ThrottlingRateLimit['Fn::If'].slice(0, 2), ['IsPaused', 0]);
+    assert.deepEqual(settings.ThrottlingBurstLimit['Fn::If'].slice(0, 2), ['IsPaused', 0]);
+  }
+  // Only the stage reads the condition: the table, user pool, functions and budget never change with it.
+  const users = Object.entries(json.Resources as Record<string, any>)
+    .filter(([, r]) => JSON.stringify(r).includes('IsPaused')).map(([, r]) => r.Type);
+  assert.deepEqual(users, ['AWS::ApiGatewayV2::Stage']);
+});
+
+test('R52: the scrub function runs daily, 60 s, own 7-day log group, TABLE_NAME only', () => {
+  const [scrubId, scrub] = fnByHandler('registry.scrub.handler');
+  assert.equal(scrub.Properties.Timeout, 60);
+  assert.equal(scrub.Properties.MemorySize, 128);
+  assert.deepEqual(Object.keys(scrub.Properties.Environment.Variables), ['TABLE_NAME']);
+  const [, request] = fnByHandler('handler.handler');
+  assert.notDeepEqual(scrub.Properties.LoggingConfig.LogGroup, request.Properties.LoggingConfig.LogGroup);
+  t.resourcePropertiesCountIs('AWS::Logs::LogGroup', { RetentionInDays: 7 }, 2);
+  const rules = resources('AWS::Events::Rule');
+  assert.equal(rules.length, 1);
+  assert.equal(rules[0][1].Properties.ScheduleExpression, 'rate(1 day)');
+  assert.deepEqual(rules[0][1].Properties.Targets.map((x: any) => x.Arn), [{ 'Fn::GetAtt': [scrubId, 'Arn'] }]);
 });
 
 test('every route has the JWT authorizer except GET /v1/shares/{token}', () => {
   const routes = resources('AWS::ApiGatewayV2::Route').map(([, r]) => r.Properties);
-  assert.equal(routes.length, 16);
+  assert.equal(routes.length, 18);
+  for (const key of ['GET /v1/shares', 'DELETE /v1/registrations/{id}/shares/{shareId}']) {
+    assert.ok(routes.some((r) => r.RouteKey === key), key);
+  }
   for (const key of ['GET /v1/pilot-keys/challenge', 'POST /v1/pilot-keys', 'POST /v1/pilot-keys/{fp}/retire']) {
     assert.ok(routes.some((r) => r.RouteKey === key), key);
   }
@@ -195,9 +249,10 @@ test('restore mode serves the restored table, closed by RESTORED_FROM, with the 
 test('the public share check has its own tighter throttle (2 rps, burst 5); other routes use the stage default', () => {
   const [[, stage]] = resources('AWS::ApiGatewayV2::Stage');
   assert.deepEqual(stage.Properties.RouteSettings, {
-    'GET /v1/shares/{token}': { ThrottlingRateLimit: 2, ThrottlingBurstLimit: 5 },
+    'GET /v1/shares/{token}': { ThrottlingRateLimit: unlessPaused(2), ThrottlingBurstLimit: unlessPaused(5) },
   });
-  assert.deepEqual(stage.Properties.DefaultRouteSettings, { ThrottlingRateLimit: 2, ThrottlingBurstLimit: 5 });
+  assert.deepEqual(stage.Properties.DefaultRouteSettings,
+    { ThrottlingRateLimit: unlessPaused(2), ThrottlingBurstLimit: unlessPaused(5) });
   // route settings name a route key, so the stage must be created after that route
   const [publicRouteId] = resources('AWS::ApiGatewayV2::Route')
     .find(([, r]) => r.Properties.RouteKey === 'GET /v1/shares/{token}')!;

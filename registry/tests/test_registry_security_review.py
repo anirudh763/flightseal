@@ -1,6 +1,6 @@
 """Regressions for the independent security review of PR #21 (rotation tombstones, restore lineage, existence oracle)."""
 import pytest
-from registry_helpers import SEED_A, SEED_B, call, enroll, envelope, line, make_app, register, share, token
+from registry_helpers import Clock, SEED_A, SEED_B, call, enroll, envelope, line, make_app, register, share, token
 
 from registry import ed25519, receipt
 from registry.restore import apply_tombstones
@@ -26,7 +26,7 @@ def test_restore_keeps_a_rotated_key_rotated():
     assert enroll(app, clock, SEED_B, confirm=True)[0] == 201  # A rotated, B active
 
     restored = _restored(backup, clock, "restored", "live", "r1")
-    apply_tombstones(live, backup, source_name="live", target_name="restored", restore_id="r1", served="live")
+    apply_tombstones(live, backup, source_name="live", target_name="restored", restore_id="r1", served="live", clock=Clock())
     states = {k["key_fingerprint"]: k["state"] for k in call(restored, "GET", "/v1/keys", token(clock))[1]["keys"]}
     fp_a, fp_b = (receipt.fingerprint(ed25519.public_key(s)) for s in (SEED_A, SEED_B))
     assert states == {fp_a: "rotated", fp_b: "active"}
@@ -44,7 +44,7 @@ def test_a_marker_copied_into_a_later_backup_does_not_open_the_gate():
     _, reg, _ = register(app, pilot, line(SEED_A, 1))
     path = share(app, pilot, reg["registration_id"])[1]["path"]
     gen1 = _copy(live)
-    apply_tombstones(live, gen1, source_name="live", target_name="gen1", restore_id="r1", served="live")
+    apply_tombstones(live, gen1, source_name="live", target_name="gen1", restore_id="r1", served="live", clock=Clock())
     serving = _restored(gen1, clock, "gen1", "live", "r1")
     assert call(serving, "GET", path)[0] == 200
     gen2 = _copy(gen1)  # backup of gen1, carrying gen1's marker
@@ -53,15 +53,15 @@ def test_a_marker_copied_into_a_later_backup_does_not_open_the_gate():
     for source, rid in (("live", "r1"), ("gen1", "r1"), ("gen1", "r2")):
         assert call(_restored(gen2, clock, "gen2", source, rid), "GET", path)[:2] == (503, {"error": "restore_pending"})
     with pytest.raises(ValueError):  # the stale source is not the table being served
-        apply_tombstones(live, gen2, source_name="live", target_name="gen2", restore_id="r2", served="gen1")
-    apply_tombstones(gen1, gen2, source_name="gen1", target_name="gen2", restore_id="r2", served="gen1")
+        apply_tombstones(live, gen2, source_name="live", target_name="gen2", restore_id="r2", served="gen1", clock=Clock())
+    apply_tombstones(gen1, gen2, source_name="gen1", target_name="gen2", restore_id="r2", served="gen1", clock=Clock())
     assert call(_restored(gen2, clock, "gen2", "gen1", "r2"), "GET", path)[0] == 404
 
 
 def test_restore_gate_stays_closed_without_a_restore_id():
     app, live, clock = make_app(TABLE_NAME="live")
     target = _copy(live)
-    apply_tombstones(live, target, source_name="live", target_name="t", restore_id="r1", served="live")
+    apply_tombstones(live, target, source_name="live", target_name="t", restore_id="r1", served="live", clock=Clock())
     assert call(_restored(target, clock, "t", "live", ""), "GET", "/v1/keys", token(clock))[0] == 503
 
 

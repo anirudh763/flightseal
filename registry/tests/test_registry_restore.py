@@ -1,5 +1,5 @@
 import pytest
-from registry_helpers import SEED_A, call, enroll, line, make_app, register, share, token
+from registry_helpers import Clock, SEED_A, call, enroll, line, make_app, register, share, token
 
 from registry.restore import apply_tombstones
 from registry.store import MemoryTable, StoreUnavailable
@@ -26,7 +26,7 @@ def test_restore_reapplies_tombstones_then_opens():
     app, _, _ = make_app(table=restored, RESTORED_FROM="live", RESTORE_ID="r1", TABLE_NAME="restored")
     app.clock = clock
     assert call(app, "GET", paths[0])[:2] == (503, {"error": "restore_pending"})
-    assert apply_tombstones(live, restored, source_name="live", target_name="restored", restore_id="r1", served="live") == 4  # enrolled key + 1 share + 1 registration + its share
+    assert apply_tombstones(live, restored, source_name="live", target_name="restored", restore_id="r1", served="live", clock=Clock()) == 4  # enrolled key + 1 share + 1 registration + its share
     assert [call(app, "GET", p)[0] for p in paths] == [404, 404, 200]
     rows = call(app, "GET", "/v1/registrations", token(clock))[1]["registrations"]
     assert sorted(r["disposition"] for r in rows) == ["active", "active", "deleted"]
@@ -36,7 +36,7 @@ def test_restore_refuses_when_source_tombstones_are_unreadable():
     live, restored, paths, _ = _world()
     live.fail = lambda op, pk, sk: op == "scan"
     with pytest.raises(StoreUnavailable):
-        apply_tombstones(live, restored, source_name="live", target_name="restored", restore_id="r1", served="live")
+        apply_tombstones(live, restored, source_name="live", target_name="restored", restore_id="r1", served="live", clock=Clock())
     assert ("SYSTEM", "RESTORE") not in restored.items
 
 
@@ -65,7 +65,7 @@ def test_restore_reapplies_compromised_keys_and_the_epoch():
 
     restored, _, _ = make_app(table=backup, RESTORED_FROM="live", RESTORE_ID="r1", TABLE_NAME="restored")
     restored.clock = clock
-    apply_tombstones(live, backup, source_name="live", target_name="restored", restore_id="r1", served="live")
+    apply_tombstones(live, backup, source_name="live", target_name="restored", restore_id="r1", served="live", clock=Clock())
     keys = call(restored, "GET", "/v1/keys", pilot)[1]["keys"]
     assert [k["state"] for k in keys] == ["compromised"]
     assert ("ORG#orgA", "ACTIVE_KEY") not in backup.items
@@ -89,7 +89,7 @@ def test_restore_never_reopens_a_registration_made_and_deleted_after_the_backup(
 
     restored, _, _ = make_app(table=backup, RESTORED_FROM="live", RESTORE_ID="r1", TABLE_NAME="restored")
     restored.clock = clock
-    apply_tombstones(live, backup, source_name="live", target_name="restored", restore_id="r1", served="live")
+    apply_tombstones(live, backup, source_name="live", target_name="restored", restore_id="r1", served="live", clock=Clock())
     s, out, _ = register(restored, pilot, line(SEED_A, 4), idem="idem-key-0000000012")  # new key: no replay record
     assert (s, out["error"]) == (410, "registration_deleted")
     rows = call(restored, "GET", "/v1/registrations", pilot)[1]["registrations"]

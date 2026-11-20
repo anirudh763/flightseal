@@ -3,13 +3,16 @@
 A point-in-time or on-demand restore brings back shares and registrations that were withdrawn or deleted after the
 backup was taken. Tombstones (TOMB# items, never TTL'd) record every withdrawal, deletion, key-state change and
 epoch bump. `apply_tombstones` copies each one from the source (the table the function serves right now) into the
-restored target and applies it, then writes the SYSTEM/RESTORE marker last, naming the source, the target and the restore ID. The app
+restored target and applies it, scrubs actor IDs older than 90 days (registry.scrub), then writes the SYSTEM/RESTORE
+marker last, naming the source, the target and the restore ID. The app
 refuses every route while RESTORED_FROM is set and no marker names its own TABLE_NAME and RESTORE_ID.
 
   python -m registry.restore --source SERVED_TABLE --served SERVED_TABLE --target RESTORED_TABLE --restore-id ID
 """
 import argparse
 import time
+
+from . import scrub
 
 RANK = ("active", "rotated", "retired", "compromised")  # most revoked wins (AD-20)
 
@@ -50,6 +53,11 @@ def apply_tombstones(source, target, source_name, target_name, restore_id, serve
                 if t.get("rid"):
                     stub["rid"] = t["rid"]
                 target.put(stub)
+                # The list index (GET /v1/shares), dated by the withdrawal: the backup has none for this share.
+                index = {"PK": f"ORG#{t['org']}", "SK": f"SHARE#{t['at']:012d}#{t['ref']}"}
+                if t.get("rid"):
+                    index["rid"] = t["rid"]
+                target.put(index)
         elif t["kind"] == "key":
             # The key's own kind is `key_kind` on a tombstone (`kind` is the tombstone's); missing means company.
             pk, state = f"ORG#{t['org']}", t.get("state", "compromised")
@@ -75,6 +83,7 @@ def apply_tombstones(source, target, source_name, target_name, restore_id, serve
             target.put({"PK": pk, "SK": "EPOCH", "epoch": max(cur, t["value"])})
     for pk in key_orgs:
         _recompute_active_key(target, pk)
+    scrub.scrub(target, now)  # R52: the backup may hold actor IDs already past 90 days; raises before the marker
     target.put({"PK": "SYSTEM", "SK": "RESTORE", "source": source_name, "target": target_name,
                 "restore_id": restore_id, "applied_at": now, "tombstones": len(tombs)})
     return len(tombs)

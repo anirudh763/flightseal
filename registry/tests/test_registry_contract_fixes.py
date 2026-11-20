@@ -4,7 +4,7 @@ import calendar
 import hashlib
 import json
 
-from registry_helpers import SEED_A, T0, call, enroll, envelope, line, make_app, register, share, token
+from registry_helpers import Clock, SEED_A, T0, call, enroll, envelope, line, make_app, register, share, token
 
 from registry.app import _seconds_to_next_month
 
@@ -321,7 +321,7 @@ def test_restore_never_reopens_a_share_created_and_withdrawn_after_the_backup():
     backup.items = {k: dict(v) for k, v in live.items.items()}  # before the share existed
     _, first, tok = share(app, pilot, reg["registration_id"], idem="share-key-000000001")
     assert call(app, "DELETE", first["path"], pilot)[0] == 200
-    apply_tombstones(live, backup, source_name="live", target_name="restored", restore_id="r1", served="live")
+    apply_tombstones(live, backup, source_name="live", target_name="restored", restore_id="r1", served="live", clock=Clock())
     restored, _, _ = make_app(table=backup, TABLE_NAME="restored", RESTORED_FROM="live", RESTORE_ID="r1")
     restored.clock = clock
     # the client's documented lost-response retry, same token and key, against the restored table
