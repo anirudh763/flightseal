@@ -88,6 +88,7 @@ export const ROUTES: Array<[apigw.HttpMethod, string]> = [
   [apigw.HttpMethod.POST, '/v1/envelopes'],
   [apigw.HttpMethod.POST, '/v1/registrations'],
   [apigw.HttpMethod.GET, '/v1/registrations'],
+  [apigw.HttpMethod.GET, '/v1/registrations/{id}'], // PROPOSED: one record, for the console's Refresh
   [apigw.HttpMethod.DELETE, '/v1/registrations/{id}'],
   [apigw.HttpMethod.GET, '/v1/keys/challenge'],
   [apigw.HttpMethod.POST, '/v1/keys'],

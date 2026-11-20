@@ -94,7 +94,8 @@ function createRegistry() {
   let scopeGen = 0, store = null; // the pending store of the current local scope (profile or guest)
   let lastOwner = null; // the owner the display names belong to
   let state = { token: '', claims: null, owner: null, outbox: null, rows: [], listed: false, scope: null, pending: [], pendingStorage: null,
-    needsSignIn: false, online: navigator.onLine !== false, memory: false, listError: '', enqueueError: '' };
+    needsSignIn: false, online: navigator.onLine !== false, memory: false, listError: '', enqueueError: '',
+    links: {}, confirmed: {} }; // this sign-in's made share links and refreshed records (registration_id ->), memory only
   const set = (patch) => { state = { ...state, ...patch }; for (const fn of listeners) fn(); };
   const client = createRegistryClient({ baseUrl: __REGISTRY_URL__, getToken: async () => token });
   addEventListener('online', () => set({ online: true }));
@@ -188,7 +189,7 @@ function createRegistry() {
     gen += 1; seq += 1;
     unsubscribe?.(); unsubscribe = null;
     state.outbox?.close();
-    set({ outbox: null, rows: [], listed: false, needsSignIn: false, memory: false, listError: '', enqueueError: '' });
+    set({ outbox: null, rows: [], listed: false, needsSignIn: false, memory: false, listError: '', enqueueError: '', links: {}, confirmed: {} });
   }
   async function signIn(raw, at = Date.now()) {
     const tok = String(raw || '').trim();
@@ -284,6 +285,32 @@ function createRegistry() {
       return receipts.length ? { count: receipts.length, text: exportText(receipts), markSaved: () => markExported(receipts) } : null;
     },
     unsavedCount: () => state.pending.filter(unsaved).length,
+    /** Keep (or, with null, drop) a share link made under `owner`; ignored once another sign-in took over. */
+    setLink(rid, link, owner) {
+      if (owner !== state.owner) return;
+      const links = { ...state.links };
+      if (link) links[rid] = link; else delete links[rid];
+      set({ links });
+    },
+    /** Refresh: ask the registry for one record (GET /v1/registrations/<rid>), only on the user's press. Token and owner
+     * are taken once; an answer that arrives after a sign-in change is dropped ({ stale: true }). */
+    async refreshRecord(row) {
+      const owner = state.owner, ob = state.outbox, tok = token;
+      if (!owner || !ob || !tok) return { ok: false, res: { kind: 'http', status: 401 } };
+      const res = await client.getRegistration(row.registration_id, { token: tok });
+      if (state.owner !== owner || state.outbox !== ob) return { ok: false, stale: true };
+      const d = res.ok ? res.data : null;
+      if (d?.registration_id === row.registration_id && d.disposition === 'deleted') {
+        let saved = false;
+        try { saved = (await ob.markDeleted(row.id)) === true; } catch { saved = false; }
+        return { ok: saved, deleted: true };
+      }
+      if (d?.registration_id === row.registration_id && d.disposition === 'active' && typeof d.received_at === 'string' && !Number.isNaN(Date.parse(d.received_at))) {
+        set({ confirmed: { ...state.confirmed, [row.registration_id]: d.received_at } });
+        return { ok: true };
+      }
+      return { ok: false, res: res.ok ? { kind: 'http', status: 200, code: 'bad_response' } : res }; // another record's answer is a failure
+    },
   };
 }
 export const useRegistry = () => { const r = getRegistry(); return [r, useSyncExternalStore(r.subscribe, r.snapshot)]; };
@@ -385,35 +412,44 @@ function chipOf(row) { // the outbox's own labels, verbatim
   return [row.label, row.state === 'registering' ? 'neutral registry-dots' : 'neutral'];
 }
 const utc = (iso) => String(iso || '').replace('T', ' ').replace(/Z$/, ' UTC');
+const utcMs = (ms) => { const d = new Date(ms); return Number.isNaN(d.getTime()) ? '' : utc(d.toISOString().replace(/\.\d{3}Z$/, 'Z')); };
+const STATEMENT = "This is the registry's statement, not proof of the files.";
+// R39/AD-15: a saved ack is this device's last confirmation; only a Refresh this session shows the registry's own time.
+function registeredLine(row, confirmed = {}) {
+  const at = confirmed[row.registration_id];
+  return at ? `Registered at ${utc(at)}. ${STATEMENT}` : `Last confirmed by this device ${utcMs(row.acked_at ?? row.updated_at)}. ${STATEMENT}`;
+}
 
 // Jobs (flag on): each job's status from this snapshot's outbox rows and pending proofs, matched on registryLine (the line the registry got).
 // No request. Labels are the outbox's own, as in the list below; no record reads "Sealed locally" and is in no filter.
 const JOB_FILTERS = [['waiting', 'Waiting to send'], ['registered', 'Registered'], ['problems', 'Needs attention']];
 const JOB_DETAIL = 'Registry status';
-function jobLine(row) { // the same sentences RegistryRow shows
+function jobLine(row, confirmed) { // the same sentences RegistryRow shows
   if (isDeleted(row)) return "The registry's record of this receipt was deleted. Links to it no longer open.";
-  if (row.state === 'registered') return `Registered at ${utc(row.received_at)}. This is the registry's statement, not proof of the files.`;
+  if (row.state === 'registered') return registeredLine(row, confirmed);
   if (row.state === 'needs_attention') return attentionMessage(row) ?? (REASONS[row.reason] ?? REFUSED)[0];
   if (row.state === 'registering') return 'Sending the receipt to the registry…';
   if (row.state === 'waiting_for_connection') return row.reason === 'unavailable' || row.reason === 'http_503' ? 'The registry is busy right now. It will try again by itself.' : "Saved on this device. It will register when you're back online. You can close this tab.";
   return 'Sealed on this device. Not sent to the registry yet.';
 }
-/** Pure, for tests: receipt line -> { label, kind, group, line, at }. */
+/** Pure, for tests: receipt line -> { label, kind, group, line, at, company?, row? }. company: the current sign-in's
+ * org, only on its own outbox rows and the pending proofs bound to it; row: the outbox row, for the detail's actions. */
 export function jobsStatusMap(s) {
   const map = new Map();
+  const org = s.owner && s.claims?.org ? { company: s.claims.org } : {};
   for (const raw of s.rows) {
     const row = !s.online && raw.state === 'sealed_local' ? { ...raw, state: 'waiting_for_connection', label: stateLabel('waiting_for_connection') } : raw;
     const [label, kind] = chipOf(row);
     const group = row.state === 'registered' ? 'registered' : row.state === 'needs_attention' ? 'problems' : 'waiting';
-    const at = row.state === 'registered' && !isDeleted(row) ? null : row.updated_at ?? null; // Registered carries the registry's own time in its line
-    map.set(row.receipt, { label, kind: kind.split(' ')[0], group, line: jobLine(row), at });
+    const at = row.state === 'registered' && !isDeleted(row) ? null : row.updated_at ?? null; // Registered carries its own time in its line
+    map.set(row.receipt, { label, kind: kind.split(' ')[0], group, line: jobLine(row, s.confirmed), at, ...org, row });
   }
   for (const p of s.pending) {
     if (map.has(p.receipt)) continue;
     const line = !p.owner ? "Sealed while signed out, so it isn't assigned to a company yet. Assign it on Seal & send."
       : s.owner && p.owner !== s.owner ? "Sealed under another registry sign-in, so it won't be sent under yours."
       : 'Sealed on this device. Not sent to the registry yet.';
-    map.set(p.receipt, { label: 'Sealed locally', kind: 'neutral', group: 'waiting', line, at: p.at ?? null });
+    map.set(p.receipt, { label: 'Sealed locally', kind: 'neutral', group: 'waiting', line, at: p.at ?? null, ...(p.owner && p.owner === s.owner ? org : {}) });
   }
   const none = { label: 'Sealed locally', kind: 'neutral', group: null, at: null,
     line: !s.owner ? "Sign in to the company registry to see this job's registry status."
@@ -426,7 +462,11 @@ export function useJobsRegistry() {
   const statusOf = useMemo(() => { const m = jobsStatusMap(s); return (job) => jobStatus(m, job.receipt); }, [s]);
   // Wait for the outbox list (or a saved sign-in still resuming) before an out-of-range ?page settles on a real one.
   const ready = s.listed || !!s.listError || (!s.owner && !storage.get().token);
-  return { statusOf, filters: JOB_FILTERS, detailLabel: JOB_DETAIL, ready };
+  // The Jobs detail's Refresh, share links and (admin) delete for a registered row; after a delete, focus goes to its Details button.
+  const detailActions = (job, st) => (st?.row?.state === 'registered' && !isDeleted(st.row) ? <RegistryBoundary>
+    <RecordActions key={`${s.owner}|${st.row.id}`} row={st.row} prefix="jobs" afterDelete={() => document.getElementById(`job-details-${job.id}`)?.focus()} />
+  </RegistryBoundary> : null);
+  return { statusOf, filters: JOB_FILTERS, detailLabel: JOB_DETAIL, ready, detailActions };
 }
 
 export function SealedOnDevice({ onSignIn }) {
@@ -481,7 +521,7 @@ export function SealedOnDevice({ onSignIn }) {
     {s.enqueueError && <p className="registry-notice" role="alert">{s.enqueueError}</p>}
     {rows.length ? <>
       <p className="registry-summary">{registered} registered · {waiting} not yet registered</p>
-      <ul className="registry-rows">{rows.map((row) => <li key={row.id}><RegistryRow row={row} name={nameOf(row)} registry={r} org={s.claims?.org || ''} signedIn={!!s.owner} admin={s.claims?.role === 'admin'} outbox={s.outbox} onSignIn={onSignIn} onExport={exportProofs} /></li>)}</ul>
+      <ul className="registry-rows">{rows.map((row) => <li key={row.id}><RegistryRow row={row} name={nameOf(row)} registry={r} owner={s.owner} confirmed={s.confirmed} org={s.claims?.org || ''} signedIn={!!s.owner} outbox={s.outbox} onSignIn={onSignIn} onExport={exportProofs} /></li>)}</ul>
     </> : <p className="field-hint">Nothing sealed on this device yet.</p>}
     <p className="visually-hidden registry-announce" role="status">{announce}</p>
     <details className="report-details registry-more" onKeyDown={closeDisclosure}><summary>More options <ChevronDown size={17} aria-hidden="true" /></summary>
@@ -492,8 +532,9 @@ export function SealedOnDevice({ onSignIn }) {
   </div></section>;
 }
 
-function RegistryRow({ row, name, registry, org, signedIn, admin, outbox, onSignIn, onExport }) {
+function RegistryRow({ row, name, registry, owner, confirmed, org, signedIn, outbox, onSignIn, onExport }) {
   const [chip, kind] = chipOf(row);
+  const summaryRef = useRef(null);
   const when = new Date(row.created_at).toLocaleString();
   const retry = () => outbox?.retryNow(row.id);
   let body;
@@ -516,9 +557,8 @@ function RegistryRow({ row, name, registry, org, signedIn, admin, outbox, onSign
   } else if (row.state === 'registered' && row.disposition === 'deleted') {
     body = <p>The registry's record of this receipt was deleted. Links to it no longer open.</p>;
   } else if (row.state === 'registered') {
-    body = <><p>Registered at {utc(row.received_at)}. This is the registry's statement, not proof of the files.</p>
-      <ShareLinks row={row} client={registry.client} />
-      {admin && <DeleteRecord row={row} client={registry.client} outbox={outbox} />}</>;
+    body = <><p>{registeredLine(row, confirmed)}</p>
+      <RecordActions key={`${owner}|${row.id}`} row={row} prefix="seal" afterDelete={() => summaryRef.current?.focus()} /></>;
   } else {
     const [text, action] = REASONS[row.reason] ?? REFUSED;
     body = <><p>{attentionMessage(row) ?? text}</p>
@@ -531,7 +571,7 @@ function RegistryRow({ row, name, registry, org, signedIn, admin, outbox, onSign
         <p className="field-hint">Technical details: {row.reason}</p></details></>;
   }
   return <details className="registry-row" onKeyDown={closeDisclosure}>
-    <summary><span className="registry-name wrap">{name}</span><span className="registry-when">sealed {when}</span><span className={`status-label ${kind}`}>{chip}</span></summary>
+    <summary ref={summaryRef}><span className="registry-name wrap">{name}</span><span className="registry-when">sealed {when}</span><span className={`status-label ${kind}`}>{chip}</span></summary>
     <div className="registry-detail">{body}</div>
   </details>;
 }
@@ -557,22 +597,62 @@ function shareError(res) {
   return "The registry couldn't do that right now. Try again in a few minutes.";
 }
 
-function ShareLinks({ row, client }) {
+function refreshError(res) {
+  if (res.kind === 'network' || res.kind === 'timeout') return "The registry didn't answer. Check your connection, then try again.";
+  if (res.status === 401) return 'Your registry sign-in has ended. Sign in again on the Trust page, then try again.';
+  if (res.status === 404) return "The registry has no record with this ID for your company. This device's saved status is unchanged.";
+  return "The registry couldn't confirm this record right now. Try again in a few minutes.";
+}
+
+/** A registered row's actions, in Seal & send's list (prefix "seal") and the Jobs detail (prefix "jobs"): Refresh until
+ * the record is refreshed this session, share links, and Delete hosted record for an admin. Callers key it by owner and
+ * row, so nothing in it outlives a sign-in change; the prefix keeps the two lists' ids apart. */
+function RecordActions({ row, prefix, afterDelete }) {
+  const [r, s] = useRegistry();
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState('');
+  const [done, setDone] = useState('');
+  const boxRef = useRef(null); // Refresh goes away once it succeeds, so focus moves here, never to the body
+  const confirmed = !!s.confirmed[row.registration_id];
+  const refresh = async () => {
+    setBusy(true); setError('');
+    const out = await r.refreshRecord(row);
+    if (out.stale) return; // another sign-in took over; this component is going away
+    setBusy(false);
+    if (out.deleted && !out.ok) setError("The registry says this record was deleted, but this device couldn't update its saved list. Reload to see the change.");
+    else if (out.deleted) afterDelete?.();
+    else if (!out.ok) setError(refreshError(out.res));
+    else { setDone('The registry confirmed this record.'); boxRef.current?.focus(); }
+  };
+  return <div className="registry-actions" ref={boxRef} tabIndex={-1}>
+    <p className="visually-hidden" role="status">{done}</p>
+    {!confirmed && <div className="actions-row"><button type="button" className="button secondary" disabled={busy} onClick={refresh}>Refresh</button></div>}
+    {error && <p className="field-hint receipt-error" role="alert">{error}</p>}
+    <ShareLinks row={row} registry={r} owner={s.owner} link={s.links[row.registration_id] || null} prefix={prefix} />
+    {s.claims?.role === 'admin' && <DeleteRecord row={row} client={r.client} outbox={s.outbox} prefix={prefix} afterDelete={afterDelete} />}
+  </div>;
+}
+
+function ShareLinks({ row, registry, owner, link, prefix }) {
+  const client = registry.client;
   const [days, setDays] = useState(30);
-  const [link, setLink] = useState(null); // { token, url, expires } in React state only, never stored
   const [retryShare, setRetryShare] = useState(null); // the share object of a call whose answer was lost
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState('');
   const [error, setError] = useState('');
   const fieldRef = useRef(null);
-  const id = `share-${row.id.slice(0, 16)}`;
+  const makeRef = useRef(null);
+  const focusMake = useRef(false);
+  useEffect(() => { if (!link && focusMake.current) { focusMake.current = false; makeRef.current?.focus(); } }, [link]); // after Withdraw
+  const id = `${prefix}-share-${row.id.slice(0, 16)}`;
   const make = async () => {
     setBusy(true); setError(''); setMessage('');
     const res = await client.createShare({ registration_id: row.registration_id, expires_days: days, ...(retryShare || {}) });
     setBusy(false);
     if (res.ok && res.data?.disposition === 'active') {
       setRetryShare(null);
-      setLink({ token: res.share.token, url: `${location.origin}${location.pathname}#/app/verify?share=${res.share.token}`, expires: res.data.expires_at ? new Date(res.data.expires_at).toLocaleDateString() : '' });
+      // In the session store (memory only, never saved), so both lists show it and it ends with this sign-in.
+      registry.setLink(row.registration_id, { token: res.share.token, url: `${location.origin}${location.pathname}#/app/verify?share=${res.share.token}`, expires: res.data.expires_at ? new Date(res.data.expires_at).toLocaleDateString() : '' }, owner);
       return;
     }
     setRetryShare(res.kind === 'network' || res.kind === 'timeout' ? res.share : null); // a retry returns the same link
@@ -586,7 +666,7 @@ function ShareLinks({ row, client }) {
     setBusy(true); setError(''); setMessage('');
     const res = await client.withdrawShare(link.token);
     setBusy(false);
-    if (res.ok || res.status === 404) { setLink(null); setMessage("Link withdrawn. It no longer opens. Copies of the receipt someone already has aren't affected."); }
+    if (res.ok || res.status === 404) { focusMake.current = true; registry.setLink(row.registration_id, null, owner); setMessage("Link withdrawn. It no longer opens. Copies of the receipt someone already has aren't affected."); }
     else setError(shareError(res));
   };
   return <div className="registry-share">
@@ -596,7 +676,7 @@ function ShareLinks({ row, client }) {
       <p id={`${id}-hint`} className="field-hint">Anyone with this link can see that the registry received this receipt. They still need the files and the receipt message to check the files. {link.expires ? `This link stops working on ${link.expires}.` : 'It stops working when it expires.'}</p>
       <div className="actions-row registry-share-actions"><button type="button" className="button secondary" onClick={copy}>Copy link</button><button type="button" className="button secondary" disabled={busy} onClick={withdraw}>Withdraw link</button></div>
     </> : <>
-      <div className="actions-row"><button type="button" className="button secondary" disabled={busy} onClick={make}><Link2 aria-hidden="true" size={16} />Make a share link</button></div>
+      <div className="actions-row"><button ref={makeRef} type="button" className="button secondary" disabled={busy} onClick={make}><Link2 aria-hidden="true" size={16} />Make a share link</button></div>
       <details className="report-details registry-tech" onKeyDown={closeDisclosure}><summary>More options <ChevronDown size={17} aria-hidden="true" /></summary>
         <label className="field-label" htmlFor={`${id}-days`}>Link lasts</label>
         <select id={`${id}-days`} value={days} onChange={(e) => { setDays(Number(e.target.value)); setRetryShare(null); }}>{[7, 30].map((d) => <option key={d} value={d}>{d} days</option>)}</select>
@@ -607,7 +687,7 @@ function ShareLinks({ row, client }) {
   </div>;
 }
 
-function DeleteRecord({ row, client, outbox }) {
+function DeleteRecord({ row, client, outbox, prefix, afterDelete }) {
   const dialogRef = useRef(null);
   const triggerRef = useRef(null);
   const keepRef = useRef(null); // the safe choice has the focus
@@ -619,16 +699,17 @@ function DeleteRecord({ row, client, outbox }) {
     const res = await client.deleteRegistration(row.registration_id);
     setBusy(false);
     if (res.ok || res.status === 404) {
-      close();
       let saved = false;
+      close();
       try { saved = (await outbox?.markDeleted(row.id)) === true; } catch { saved = false; }
-      if (!saved) setError("The hosted record was deleted, but this device couldn't update its saved list. Reload to see the change.");
+      if (!saved) { setError("The hosted record was deleted, but this device couldn't update its saved list. Reload to see the change."); }
+      else afterDelete?.(); // this trigger goes away with the record
       return;
     }
     close();
     setError(res.status === 403 ? 'Only a company admin can delete a hosted record.' : res.kind === 'network' || res.kind === 'timeout' ? "The registry didn't answer. Check your connection, then try again." : "The registry couldn't delete this record right now. Try again in a few minutes.");
   };
-  const titleId = `delete-${row.id.slice(0, 16)}-title`;
+  const titleId = `${prefix}-delete-${row.id.slice(0, 16)}-title`;
   return <div className="registry-delete">
     <button ref={triggerRef} type="button" className="button secondary" onClick={() => { setError(''); dialogRef.current?.showModal(); keepRef.current?.focus(); }}>Delete hosted record</button>
     {error && <p className="field-hint receipt-error" role="alert">{error}</p>}

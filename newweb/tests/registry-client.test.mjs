@@ -119,3 +119,14 @@ test('deleteRegistration sends DELETE /v1/registrations/<id> with the bearer tok
   assert.equal(calls[0].init.method, 'DELETE');
   assert.equal(calls[0].init.headers.authorization, 'Bearer T');
 });
+
+test('getRegistration sends GET /v1/registrations/<id> with the given token, no body', async () => {
+  const calls = [];
+  const client = createRegistryClient({ baseUrl: 'http://x', getToken: async () => assert.fail('opts.token wins'), fetch: async (url, init) => { calls.push({ url, init }); return json(200, { registration_id: 'b'.repeat(32), disposition: 'active' }); } });
+  const r = await client.getRegistration('b'.repeat(32), { token: 'T2' });
+  assert.equal(r.ok, true);
+  assert.equal(calls[0].url, `http://x/v1/registrations/${'b'.repeat(32)}`);
+  assert.equal(calls[0].init.method, 'GET');
+  assert.equal(calls[0].init.headers.authorization, 'Bearer T2');
+  assert.equal(calls[0].init.body, undefined);
+});

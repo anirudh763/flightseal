@@ -221,6 +221,7 @@ try {
     await page.locator('.jobs-table caption').waitFor();
     assert.equal(await page.locator('.jobs-table caption').innerText(), 'Showing 1–25 of 61');
     assert.equal(await page.locator('#jobs-status-filter').count() + await page.getByRole('button', { name: /^Details/ }).count(), 0, 'flag off: no status filter, no row detail');
+    assert.equal(await page.locator('.jobs-company, .registry-actions').count() + await page.getByRole('button', { name: /^(Refresh|Make a share link|Delete hosted record)$/ }).count(), 0, 'flag off: no company label, no record actions');
     assert.equal((await tableNames(page)).length, 25);
     await page.getByRole('button', { name: 'Next' }).click();
     await page.waitForFunction(() => document.querySelector('.jobs-table caption')?.textContent === 'Showing 26–50 of 61');

@@ -242,6 +242,23 @@ def test_share_limit_and_deleted_registration():
     assert rows[0]["disposition"] == "deleted" and "received_at" not in rows[0]
 
 
+def test_get_one_registration_is_org_scoped():
+    app, _, clock, pilot = setup()
+    _, reg, _ = register(app, pilot, line(SEED_A, 5))
+    rid = reg["registration_id"]
+    s, out, _ = call(app, "GET", f"/v1/registrations/{rid}", pilot)
+    assert s == 200 and out == reg  # the list's row shape: the ack's fields, current disposition
+    assert out == call(app, "GET", "/v1/registrations", pilot)[1]["registrations"][0]
+    s, out, _ = call(app, "GET", f"/v1/registrations/{rid}", token(clock, org="orgB"))
+    assert (s, out["error"]) == (404, "not_found")  # another org's record reads as unknown
+    assert call(app, "GET", f"/v1/registrations/{'0' * 32}", pilot)[:2] == (404, {"error": "not_found"})
+    assert call(app, "GET", f"/v1/registrations/{rid}")[0] == 401
+    assert call(app, "DELETE", f"/v1/registrations/{rid}", token(clock, role="admin"))[0] == 200
+    s, out, _ = call(app, "GET", f"/v1/registrations/{rid}", pilot)
+    assert s == 200 and out == {"registration_id": rid, "disposition": "deleted", "count": 5, "head": reg["head"],
+                                "key_fingerprint": reg["key_fingerprint"]}
+
+
 def test_withdrawn_share_stays_withdrawn_after_replay():
     app, table, clock, pilot = setup()
     env_id = envelope(app, pilot)

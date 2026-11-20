@@ -35,6 +35,7 @@ ROUTES = [
     ("POST", r"/v1/envelopes", "envelope", ANY),
     ("POST", r"/v1/registrations", "register", ANY),
     ("GET", r"/v1/registrations", "list_registrations", ANY),
+    ("GET", r"/v1/registrations/([0-9a-f]{32})", "get_registration", ANY),
     ("DELETE", r"/v1/registrations/([0-9a-f]{32})", "delete_registration", ADMIN),
     ("GET", r"/v1/keys/challenge", "challenge", ADMIN),
     ("POST", r"/v1/keys", "enroll", ADMIN),
@@ -86,6 +87,16 @@ def not_found():
 
 def _iso(t):
     return time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(t))
+
+
+def _reg_row(reg):
+    row = {"registration_id": reg["SK"][4:], "disposition": reg["state"]}
+    for name, field in (("count", "count"), ("head", "head"), ("key_fingerprint", "fp")):
+        if field in reg:  # a restored deleted stub has only its id and state
+            row[name] = reg[field]
+    if "received_at" in reg:
+        row["received_at"] = _iso(reg["received_at"])
+    return row
 
 
 def _sha(text):
@@ -381,16 +392,14 @@ class App:
         if cursor is not None and not HEX32.fullmatch(cursor):
             raise HttpError(400, "bad_request")
         items, last = self.t.query(f"ORG#{ident.org_id}", "REG#", int(limit), "REG#" + cursor if cursor else None)
-        out = []
-        for reg in items:
-            row = {"registration_id": reg["SK"][4:], "disposition": reg["state"]}
-            for name, field in (("count", "count"), ("head", "head"), ("key_fingerprint", "fp")):
-                if field in reg:  # a restored deleted stub has only its id and state
-                    row[name] = reg[field]
-            if "received_at" in reg:
-                row["received_at"] = _iso(reg["received_at"])
-            out.append(row)
-        return 200, {"registrations": out, "next_cursor": last[4:] if last else None}
+        return 200, {"registrations": [_reg_row(reg) for reg in items], "next_cursor": last[4:] if last else None}
+
+    def get_registration(self, ident, _body, _query, rid):
+        """One of this org's registrations, in the list's row shape (PROPOSED; the console's Refresh). Other orgs: 404."""
+        reg = self.t.get(f"ORG#{ident.org_id}", "REG#" + rid)
+        if reg is None:
+            raise not_found()
+        return 200, _reg_row(reg)
 
     def delete_registration(self, ident, _body, _query, rid):
         pk, now = f"ORG#{ident.org_id}", self.now()

@@ -152,7 +152,7 @@ test('HTTP API: default stage throttled at rate 2, burst 5 (sized for about 5 us
 
 test('every route has the JWT authorizer except GET /v1/shares/{token}', () => {
   const routes = resources('AWS::ApiGatewayV2::Route').map(([, r]) => r.Properties);
-  assert.equal(routes.length, 16);
+  assert.equal(routes.length, 17);
   for (const key of ['GET /v1/pilot-keys/challenge', 'POST /v1/pilot-keys', 'POST /v1/pilot-keys/{fp}/retire']) {
     assert.ok(routes.some((r) => r.RouteKey === key), key);
   }

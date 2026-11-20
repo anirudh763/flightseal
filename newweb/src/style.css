@@ -1057,6 +1057,10 @@ input[type=datetime-local] { width: 100%; max-width: 320px; min-width: 0; min-he
 .registry-detail p { margin: 0; }
 .registry-detail .report-details, .registry-more { margin: 0; }
 .registry-share { display: grid; gap: 6px; min-width: 0; }
+.registry-actions { display: grid; gap: 8px; min-width: 0; }
+.registry-actions p { margin: 0; }
+.registry-actions:focus-visible { outline: 3px solid #2355ba; outline-offset: 3px; }
+.registry-actions .button, .registry-share select { min-height: 44px; }
 .registry-basis { display: block; }
 .registry-signin { display: grid; gap: 6px; }
 .registry-signin h3 { margin: 0; font-size: .95rem; }
@@ -1258,6 +1262,7 @@ input[type=datetime-local] { width: 100%; max-width: 320px; min-width: 0; min-he
 .jobs-detail { max-width: 48rem; padding: 12px 0; }
 .jobs-detail-line { display: block; }
 .jobs-detail-row .actions-row .button { min-height: 44px; }
+.jobs-detail-row .registry-actions { max-width: 48rem; margin-bottom: 8px; }
 table.jobs-table { min-width: 0; width: 100%; table-layout: auto; }
 .jobs-table caption { padding: 8px 0; text-align: left; color: var(--muted); font-variant-numeric: tabular-nums; }
 .jobs-table caption:focus-visible { outline: 3px solid #2355ba; outline-offset: 3px; }
@@ -1267,6 +1272,7 @@ table.jobs-table { min-width: 0; width: 100%; table-layout: auto; }
 .jobs-actions { display: flex; flex-wrap: wrap; gap: 6px; }
 .jobs-actions .button, .jobs-pages .button { min-height: 44px; }
 .jobs-status { display: inline-flex; align-items: center; gap: 4px; white-space: nowrap; }
+.jobs-company { color: var(--muted); font-size: .8rem; }
 .jobs-recent-rows { display: grid; margin: 0; padding: 0; list-style: none; border-top: 1px solid var(--line); }
 .jobs-recent-rows > li { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 12px; min-height: 44px; padding: 8px 4px; border-bottom: 1px solid var(--line); }
 .jobs-recent-rows .jobs-name { flex: 1 1 12rem; font-weight: 600; }
