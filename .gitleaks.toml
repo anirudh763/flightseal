@@ -63,3 +63,12 @@ condition = "AND"
 paths = ['''^tests/fixtures/pilot-authorization\.json$''']
 regexTarget = "match"
 regexes = ['''^n?(pilot_key|company_key)(=|": ")[0-9a-fA-F]{64}("|\\n)?$''']
+
+# A test helper that wraps a fixed, public seed in PKCS#8 PEM at run time; no literal key material.
+[[allowlists]]
+description = "Exact dynamic PEM builder in the pilot-keys unit test; seeds are public test values"
+targetRules = ["private-key"]
+condition = "AND"
+paths = ['''^newweb/tests/pilot-keys\.test\.mjs$''']
+regexTarget = "match"
+regexes = ['''^[-]{5}BEGIN PRIVATE KEY[-]{5}\\n\$\{Buffer\.concat\(\[Buffer\.from\('302e020100300506032b657004220420', 'hex'\), Buffer\.from\(seed\)\]\)\.toString\('base64'\)\}\\n[-]{5}END PRIVATE KEY[-]{5}$''']

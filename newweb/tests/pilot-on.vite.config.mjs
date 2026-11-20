@@ -6,6 +6,8 @@ const SWITCH = 'export const PILOT_AUTHORIZATION_ACCEPTED = false;';
 let matched = false;
 export default {
   ...base,
+  // Never the base config's ../docs/console: a run without --outDir still lands in .test-artifacts.
+  build: { ...base.build, outDir: '.test-artifacts/pilot-on/build' },
   plugins: [{
     name: 'pilot-switch-on-test-only',
     enforce: 'pre',
