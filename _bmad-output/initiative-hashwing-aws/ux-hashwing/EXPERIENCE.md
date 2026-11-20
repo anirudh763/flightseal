@@ -673,3 +673,5 @@ These cover "Release layout, locked" above. Ledger IDs are in brackets.
 - **AC-67** `open` [R67] Each event in "Focus and announcements" handles focus and announcements as given there; in particular, changing the Verify choice with the arrow keys keeps focus on the radio and adds no history entry. The chosen Verify option is shown by a check mark and border width as well as colour, also under forced colours.
 
 Totals after this addition: 67 items; 25 built, 8 partly tested, 6 untested, 6 partial, 22 open.
+
+Totals by tag on main edb014a (2026-11-20, counted from the tags above, which each PR set; not re-verified in code here): 67 items; 35 built (one tagged `built, tested`), 8 built, partly tested, 6 built, untested, 7 partial, 11 open.
