@@ -6,7 +6,7 @@ import re
 import subprocess
 
 import pytest
-from registry_helpers import (SEED_A, SEED_B, call, enroll, fseal_bin, fseal_receipts, line, make_app,
+from registry_helpers import (Clock, SEED_A, SEED_B, call, enroll, fseal_bin, fseal_receipts, line, make_app,
                               register, token)
 
 from registry import ed25519, receipt
@@ -120,7 +120,7 @@ def test_restore_after_two_compromises_keeps_the_first_date():
     _compromise(app, _admin(clock))
     clock.t += 1800
     _compromise(app, _admin(clock))
-    apply_tombstones(live, backup, source_name="live", target_name="restored", restore_id="r1", served="live")
+    apply_tombstones(live, backup, source_name="live", target_name="restored", restore_id="r1", served="live", clock=Clock())
     assert backup.items[("ORG#orgA", "KEY#" + FP_A)]["changed_at"] == first_at
 
 

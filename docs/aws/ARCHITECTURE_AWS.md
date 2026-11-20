@@ -20,11 +20,12 @@ flowchart LR
   end
   subgraph AWS["AWS account (us-east-1)"]
     C[Cognito user pool, Lite plan]
-    G["API Gateway HTTP API<br/>$default stage: rate 2, burst 5<br/>public share route: rate 2, burst 5<br/>JWT authorizer on every route but one"]
+    G["API Gateway HTTP API<br/>$default stage: rate 2, burst 5<br/>public share route: rate 2, burst 5<br/>both 0 while TrafficPaused=true<br/>JWT authorizer on every route but one"]
     L["Lambda python3.12 arm64<br/>128 MB, 5 s"]
     D[("DynamoDB, one table<br/>on demand, TTL attribute ttl")]
+    S["Scrub Lambda, daily<br/>(EventBridge schedule)"]
     W[CloudWatch Logs, 7 days]
-    B[Optional Budget alert]
+    B[Optional Budget alert, email only]
   end
   P -- "sign in" --> C
   A -- "sign in" --> C
@@ -33,7 +34,9 @@ flowchart LR
   V -- "GET /v1/shares/{token}<br/>(no token)" --> G
   G -- "verified claims" --> L
   L -- "item actions on this table only" --> D
+  S -- "Scan, conditional updates and deletes" --> D
   L --> W
+  S --> W
 ```
 
 ## Trust boundaries
@@ -42,7 +45,7 @@ flowchart LR
 |---|---|---|
 | Internet to API Gateway | Bearer ID token, JSON body up to 4096 bytes | JWT signature, issuer, audience and expiry by the API Gateway authorizer; throttling at the stage; CORS for the allowlisted console origins only (see [CORS](#cors)) |
 | API Gateway to Lambda | Verified claims (`sub`, `custom:org_id`, `custom:role`) | The Lambda trusts only these claims for identity. A body field named `org_id` (or any field not on the route's allowlist) is a 400 |
-| Lambda to DynamoDB | Condition-guarded writes and transactions | IAM allows GetItem, PutItem, UpdateItem, DeleteItem, Query and ConditionCheckItem on the table ARN only. Transactions are authorised through those item actions ([AWS docs](https://docs.aws.amazon.com/amazondynamodb/latest/developerguide/transaction-apis-iam.html)); there is no separate TransactWriteItems permission |
+| Lambda to DynamoDB | Condition-guarded writes and transactions | The request function's IAM allows GetItem, PutItem, UpdateItem, DeleteItem, Query and ConditionCheckItem on the table ARN only, never Scan. The daily scrub function (R52) has its own role with Scan, UpdateItem and DeleteItem on the same table ARN only. Transactions are authorised through those item actions ([AWS docs](https://docs.aws.amazon.com/amazondynamodb/latest/developerguide/transaction-apis-iam.html)); there is no separate TransactWriteItems permission |
 | Company to registry | A company public key | Enrollment needs an admin and a fresh, single-use challenge signed by the new key |
 | Registry to the public | `{head, count, key_fingerprint, received_at}` | Only through an active, unexpired share whose registration is still active |
 
@@ -72,17 +75,18 @@ One table, string keys `PK`/`SK`:
 
 | Item | Holds |
 |---|---|
-| `ORG#o / KEY#<fp>` | `kind` (`company` or `pilot`; missing means `company`), key state (active, rotated, retired, compromised; `retired` is for pilot keys only), enrolled_at, enrolled_by (the enrolling admin's `sub`, copied from the key tombstone when a restore brings the key back, or the placeholder `restore` or `unknown` when none was recorded; never returned to a client), changed_at. Pilot keys also hold `company_fp` (the fingerprint of the company key that authorized them) and `not_after` (epoch seconds). An item with `company_fp` or `not_after` is a pilot key whatever `kind` says. `fp` is the SHA-256 of the raw 32-byte public key |
+| `ORG#o / KEY#<fp>` | `kind` (`company` or `pilot`; missing means `company`), key state (active, rotated, retired, compromised; `retired` is for pilot keys only), enrolled_at, enrolled_by (the enrolling admin's `sub`, copied from the key tombstone when a restore brings the key back, or the placeholder `restore` or `unknown` when none was recorded; never returned to a client), changed_at. `enrolled_by` becomes the placeholder `scrubbed` 90 days after `enrolled_at` (see Actor IDs). Pilot keys also hold `company_fp` (the fingerprint of the company key that authorized them) and `not_after` (epoch seconds). An item with `company_fp` or `not_after` is a pilot key whatever `kind` says. `fp` is the SHA-256 of the raw 32-byte public key |
 | `ORG#o / ACTIVE_KEY` | the one active company fingerprint (a conditional pointer that keeps "at most one active company key" true under races); never a pilot key |
 | `ORG#o / PILOT_COUNT` | `n`, the number of active pilot keys (cap 50), changed only inside the transactions that enroll, retire (by an admin or by a slot reclaim) or compromise a pilot key |
-| `ORG#o / CHAL#<nonce>` | sub, `kind` (`company` or `pilot`; missing means `company`) and a 5-minute expiry; deleted when used |
-| `ORG#o / EPOCH`, `ENV#<id>` | the org epoch; envelopes with sub, epoch and expiry (default 7 days) |
+| `ORG#o / CHAL#<nonce>` | sub, `kind` (`company` or `pilot`; missing means `company`) and a 5-minute expiry; deleted when used, or by the daily scrub once expired |
+| `ORG#o / EPOCH`, `ENV#<id>` | the org epoch; envelopes with sub, epoch and expiry (default 7 days; the daily scrub deletes an expired one) |
 | `ORG#o / QUOTA#YYYYMM` | registrations this month (default limit 2000, `REG_QUOTA_PER_MONTH`) |
 | `ORG#o / REG#<rid>` | fp, head, count, received_at, state, up to 10 share hashes |
 | `ORG#o / IDEM#<key>` | payload hash, rid, received_at, expiry (`DEDUPE_SECONDS`, default 7 days) |
 | `SHARE#<sha256(token)> / SHARE` | org, rid, state, expiry (default 30 days, 7 offered, at most 30) |
+| `ORG#o / SHARE#<created_at>#<sha256(token)>` | the share list index (R36): `rid` only. `created_at` is 12-digit zero-padded epoch seconds, so the sort key orders by time. Written once, in the share's create transaction (or by a restore for a share stub, dated by its withdrawal); never updated, because each listed row's state is read from the `SHARE#` item |
 | `ORG#o / SIDEM#<key>` | share idempotency: rid, token hash, the share's expiry, and its own expiry (`DEDUPE_SECONDS`) |
-| `TOMB#<org>#<id> / TOMB` | a withdrawal, deletion, key-state or epoch record, never expired. `kind` is the tombstone's own kind (`registration`, `share`, `key`, `epoch`), so a key tombstone stores the key's kind as `key_kind` (missing means `company`), plus `company_fp` and `not_after` for a pilot key |
+| `TOMB#<org>#<id> / TOMB` | a withdrawal, deletion, key-state or epoch record, never expired. `kind` is the tombstone's own kind (`registration`, `share`, `key`, `epoch`), so a key tombstone stores the key's kind as `key_kind` (missing means `company`), plus `company_fp` and `not_after` for a pilot key. A key tombstone's `enrolled_by` is scrubbed like the KEY item's |
 
 ### Never stored
 
@@ -246,6 +250,21 @@ token. A server-made token could only be recovered by issuing a new one.
   AWS. The
   registry cannot check the randomness of a token it never sees, so a weak token chosen by a member only weakens that
   member's own link. The shipped client always uses 256 random bits.
+- **Listing and withdrawing by id (R36, admin only).** `GET /v1/shares?limit&cursor` returns
+  `{shares: [{share_id, registration_id, state, created_at, expires_at}], next_cursor}`, newest first, at most
+  `limit` (1 to 50, default 50) rows a page, from one Query over the org's index items (descending). `share_id` is the
+  stored `sha256(token)`: it cannot open the link, because the public route hashes whatever it is given. Each row's
+  state is read from its `SHARE#` item, the source of truth: `active`, `expired` (computed on read) or `withdrawn`; a
+  stub written by a restore has `created_at` null (and `expires_at` null when it has none). A row whose `SHARE#` item
+  is missing or names another org is left out. `next_cursor` is 76 characters (12 digits then 64 hex), else 400
+  `bad_request`; as with registrations, an exactly full page may return a cursor whose next page is empty. Each page
+  makes one GetItem per row (at most 50). `DELETE /v1/registrations/{rid}/shares/{share_id}` withdraws without the raw
+  token: the `SHARE#` item must exist with `org` equal to the caller's org and `rid` equal to the path rid, and
+  `ORG#<caller org> / REG#<rid>` must exist; otherwise the identical 404. It answers `{withdrawn: true}`, also for a
+  share already withdrawn (nothing is written then). The write is one transaction: the `SHARE#` update (conditions:
+  same org, same rid), the same share tombstone as the token route, and a check that the registration still exists;
+  a race that changes either is 409 `conflict`. Both routes are admin only: a pilot gets 403 `forbidden`. The token
+  route `DELETE /v1/shares/{token}` stays, for any member holding the token.
 - **The raw token is in the path of `GET` and `DELETE /v1/shares/{token}`.** Only `POST /v1/shares` sends just the
   token's SHA-256; AC-48's "the registry receives only its SHA-256" covers creating a share, not opening or
   withdrawing one. So API Gateway access logs (none are configured today) must never include `$context.path`,
@@ -286,18 +305,16 @@ falls back to its own backoff there.
 
 ### PROPOSED routes (agreed contract, not built)
 
-Recorded 2026-11-17 before any code, from the release brief (ledger R36, R39, R48, R49, R54) and spine AD-9, AD-15, AD-19 and AD-20, and revised after the PR #35 security review. None of these exist in `app.py` or `infra/lib/stack.ts` yet, except `GET /v1/registrations/{rid}`, built 2026-11-19 (Jobs row actions PR) in a smaller shape: see its row. Each needs the matching `stack.ts` route and registry tests in the same PR.
+Recorded 2026-11-17 before any code, from the release brief (ledger R36, R39, R48, R49, R54) and spine AD-9, AD-15, AD-19 and AD-20, and revised after the PR #35 security review. None of these exist in `app.py` or `infra/lib/stack.ts` yet, except `GET /v1/registrations/{rid}` (built 2026-11-19, not deployed). Each needs the matching `stack.ts` route and registry tests in the same PR. Built and moved to Shares (2026-11-19, R36): `GET /v1/shares` and `DELETE /v1/registrations/{rid}/shares/{share_id}`, admin only rather than any member (owner brief).
 
 | Route | Who | Request | Response | Notes |
 |---|---|---|---|---|
-| `GET /v1/shares?limit&cursor` | any member of the org | none | `{shares: [{share_id, registration_id, state, created_at, expires_at}], next_cursor}` | One bounded query over the org-partition index items `ORG#<org> / SHARE#<created_at>#<hash>` (`created_at` as 12-digit zero-padded epoch seconds; a stub without it uses `withdrawn_at`), newest first. The index item holds the key, rid and a copy of the state; each row's state is read from its `SHARE#<hash>` item, which stays the source of truth. `share_id` is the stored `sha256(token)`; it cannot open a link, because the public route hashes what it is given. Expired is computed on read. Stub rows written by deletion or restore may lack `created_at` and `expires_at` and are listed as withdrawn. |
-| `GET /v1/registrations/{rid}/shares` | any member of the org | path rid (32 hex) | same row shape | The same index, filtered to one registration. It does not rely on `REG.share_hashes`, because a restore can re-create a registration with `share_hashes: []` while a withdrawn share stub still points at it. Another org's rid is the same 404 as an unknown one. |
-| `DELETE /v1/registrations/{rid}/shares/{share_id}` | any member of the org (same rule as today's withdraw) | path rid and `share_id` (64 hex) | `{withdrawn: true}` | Transaction conditions: `ORG#<caller org> / REG#<rid>` exists; the hash is in its `share_hashes` or has an index item under that rid; `SHARE.org` equals the caller's org and `SHARE.rid` equals rid. Otherwise the identical 404. The same withdraw items and tombstone as `DELETE /v1/shares/{token}`, so a reload or another admin can withdraw without the raw token. The token route stays. |
+| `GET /v1/registrations/{rid}/shares` | any member of the org | path rid (32 hex) | the `GET /v1/shares` row shape (see Shares) | The same index, filtered to one registration. It does not rely on `REG.share_hashes`, because a restore can re-create a registration with `share_hashes: []` while a withdrawn share stub still points at it. Another org's rid is the same 404 as an unknown one. |
 | `GET /v1/registrations/{rid}` | any member of the org | path rid | `{registration_id, state, received_at, disposition, recovery_version}` | The signed-in lookup behind Refresh. Deleted: `disposition: "deleted"`, no `received_at`. **Built 2026-11-19, not deployed:** `app.py` `get_registration` returns the `GET /v1/registrations` row shape (`registration_id`, `disposition`, `count`, `head`, `key_fingerprint`, `received_at`); no `state` (the console reads `disposition`) and no `recovery_version` yet, which AC-64/R48 still needs. Another org's rid is the same 404 as an unknown one. |
 | `GET /v1/recovery` | any member | none | `{recovery_version}` | The function's `RESTORE_ID`, an opaque string (empty before any restore) that `registry.restore` generates and never reuses. Clients compare it for equality with what they saved, never for order. Nothing is stored in the table for it. Every ack also returns it. |
-| `POST /v1/shares` (change) | unchanged | `expires_days` 1 to 30 | unchanged | 400 above 30. The cap applies at creation; reads check the stored `expires_at`, so an existing longer link keeps its expiry. No registry is deployed, so no production link exists to migrate. The transaction gains the index item and the journal creation record: five items (SHARE, SIDEM, the REG update, the index item, the journal record); registration becomes four (REG, IDEM, QUOTA, the journal record). The cost audit counts both. |
+| `POST /v1/shares` (change) | unchanged | `expires_days` 1 to 30 | unchanged | 400 above 30. The cap applies at creation; reads check the stored `expires_at`, so an existing longer link keeps its expiry. No registry is deployed, so no production link exists to migrate. The transaction already has the index item (four items today: SHARE, the REG update, SIDEM, the index item, built with R36); the journal creation record would make it five, and registration four (REG, IDEM, QUOTA, the journal record). The cost audit counts the four-item share transaction today. |
 
-Proposed stored items (not built; added to "Stored" when built): the share index item above, and the security journal (spine AD-20): a second on-demand table holding a copy of every TOMB item and a creation record for each registration and share (org, id, original `received_at` or `created_at` and `expires_at`, fingerprint, head, count; never a token), written in the same transaction as the item it records, with PITR, deletion protection and RETAIN in production and `enrolled_by` scrubbed after 90 days like the KEY items. Restore applies the union of served-table and journal tombstones with the most revoked state per target (spine AD-20).
+Proposed stored items (not built; added to "Stored" when built): the security journal (spine AD-20): a second on-demand table holding a copy of every TOMB item and a creation record for each registration and share (org, id, original `received_at` or `created_at` and `expires_at`, fingerprint, head, count; never a token), written in the same transaction as the item it records, with PITR, deletion protection and RETAIN in production and `enrolled_by` scrubbed after 90 days like the KEY items. Restore applies the union of served-table and journal tombstones with the most revoked state per target (spine AD-20).
 
 Registration lists: a future registration-list UI must accept stub rows from deletion or restore that have no `count`, `head` or `key_fingerprint`.
 
@@ -336,6 +353,25 @@ Registration lists: a future registration-list UI must accept stub rows from del
   after the backup, when re-sent, gets a new `received_at` instead of the original. Both are fixed by the security
   journal (spine AD-20), which brings back the original times.
 
+## Actor IDs (90 days, R52)
+
+The only long-lived actor ID is `enrolled_by`, the enrolling admin's opaque `sub` on KEY items and key tombstones
+(spine AD-2). `registry/registry/scrub.py` replaces it with the placeholder `scrubbed` once `now - enrolled_at` is 90
+days or more (a missing `enrolled_at` counts as 0, so it is scrubbed at once). Nothing else on those items changes:
+state, `at`, `changed_at`, kind, fingerprint and pilot fields stay, because restore and anti-reuse need them. The
+placeholders `scrubbed`, `restore` and `unknown` are never rewritten, and `enrolled_by_me` is false for them. CHAL and
+ENV items (which hold a `sub`) are deleted once past `expires_at`, which is stricter than 90 days; reads already treat
+them as gone. Every scrub write is conditional (the item still exists with the same `enrolled_by`, or is still
+expired), so a race never creates an item. A key-state change on a key enrolled 90 days ago or more writes `scrubbed` into its tombstone itself (`_tomb_for`), so a change racing with the scrub never puts the `sub` back. It is idempotent: a rerun writes nothing.
+
+It runs in two places: a daily scheduled function (`registry.scrub.handler`, its own role with Scan, UpdateItem and
+DeleteItem on the table only, 60 s, its own 7-day log group; it logs only the count), and `registry.restore`, which
+scrubs the restored table before it writes the marker (a scrub failure leaves no marker, so the gate stays closed).
+Not covered: PITR backups (35 days in production) still hold IDs up to that window; Cognito keeps users until an admin
+deletes them; logs expire in 7 days and are not rewritten. An opaque `sub` is pseudonymous, not anonymous. This is
+product policy, not a compliance certification. Not run on AWS (the scheduled function is synthesised only; the scrub
+itself ran against LocalStack's DynamoDB).
+
 ## What TTL does not guarantee
 
 DynamoDB TTL deletes expired items in the background, typically within days, with no exact deadline. The registry
@@ -348,6 +384,18 @@ no TTL (a share hash must stay claimed; see Shares).
 
 Any DynamoDB error while reading share, registration, key, idempotency, envelope or restore-marker state is a 503;
 nothing is served from a partial read. All reads are strongly consistent.
+
+## Cost and the budget pause (R56)
+
+$5 a month is a target, not a cap ([COST.md](COST.md)). The optional budget (only with `BudgetEmail`) sends email
+when actual spend passes 80 % or forecast spend passes 100 %; it stops nothing. The response is an operator step:
+`cdk deploy --parameters TrafficPaused=true` sets the `$default` stage's default route throttle and the public share
+route's throttle to rate 0, burst 0, and `TrafficPaused=false` restores rate 2, burst 5. The table, tombstones, user
+pool and identities are untouched, nothing else in the template reads the parameter, and later plain deploys keep its
+previous value ([RUNBOOK_AWS.md](RUNBOOK_AWS.md) "When the budget alert fires"). Until someone runs it, and while
+billing data catches up (hours), spend continues. The pause is not wired to the budget automatically. Synthesised
+and asserted only: how API Gateway answers a throttle of 0 (expected: its own 429) and whether those requests are
+billed are not verified. The Lambda's 503 `paused` and the outbox's waiting state (spine AD-18) are not built.
 
 ## Not built
 

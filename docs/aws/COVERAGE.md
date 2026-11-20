@@ -42,8 +42,11 @@ Columns:
 | `apply_tombstones` re-applies withdrawals, deletions, key rotations and compromises (then recomputes the active key) and the org epoch; refuses on unreadable source | yes | pass for re-apply, against two DynamoDB tables; the backup was **emulated** (items copied, withdrawal and deletion undone) because community LocalStack has no PITR restore. Refusal not tested there | not verified | |
 | Key enrollment: admin only, single-use 5-minute challenge, `confirm_replace` | yes | pass (enroll) | not verified | |
 | List registrations with a cursor; list keys | yes | pass | not verified | |
+| R36: list shares (admin), newest first, bounded pages with a cursor, other org sees none, restore stub listed withdrawn; withdraw by share id, identical 404s for unknown / other org / wrong registration | yes | pass (two shares listed newest first one per page by a descending Query; withdraw by id, then the link 404 and the list says withdrawn; a pilot gets 403) | not verified | routes synthesised with the JWT authorizer |
+| R52: actor-ID scrub at 90 days (KEY items, key tombstones; expired CHAL/ENV deleted), idempotent, conditional writes, run by `registry.restore` before the marker | yes (day 89, 90, 91, rerun, race, restore) | pass (a 91-day-old KEY item scrubbed by a conditional update, rerun 0); the restore drill also ran it | not verified | the daily scheduled function is synthesised and asserted, never run |
+| R56: reversible traffic pause, `TrafficPaused=true` sets the stage default and the public route throttle to 0 | — | blocked: HTTP API not in the community plan | not verified | synthesised; asserted (both `Fn::If` 0, only the stage reads the condition) |
 | Epoch bump invalidates an outstanding envelope | yes | pass | not verified | |
-| boto3 adapter: Get, Put, Update (SET/REMOVE/ADD), conditional Delete, Query with cursor, Scan, TransactWriteItems with cancellation reasons | — | exercised by the LocalStack rows marked pass | not verified | |
+| boto3 adapter: Get, Put, Update (SET/REMOVE/ADD), conditional Delete, Query with cursor (ascending and descending), Scan, TransactWriteItems with cancellation reasons | — | exercised by the LocalStack rows marked pass | not verified | |
 | DynamoDB data after `docker restart` with `PERSISTENCE=1` and a volume | — | survived (item read back directly) | not verified | |
 | Lambda and REST API after `docker restart` | — | **did not survive** (function and API gone) | not verified | |
 | DynamoDB data after `docker rm` and re-create on the same volume | — | survived | not verified | |
@@ -57,7 +60,7 @@ Columns:
 | Share idempotency: client-made token, hash + idempotency key; a lost-response retry returns the same share; key bound to registration and token hash; a withdrawn share is never reopened | yes, and in Chromium (the dev server commits, then drops the connection) | pass for create/view/withdraw with the new body; the lost-response retry is not run there | not verified | |
 | `GET /v1/epoch`; 422 `envelope_expired` / `sub_mismatch` / `epoch_mismatch` | yes | pass (`epoch_mismatch` after an epoch bump) | not verified | |
 | Cognito Lite pool, read-only custom attributes, ID-token claims | — | blocked: not in the community plan | not verified | synthesised; asserted |
-| IAM scoped to the table ARN with item actions only | — | not enforced by LocalStack community | not verified | synthesised; asserted |
+| IAM scoped to the table ARN: item actions only for the request function (no Scan); Scan, UpdateItem and DeleteItem for the scrub function | — | not enforced by LocalStack community | not verified | synthesised; asserted |
 | Log group with 7-day retention | — | — | not verified | synthesised; asserted |
 | Optional budget (only with `BudgetEmail`) | — | — | not verified | synthesised; asserted |
 | Lambda asset holds only `handler.py` and `registry/*.py` (no dev server, tests, LocalStack scripts or `__pycache__`) | — | — | not verified | synthesised; asserted (built asset directory listed) |

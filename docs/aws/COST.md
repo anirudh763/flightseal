@@ -5,7 +5,10 @@ deployed, and every duration below is an estimate, not a measurement on Lambda.
 
 **$5 a month is a target, not a cap.** An AWS Budget only sends an email when actual or forecast spend crosses a
 threshold. It does not stop resources, reject requests or limit spend. Under sustained abuse this stack can cost more
-than $5 (see the abuse scenario).
+than $5 (see the abuse scenario). The budget response is an operator step: redeploy with `TrafficPaused=true`, which
+sets both stage throttles to 0 and keeps the data (see "When the budget alert fires" in
+[RUNBOOK_AWS.md](RUNBOOK_AWS.md)). Spend keeps accruing until someone does that, billing data reaches the budget
+hours late, and whether requests refused by a throttle of 0 are billed is not verified.
 
 ## Where the rates come from
 
@@ -60,15 +63,17 @@ request, billed at 0.125 GB.
 | HTTP API requests | 8,500 | $0.0085 |
 | Lambda requests | 8,500 | $0.0017 |
 | Lambda compute | 1,000 × 0.3 s × 0.125 GB + 7,500 × 0.05 s × 0.125 GB = 84 GB-s | $0.0011 |
-| DynamoDB writes | envelopes 1,000 × 1 + registrations 1,000 × 3 items × 2 + shares 1,000 × 2 items × 2 = 11,000 WRU | $0.0069 |
+| DynamoDB writes | envelopes 1,000 × 1 + registrations 1,000 × 3 items × 2 + shares 1,000 × 4 items × 2 (SHARE, the REG update, SIDEM, the list index item) = 15,000 WRU | $0.0094 |
 | DynamoDB reads (strongly consistent) | registrations 4,000 + envelopes 1,000 + shares 1,000 + checks 10,000 + other 1,000 = 17,000 RRU | $0.0021 |
 | DynamoDB storage | under 0.01 GB (inside the 25 GB free storage tier in the price list) | $0.0000 |
 | PITR (only with `-c stage=prod` or `-c pitr=true`) | under 0.01 GB | under $0.0020 |
 | CloudWatch Logs | about 350 bytes per invocation (one app line plus the platform lines): 3 MB ingested, 7 days kept | $0.0015 |
 | Cognito Lite | 5 MAU | $0.0275 |
 | Data out | about 500 bytes per response: 4 MB | $0.0004 |
+| Daily scrub (R52) | 30 invocations × at most 60 s × 0.125 GB; two strongly consistent Scans a day of a table under 1 MB (at most about 512 RRU a day) | under $0.003 |
+| EventBridge schedule | one rule, 30 scheduled invocations | not priced here (no fixed fee) |
 | AWS Budgets | one cost budget with email alerts | $0.00 |
-| **Total** | | **about $0.05** |
+| **Total** | | **about $0.06** (about $0.05 before the share list index item and the daily scrub) |
 
 ## Error and retry scenario
 
@@ -142,17 +147,19 @@ What AWS's own pages say was checked on 2026-11-17. Neither question is settled 
   was lowered from 10 a second, burst 20 to **2 a second, burst 5**, which is sized for about 5 users.
   - A flood with invalid tokens is stopped by the JWT authorizer before the Lambda. If authorizer-rejected requests
     are billed:
-    - Per-route reading (12 signed-in routes): at most 12 × 2 × 86,400 × 30 = 62.2 M requests a month, about
-      **$62**.
+    - Per-route reading (17 signed-in routes): at most 17 × 2 × 86,400 × 30 = 88.1 M requests a month, about
+      **$88**.
     - Shared reading: 5.18 M requests a month, about **$5**.
-  - On top of the public-route $8, the worst case with throttled requests free is therefore about **$70 a month**.
+  - On top of the public-route $8, the worst case with throttled requests free is therefore about **$96 a month**
+    (it was about $70 when this was written for 12 signed-in routes).
     Before this change it was about $8 plus $300 under the per-route reading.
   - If throttled requests are billed, there is no ceiling under either reading.
   - The cost of the lower limit: if the limit is shared, a few people signing in at the same moment can get 429s.
     The outbox retries a registration that gets any 429 other than `quota_exceeded`.
   - All of this is unverified on AWS, because the stack has never been deployed.
 - **Budget alerts:** they only send email. They do not stop requests or limit spend. When one fires, follow
-  "When the budget alert fires" in [RUNBOOK_AWS.md](RUNBOOK_AWS.md).
+  "When the budget alert fires" in [RUNBOOK_AWS.md](RUNBOOK_AWS.md): the reversible pause (`TrafficPaused=true`)
+  sets both throttles to 0 and keeps the data. It is synthesised and asserted only, never run on AWS.
 
 Ways to lower the ceiling further without fixed-fee services:
 
