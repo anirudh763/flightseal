@@ -30,7 +30,7 @@ const FORBIDDEN = ['Company registry', 'Test sign-in', 'Export pending proofs', 
   // AC-37: the share record step (applyRegistryRecord) ships only in registry-on builds.
   "Matches the registry's record", "Doesn't match the registry's record for this link", "Files match · doesn't match the link", "This link was withdrawn or couldn't be checked", 'Registry record', 'Checking the share link',
   // Jobs row actions (R39/AD-15): the saved-ack wording, Refresh's errors, the record actions and the one-record route.
-  'Last confirmed by this device', 'The registry has no record with this ID', "couldn't confirm this record", 'Make a share link', 'Delete hosted record', '/v1/registrations'];
+  'Last confirmed by this device', 'The registry confirmed this record.', 'The registry has no record with this ID', "couldn't confirm this record", 'Make a share link', 'Delete hosted record', '/v1/registrations'];
 const JWT = /eyJ[\w-]+\.eyJ[\w-]+\./; // any signed token (a pasted dev token is an HS256 JWT)
 const LINK_DEAD = "This link doesn't open. It may have been withdrawn or expired, or it was copied incompletely. Ask the sender for a new link.";
 const SEED_A_PEM = `-----BEGIN PRIVATE KEY-----\n${Buffer.concat([Buffer.from('302e020100300506032b657004220420', 'hex'), Buffer.from([...Array(32).keys()])]).toString('base64')}\n-----END PRIVATE KEY-----\n`;
@@ -375,7 +375,7 @@ try {
     assert.ok(bodies.length > 0 && bodies.every((b) => !b.includes('JOBREF-MARKER-91')), 'the job reference is never sent');
     await page.waitForFunction(() => document.querySelector('.registry-announce')?.textContent.includes('flight-a.ulg: Registered'));
     const row = await openRow(page, 'flight-a.ulg');
-    assert.match(await row.locator('.registry-detail').innerText(), /^Last confirmed by this device \d{4}-\d\d-\d\d \d\d:\d\d:\d\d UTC\. This is the registry's statement, not proof of the files\./, 'a saved ack reads as this device\'s last confirmation');
+    assert.match(await row.locator('.registry-detail').innerText(), /^Last confirmed by this device \d{1,2} [A-Z][a-z]{2},? \d\d:\d\d\. This is the registry's statement, not proof of the files\./, 'a saved ack reads as this device\'s last confirmation');
     assert.match(await page.locator('.registry-summary').innerText(), /^2 registered · 1 not yet registered$/);
     assert.equal(await row.getByRole('button', { name: 'Delete hosted record' }).count(), 0, 'members see no delete');
   });
@@ -1336,7 +1336,7 @@ try {
         assert.equal(facts.Package, `${REG}.fseal`);
         assert.match(facts.Items, /^1 item · [\d,]+ bytes$/);
         assert.ok(facts.Sealed, 'sealed time');
-        assert.match(facts['Registry status'], /^Last confirmed by this device \d{4}-\d\d-\d\d \d\d:\d\d:\d\d UTC\. This is the registry's statement, not proof of the files\.$/, 'a saved ack: this device\'s last confirmation');
+        assert.match(facts['Registry status'], /^Last confirmed by this device \d{1,2} [A-Z][a-z]{2},? \d\d:\d\d\. This is the registry's statement, not proof of the files\.$/, 'a saved ack: this device\'s last confirmation');
         await detail.getByRole('button', { name: 'Copy receipt message' }).click();
         await jp.getByText('Receipt message copied.').waitFor();
         assert.match(await jp.evaluate(() => navigator.clipboard.readText()), /fseal-receipt v1 count=/);
@@ -1422,7 +1422,7 @@ try {
         assert.equal(await jobChip(REG), 'Registered', 'the chip text is unchanged');
         const before = await gets();
         await openDetail(REG);
-        assert.match(await detailLine(), new RegExp(`^Last confirmed by this device ${TIME}\\. ${STATEMENT}$`));
+        assert.match(await detailLine(), new RegExp(`^Last confirmed by this device \\d{1,2} [A-Z][a-z]{2},? \\d\\d:\\d\\d\\. ${STATEMENT}$`));
         assert.equal(await detail.getByRole('button', { name: 'Delete hosted record' }).count(), 0, 'members see no delete');
         await sleep(300);
         assert.equal(await gets(), before, 'no lookup until Refresh is pressed');
@@ -1537,6 +1537,14 @@ try {
         await go(jp, 'jobs');
         await waitJobChip(DEL, 'Registered');
         await openDetail(DEL);
+        assert.match(await detailLine(), /^Last confirmed by this device /);
+        for (const width of [320, 1440]) { // the state most users see: a saved ack, Refresh, share and (admin) delete
+          await jp.setViewportSize({ width, height: 900 });
+          assert.ok((await jp.evaluate(() => document.documentElement.scrollWidth - innerWidth)) <= 0, `jobs admin@${width}: no horizontal scroll`);
+          await axe(jp, `jobs admin@${width}`);
+          await jp.screenshot({ path: join(OUT, `jobs-admin-${width}.png`), fullPage: true });
+        }
+        await jp.setViewportSize({ width: 1440, height: 900 });
         await detail.getByRole('button', { name: 'Delete hosted record' }).click();
         const dialog = detail.locator('dialog[open]');
         await dialog.getByRole('heading', { name: 'Delete the hosted record?' }).waitFor();

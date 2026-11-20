@@ -1298,6 +1298,6 @@ table.jobs-table { min-width: 0; width: 100%; table-layout: auto; }
   .jobs-table .jobs-detail-row > td { padding: 8px; }
   .jobs-detail { grid-template-columns: minmax(0, 1fr); gap: 2px; }
   .jobs-detail dd + dt { margin-top: 8px; }
-  .jobs-detail-row .actions-row .button { width: 100%; }
+  .jobs-detail-row .actions-row .button, .jobs-detail-row .registry-delete > .button { width: 100%; }
 }
 @media (forced-colors: active) { .jobs-status { border: 1px solid CanvasText; } }

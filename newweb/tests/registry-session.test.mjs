@@ -253,10 +253,10 @@ test('Jobs status for each outbox state, pending proofs and no record, matched o
   const reg = { state: 'registered', disposition: 'active', label: 'Registered', registration_id: 'r'.repeat(32), received_at: '2026-11-17T10:00:05Z', acked_at: Date.parse('2026-11-18T09:30:00.123Z') };
   const { row: kept, ...registered } = of(row(reg));
   assert.deepEqual(registered, { label: 'Registered', kind: 'ok', group: 'registered', company: 'orgA', at: null,
-    line: "Last confirmed by this device 2026-11-18 09:30:00 UTC. This is the registry's statement, not proof of the files." }, 'a saved ack: this device\'s last confirmation, not the registry time');
+    line: `Last confirmed by this device ${new Date(reg.acked_at).toLocaleString('en-GB', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' })}. This is the registry's statement, not proof of the files.` }, 'a saved ack: this device\'s last confirmation, not the registry time');
   assert.equal(kept.registration_id, reg.registration_id, 'the outbox row rides along for the detail actions');
   assert.equal(of({ ...row(reg), confirmed: { [reg.registration_id]: '2026-11-17T10:00:05Z' } }).line, "Registered at 2026-11-17 10:00:05 UTC. This is the registry's statement, not proof of the files.", 'after Refresh: the registry\'s own time');
-  assert.match(of(row({ ...reg, acked_at: undefined })).line, /^Last confirmed by this device 1970-01-01 00:00:00 UTC\./, 'no acked_at: updated_at');
+  assert.ok(of(row({ ...reg, acked_at: undefined })).line.startsWith(`Last confirmed by this device ${new Date(5).toLocaleString('en-GB', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' })}.`), 'no acked_at: updated_at');
   const deleted = of(row({ state: 'registered', disposition: 'deleted', label: 'Registered, later deleted' }));
   assert.deepEqual([deleted.label, deleted.kind, deleted.group], ['Registered, later deleted', 'neutral', 'registered']);
   const attention = of(row({ state: 'needs_attention', reason: 'key_not_enrolled', label: 'Needs attention' }));

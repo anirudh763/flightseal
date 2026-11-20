@@ -412,12 +412,13 @@ function chipOf(row) { // the outbox's own labels, verbatim
   return [row.label, row.state === 'registering' ? 'neutral registry-dots' : 'neutral'];
 }
 const utc = (iso) => String(iso || '').replace('T', ' ').replace(/Z$/, ' UTC');
-const utcMs = (ms) => { const d = new Date(ms); return Number.isNaN(d.getTime()) ? '' : utc(d.toISOString().replace(/\.\d{3}Z$/, 'Z')); };
+// This device's own time, as Jobs shows its Sealed column (EXPERIENCE.md: "Last confirmed by this device 17 Nov 15:42"); UTC stays for the registry's clock.
+const deviceTime = (ms) => new Date(ms).toLocaleString('en-GB', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' });
 const STATEMENT = "This is the registry's statement, not proof of the files.";
 // R39/AD-15: a saved ack is this device's last confirmation; only a Refresh this session shows the registry's own time.
 function registeredLine(row, confirmed = {}) {
   const at = confirmed[row.registration_id];
-  return at ? `Registered at ${utc(at)}. ${STATEMENT}` : `Last confirmed by this device ${utcMs(row.acked_at ?? row.updated_at)}. ${STATEMENT}`;
+  return at ? `Registered at ${utc(at)}. ${STATEMENT}` : `Last confirmed by this device ${deviceTime(row.acked_at ?? row.updated_at)}. ${STATEMENT}`;
 }
 
 // Jobs (flag on): each job's status from this snapshot's outbox rows and pending proofs, matched on registryLine (the line the registry got).
@@ -600,7 +601,7 @@ function shareError(res) {
 function refreshError(res) {
   if (res.kind === 'network' || res.kind === 'timeout') return "The registry didn't answer. Check your connection, then try again.";
   if (res.status === 401) return 'Your registry sign-in has ended. Sign in again on the Trust page, then try again.';
-  if (res.status === 404) return "The registry has no record with this ID for your company. This device's saved status is unchanged.";
+  if (res.status === 404 && res.code === 'not_found') return "The registry has no record with this ID for your company. This device's saved status is unchanged.";
   return "The registry couldn't confirm this record right now. Try again in a few minutes.";
 }
 

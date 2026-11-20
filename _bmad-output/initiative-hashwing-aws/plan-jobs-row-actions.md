@@ -77,6 +77,7 @@ deferred: []
 
 - The first implementation subagent stopped (host went to sleep) while it was updating docs; the parent checked its diff, re-ran the console rebuild rule and every gate, and wrote the ledger, EXPERIENCE and AGENTS changes.
 - One `RecordActions` component (Refresh, `ShareLinks`, admin `DeleteRecord`) serves Seal & send's list and the Jobs detail; made links and refreshed records sit in the session store and end with the sign-in.
+- After review: the device's observation time is shown in local time, the same as the Sealed column ("19 Nov, 23:26", as in EXPERIENCE.md's examples); UTC is kept for the registry's received_at. A 404 reads "no record" only when its code is `not_found`, so a gateway 404 from an undeployed route gets the generic message. Admin screenshots at 320 and 1440 show the un-refreshed state. At 320, Delete hosted record is full width. Full pytest: 365 passed, 30 skipped.
 - Chip text stays "Registered" (deferred, see Design Notes). The flag-off bundle carries no new copy; only the class name `jobs-company` and the prop name `detailActions` appear as code.
 
 ## Plan Change Log
