@@ -1,0 +1,4 @@
+HW-TRIAL-001 | Synthetic roof inspection
+Exercise only. No real property, policy, claim, aircraft, or operator.
+Simulated event: inspection ended after an unexpected landing.
+Reported flight end for the exercise: 2026-11-21 14:10 local time.
