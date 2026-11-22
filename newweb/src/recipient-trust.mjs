@@ -56,10 +56,11 @@ export function reportedInterval(landingIso, sealedIso) {
 export const SEALED_BASIS = "this computer's clock, not verified; from the receipt message, not signed";
 /** Every time a recipient sees, with where it came from. `registry` ({ value, basis }) replaces the registry row
  * when the console is built with a registry (registry-ui.jsx registryTimeField); without one, no registry was used. */
-export function timeFields({ landing = '', landingSigned = false, sealedAt = '', registry = null } = {}) {
+export function timeFields({ landing = '', landingSigned = false, sealedAt = '', registry = null, proofReport = null } = {}) {
+  if (proofReport) { landing = proofReport.flightEnded || ''; sealedAt = proofReport.sealedAt; }
   return [
-    { label: 'Reported landing time', value: landing || 'Not entered', basis: landing ? (landingSigned ? 'operator-entered, signed, not verified' : 'operator-entered, not signed, not verified') : 'not entered by the operator' },
-    { label: 'Sealed on this computer at', value: sealedAt || 'Unknown', basis: SEALED_BASIS },
+    { label: proofReport ? 'Flight ended · operator reported' : 'Reported landing time', value: landing || 'Not entered', basis: landing ? (landingSigned ? 'operator-entered, signed, not verified' : 'operator-entered, not signed, not verified') : 'not entered by the operator' },
+    { label: proofReport ? 'Sealed · device clock' : 'Sealed on this computer at', value: sealedAt || 'Unknown', basis: proofReport ? 'signed device-clock reading; no independent time check' : SEALED_BASIS },
     { label: 'Registry acceptance', ...(registry ? { value: registry.value, basis: registry.basis } : { value: 'Not registered', basis: 'no registry was used' }) },
     { label: 'Trusted timestamp', value: 'None', basis: 'receipt v1 has no signed time' },
     { label: 'Reported landing-to-seal interval', value: reportedInterval(landing, sealedAt).text, basis: 'worked out from the two times above; it is only as good as they are' },
@@ -231,15 +232,15 @@ export function pairFiles(manifest, locals) {
 
 /** Report for a verified manifest check. items: compareFiles items; locals: hashed local files. */
 /** applyRecord: optional (result) => applyRegistryRecord(...) closure, built only in registry-on code. */
-export function manifestReport({ sealedName = '', trust, sources = {}, keyFingerprint = '', head = '', sealedAt = '', items = [], extras = [], locals = [], registry = null, applyRecord = null }) {
+export function manifestReport({ sealedName = '', trust, sources = {}, keyFingerprint = '', head = '', sealedAt = '', items = [], extras = [], locals = [], registry = null, applyRecord = null, proofReport = null }) {
   const checked = verdict({ signed: true, trust, items, extras });
   const { result, line: record } = applyRecord ? applyRecord(checked) : { result: checked, line: null };
   const resultLine = `Result: ${result.headline}. ${result.sentence}`;
   const recordLines = record ? [`${record.label}: ${record.value}`] : [];
   const parsed = items.map((item) => ({ ...item, ...parseNote(item.note) }));
   const landings = [...new Set(parsed.map((item) => item.landing).filter(Boolean))];
-  const fields = timeFields({ landing: landings.length === 1 ? landings[0] : landings.length ? 'Differs by item (see items)' : '', landingSigned: true, sealedAt, registry });
-  if (landings.length > 1) fields[4] = { ...fields[4], value: 'See items' };
+  const fields = timeFields({ landing: landings.length === 1 ? landings[0] : landings.length ? 'Differs by item (see items)' : '', landingSigned: true, sealedAt, registry, proofReport });
+  if (!proofReport && landings.length > 1) fields[4] = { ...fields[4], value: 'See items' };
   const line = trustLine(trust, sources);
   const entry = trust?.entry;
   const differs = parsed.some((item) => item.status === 'bytes-differ');
@@ -259,6 +260,7 @@ export function manifestReport({ sealedName = '', trust, sources = {}, keyFinger
     resultLine,
     ...recordLines,
     `HashWing manifest check report: ${sealedName}`,
+    ...(proofReport ? [`Case ID: ${proofReport.caseId}`] : []),
     'Manifest: verified (signature checked)',
     `Key trust: ${line}`,
     ...(entry ? [`Key source: ${sources[entry.source] || entry.source}`] : []),
@@ -275,13 +277,13 @@ export function manifestReport({ sealedName = '', trust, sources = {}, keyFinger
     'Names, sizes and digests come from the signed manifest. Operator notes and times are what the operator entered; HashWing did not measure them.',
   ].join('\n') + '\n';
   const markdown = `${[resultLine, ...recordLines].join('\n\n')}\n\n# HashWing manifest check report\n\n${[
-    `- Sealed list: ${sealedName}`, '- Manifest: verified (signature checked)', `- Key trust: ${line}`,
+    `- Sealed list: ${sealedName}`, ...(proofReport ? [`- Case ID: ${proofReport.caseId}`] : []), '- Manifest: verified (signature checked)', `- Key trust: ${line}`,
     ...(entry ? [`- Key source: ${sources[entry.source] || entry.source}`] : []), `- Key fingerprint: \`SHA-256 ${groups(keyFingerprint)}\``, `- Chain head: \`${head}\``,
   ].join('\n')}\n\n## Times\n\n${fields.map((field) => `- ${field.label}: ${field.value} (${field.basis})`).join('\n')}\n\n## Files\n\n${[...itemLines, ...extraLines].map((l) => (l.startsWith('  ') ? `  - ${l.trim()}` : `- ${l}`)).join('\n')}\n${differs ? `\n## ${BYTES_DIFFER.title}\n\n${BYTES_DIFFER.text}\n` : ''}`;
   const keyTrust = { status: trust?.status || 'untrusted', line, company: entry?.name ?? null, source: entry?.source ?? null, sourceLabel: entry ? (sources[entry.source] || entry.source) : null, addedAt: entry?.addedAt || null, confirmedAt: entry?.confirmedAt || null, replacedAt: entry?.replacedAt || null, compromisedAt: trust?.compromisedAt || entry?.compromisedAt || null, fingerprint: keyFingerprint || null };
   const json = JSON.stringify({
-    result: resultLine, kind: 'hashwing-manifest-check', sealedFile: sealedName, verdict: { key: result.key, headline: result.headline, sentence: result.sentence }, ...(record ? { record } : {}), manifestVerified: true, head, keyTrust,
-    timeProvenance: { fields, intervalMs: reportedInterval(landings.length === 1 ? landings[0] : '', sealedAt).ms },
+    result: resultLine, kind: 'hashwing-manifest-check', sealedFile: sealedName, verdict: { key: result.key, headline: result.headline, sentence: result.sentence }, ...(record ? { record } : {}), manifestVerified: true, head, keyTrust, ...(proofReport ? { caseId: proofReport.caseId } : {}),
+    timeProvenance: { fields, intervalMs: reportedInterval(proofReport ? proofReport.flightEnded : landings.length === 1 ? landings[0] : '', proofReport?.sealedAt || sealedAt).ms },
     fileComparison: {
       items: parsed.map((item) => ({ id: item.id, status: item.status, statusLabel: STATUS[item.status], name: item.name, bytes: item.bytes, sha256: item.sha256, localName: item.local == null ? null : locals[item.local]?.name ?? null, localSha256: item.local == null ? null : locals[item.local]?.sha256 ?? null, reportedLanding: item.landing || null, derivedFrom: item.derivedFrom || null, note: item.note })),
       extras: extras.map((extra) => ({ name: extra.name, bytes: extra.bytes, sha256: extra.sha256, status: 'not-in-manifest' })),

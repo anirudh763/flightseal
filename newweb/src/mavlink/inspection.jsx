@@ -102,14 +102,16 @@ export function CaptureInspection({ onPackage, packageBlocked }) {
           {sampleDownload && <a className="button secondary" href={sampleDownload} download={result.name}>Download sample capture</a>}
           <button className="button secondary" type="button" disabled={packageBlocked} onClick={() => {
             const report = new File([JSON.stringify(result, null, 2) + '\n'], 'hashwing-flight-report.json', { type: 'application/json' });
-            const url = URL.createObjectURL(report);
-            const link = document.createElement('a');
-            link.href = url;
-            link.download = report.name;
-            link.click();
-            setTimeout(() => URL.revokeObjectURL(url), 1000);
             onPackage([original.current, report]);
           }}>Prepare evidence package</button>
+          <button className="button secondary" type="button" onClick={() => {
+            const url = URL.createObjectURL(new Blob([JSON.stringify(result, null, 2) + '\n'], { type: 'application/json' }));
+            const link = document.createElement('a');
+            link.href = url;
+            link.download = 'hashwing-flight-report.json';
+            link.click();
+            setTimeout(() => URL.revokeObjectURL(url), 1000);
+          }}>Download inspection report</button>
         </div>
         <p>Packet sender authentication was skipped. Use Seal &amp; send to preserve the original capture.</p>
       </div>}

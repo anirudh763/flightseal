@@ -1,3 +1,4 @@
+import { createProofBundle, makeProofReport, openProofBundle, proofReportItem, readSignedReport, validCaseId } from './proof-bundle.mjs';
 import { ReviewQueue } from './review-queue.jsx';
 import React, { useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { createRoot } from 'react-dom/client';
@@ -160,6 +161,7 @@ function App() {
   const [checkText, setCheckText] = useState('');
   const [checkCompany, setCheckCompany] = useState(''); // a trusted company's name: its key must have signed the receipt
   const [checkKey, setCheckKey] = useState(''); // More options: a key the sender gave separately (overrides the company)
+  const [proofInput, setProofInput] = useState(null);
   const [checkIsList, setCheckIsList] = useState(false); // the chosen sealed file holds a list (manifest), so Originals show
   const [checkError, setCheckError] = useState(null); // { field, message }: read with its field (focus table)
   const [verifyMode, setVerifyMode] = useState(null); // null: from the URL (?mode=), a share link, or VERIFY_OPENS_ON
@@ -358,7 +360,7 @@ function App() {
   const askComplete = unsavedAsk ? unsavedAsk.listed.some((p) => p.files.every((f) => unsavedAsk.done.has(f.name))) : false;
   // Sealed results whose every unsaved part was downloaded from the handoff: the user can confirm them without a second download.
   // Each names what "I saved it" would confirm: the file, plus its receipt when only the receipt's download was started.
-  const startedName = (r, name) => (r.saved?.receipt ? [name] : [name, `${name.replace(/(\.manifest)?\.fseal$/, '')}.receipt.txt`]);
+  const startedName = (r, name) => (r.bundle || r.saved?.receipt ? [name] : [name, `${name.replace(/(\.manifest)?\.fseal$/, '')}.receipt.txt`]);
   const startedParts = [...(protectUnsaved && startedAll(protectSealed) ? [{ names: startedName(protectSealed, protectSealed.log.name), markSaved: () => { markProtectSaved(protectSealed.log, 'file'); markProtectSaved(protectSealed.log, 'receipt'); } }] : []),
     ...(manifestUnsaved?.requested ? [{ ...manifestUnsaved, names: startedName(manifestOutput || {}, manifestUnsaved.name) }] : [])];
   const startedNames = startedParts.flatMap((p) => p.names);
@@ -423,7 +425,7 @@ function App() {
       const text = event.clipboardData?.getData('text/plain') || '';
       if (!text.includes('fseal-receipt v1')) return;
       event.preventDefault();
-      invalidateCheck(); setProtectResult(null); setRestored(null); setCheckText(text); setVerifyMode('files'); // one form takes a file's or a list's message
+      proofPickRevision.current++; setProofInput(null); pickCheckFile(null); setCheckText(text); setVerifyMode('files'); // one form takes a file's or a list's message
       pasteFocusRef.current = 'check-file'; // next step: choose the sealed file or list
       navigate('verify');
     };
@@ -1266,10 +1268,29 @@ function App() {
   };
 
   const checkFileRef = useRef(null);
-  const pickCheckFile = (file) => {
-    invalidateCheck(); checkFileRef.current = file; setCheckFile(file); setProtectResult(null); setRestored(null); setError(''); setCheckError(null); setCheckIsList(false);
+  const pickCheckFile = (file, isBundle = false) => {
+    invalidateCheck(); checkFileRef.current = file; setCheckFile(file); setProtectResult(null); setRestored(null); setError(''); setCheckError(null); setCheckIsList(isBundle);
+    if (isBundle) return;
     // A list holds one record whose payload starts "hashwing-manifest v1"; the real check is verifySealedManifest.
     file?.slice(0, 96).text().then((head) => { if (checkFileRef.current === file) setCheckIsList(head.includes('hashwing-manifest v1 salt=')); }, () => {});
+  };
+  const proofPickRevision = useRef(0);
+  const pickProofInput = async (file) => {
+    const revision = ++proofPickRevision.current;
+    const hadBundle = Boolean(proofInput);
+    setProofInput(null);
+    pickCheckFile(null);
+    if (hadBundle || /\.zip$/i.test(file?.name || '')) setCheckText('');
+    if (!/\.zip$/i.test(file?.name || '')) { pickCheckFile(file); return; }
+    try {
+      const proof = await openProofBundle(file);
+      if (revision !== proofPickRevision.current) return;
+      pickCheckFile(proof.log, true);
+      setProofInput(proof);
+      setCheckText(proof.text);
+    } catch (cause) {
+      if (revision === proofPickRevision.current) failCheck('check-file', cause.message);
+    }
   };
   // The key that checks the signature: one typed under More options, else the one in the message. A chosen company
   // is checked against the signer's fingerprint and never silently dropped (see companyFingerprint).
@@ -1380,7 +1401,7 @@ function App() {
     setUnsavedAsk(null); setUnsavedError(''); setDiscardAsk(false);
     setSealOutput(null); setSealOutputAcknowledged(false); setCurrentSample(null); setDemoLabel(''); setError(''); setOperationStatus('');
     setVideoOffset('0'); clearVideo();
-    setManifestUnsaved(null); setManifestOutput(null); setProtectFile(null); setCarryToLarge(null); setProtectSealed(null); setProtectResult(null); setRestored(null); setProtectLanding(''); setProtectTimes(null); setCopyCompare(null); setCopyStatus(''); setCheckFile(null); setCheckText(''); setCheckKey(''); setCheckCompany(''); setCheckIsList(false); setCheckError(null); setLinkToken(''); setVerifyMode(null); setJobRef(''); setProtectStep(0); setProtectError(''); setManifestSealed(false); setResumedJob(null); setPendingResume(null); protectRunRef.current++;
+    setManifestUnsaved(null); setManifestOutput(null); setProtectFile(null); setCarryToLarge(null); setProtectSealed(null); setProtectResult(null); setRestored(null); setProtectLanding(''); setProtectTimes(null); setCopyCompare(null); setCopyStatus(''); proofPickRevision.current++; checkFileRef.current = null; setProofInput(null); setCheckFile(null); setCheckText(''); setCheckKey(''); setCheckCompany(''); setCheckIsList(false); setCheckError(null); setLinkToken(''); setVerifyMode(null); setJobRef(''); setProtectStep(0); setProtectError(''); setManifestSealed(false); setResumedJob(null); setPendingResume(null); protectRunRef.current++;
     receiptInvalidRef.current = false; receiptInvalidMessageRef.current = ''; sealPickerRef.current = false;
     if (receiptInputRef.current) receiptInputRef.current.value = '';
     if (workbenchFileRef.current) workbenchFileRef.current.value = '';
@@ -1889,7 +1910,15 @@ function App() {
               <label><input type="radio" name="protect-mode" value="manifest" checked={protectMode === 'manifest'} disabled={!!busy} onChange={() => setProtectMode('manifest')} />Large files: fingerprint only, files stay where they are</label>
             </fieldset>
           </>}
-          {resumedJob && <Handoff headingId="resumed-handoff-title"
+          {resumedJob?.name.endsWith('.hashwing.zip') ? <div className="handover handoff">
+            <h2 id="resumed-handoff-title" tabIndex={-1}>Proof bundle</h2>
+            <p><code className="wrap">{resumedJob.name}</code> · {resumedJob.items} original files</p>
+            <p>Open the ZIP you downloaded and its originals in Verify.</p>
+            <div className="actions-row">
+              <a className="button primary" href={workspaceHref('verify')}>Open Verify</a>
+              <button className="button secondary" type="button" onClick={() => { setResumedJob(null); sealStartFocusRef.current = true; }}>Seal more files</button>
+            </div>
+          </div> : resumedJob && <Handoff headingId="resumed-handoff-title"
             summary={`Sealed · ${resumedJob.items} file${resumedJob.items === 1 ? '' : 's'}${resumedJob.mode === 'large' ? ` · ${exactBytes(resumedJob.bytes)}` : ''}${resumedJob.jobRef ? ` · ${resumedJob.jobRef}` : ''}`}
             kind={resumedJob.mode === 'large' ? 'list' : 'file'} fileName={resumedJob.name} receiptName={`${resumedJob.name.replace(/(\.manifest)?\.fseal$/, '')}.receipt.txt`} unsaved={false} downloaded receiptSaved
             notHeld={`HashWing didn't keep a copy of ${resumedJob.name}. Use the copy you downloaded when you sealed it.`}
@@ -1966,17 +1995,17 @@ function App() {
       {/* Always mounted (hidden elsewhere), so a running check of large files survives a visit to another page. */}
       <div className="screen verify-files" hidden={screen !== 'verify' || shownVerifyMode !== 'files'}>
         <section className="panel verify-check" aria-labelledby="check-title"><div className="panel-head"><ShieldCheck aria-hidden="true" size={18} /><h2 id="check-title">Check files</h2></div><div className="panel-body">
-          <label className="field-label" htmlFor="check-file">Sealed file or list <span>(.fseal)</span></label>
-          <input id="check-file" type="file" accept=".fseal,application/octet-stream" aria-invalid={fieldError('check-file') ? 'true' : undefined} aria-describedby={fieldError('check-file') ? 'check-file-error' : undefined} onChange={(e) => pickCheckFile(e.target.files?.[0] || null)} />
+          <label className="field-label" htmlFor="check-file">Proof bundle or sealed file <span>(.zip, .fseal)</span></label>
+          <input id="check-file" type="file" accept=".zip,.fseal,application/zip,application/octet-stream" aria-invalid={fieldError('check-file') ? 'true' : undefined} aria-describedby={fieldError('check-file') ? 'check-file-error' : undefined} onChange={(e) => void pickProofInput(e.target.files?.[0] || null)} />
           {fieldError('check-file') && <p id="check-file-error" className="field-hint field-error">{fieldError('check-file')}</p>}
-          <label className="field-label" htmlFor="check-text">Receipt message</label>
+          <div hidden={proofInput?.log === checkFile}><label className="field-label" htmlFor="check-text">Receipt message</label>
           <textarea id="check-text" className="mono-input" rows={6} value={checkText} spellCheck="false" aria-invalid={fieldError('check-text') ? 'true' : undefined} aria-describedby={`check-text-hint${fieldError('check-text') ? ' check-text-error' : ''}`} onChange={(e) => { invalidateCheck(); setCheckText(e.target.value); setProtectResult(null); setRestored(null); setError(''); setCheckError(null); }} />
           <p id="check-text-hint" className="field-hint">Paste the whole message you were sent when the files were sealed, not one that arrives with the files now.</p>
-          {fieldError('check-text') && <p id="check-text-error" className="field-hint field-error">{fieldError('check-text')}</p>}
+          {fieldError('check-text') && <p id="check-text-error" className="field-hint field-error">{fieldError('check-text')}</p>}</div>
           {checkPins.length ? <><label className="field-label" htmlFor="check-company">Trusted company <span>(optional)</span></label>
             <select id="check-company" value={checkCompany} onChange={(e) => { invalidateCheck(); setProtectResult(null); setRestored(null); setCheckCompany(e.target.value); }}><option value="">Not chosen: look the key up in my list</option>{checkPins.map((pin) => <option key={pin.name} value={pin.name}>{pin.name}</option>)}</select></>
             : <><p className="field-label">Trusted company</p><p className="field-hint">No trusted companies yet. <a href={workspaceHref('help')} onClick={(e) => { if (e.button !== 0 || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return; e.preventDefault(); navigate('help'); }}>Add one on Trust</a></p></>}
-          {checkIsList ? <ManifestCheck sealed={checkFile} text={checkText} fromLink={!!shareToken} recordCheck={recordCheck} anchor={listKey.anchor} keyConflict={listKey.keyConflict} company={checkCompany} companyFingerprint={companyFingerprint()} options={checkOptions} fieldError={checkError} onFieldError={(field, message) => field ? failCheck(field, message) : setCheckError(null)} trustHref={workspaceHref('help')} onTrust={toTrust} onActiveChange={setManifestCheckActive} /> : <>
+          {checkIsList ? <ManifestCheck bundleReport={proofInput && proofInput.log === checkFile ? proofInput.report : null} sealed={checkFile} text={checkText} fromLink={!!shareToken} recordCheck={recordCheck} anchor={listKey.anchor} keyConflict={listKey.keyConflict} company={checkCompany} companyFingerprint={companyFingerprint()} options={checkOptions} fieldError={checkError} onFieldError={(field, message) => field ? failCheck(field, message) : setCheckError(null)} trustHref={workspaceHref('help')} onTrust={toTrust} onActiveChange={setManifestCheckActive} /> : <>
             {checkOptions}
             <button className="button primary" type="button" disabled={!checkFile || !checkText.trim() || !!busy} aria-describedby={checkWhy ? 'check-why' : undefined} onClick={runProtectCheck}>Check files</button>
             {checkWhy && <p id="check-why" className="field-hint">{checkWhy}</p>}
@@ -2533,6 +2562,7 @@ const startedAll = (r) => ['file', 'receipt'].every((k) => r.saved?.[k] || r.req
 
 function ManifestSeal({ hidden, output, setOutput, carry, common, jobRef, signingKey, pilotLine = '', onActiveChange, onUnsaved, onSealed, onDone, onSealMore, shareNote, jobScope, newJobId, onJob, ask, onKeep, onRunning }) {
   const [files, setFiles] = useState([]);
+  const [caseId, setCaseId] = useState('');
   const [includeNames, setIncludeNames] = useState(false);
   const [notes, setNotes] = useState({});
   const [landingLocal, setLandingLocal] = useState('');
@@ -2556,8 +2586,8 @@ function ManifestSeal({ hidden, output, setOutput, carry, common, jobRef, signin
   useEffect(() => () => onActiveChange(false), [onActiveChange]);
   useEffect(() => { // the sealed list and its receipt, until the list is downloaded; kept after this panel unmounts
     if (!output) return;
-    onUnsaved(!unsavedList ? null : { name: output.log.name, requested: startedAll(output), files: [{ name: output.log.name, blob: output.log }, { name: `${output.base}.receipt.txt`, bytes: new TextEncoder().encode(output.handover) }], markSaved: () => { // only this exact result, never a newer one
-      setOutput((current) => (current?.log === output.log ? { ...current, saved: { file: true, receipt: true } } : current)); onUnsaved((current) => (current?.files?.[0]?.blob === output.log ? null : current)); } });
+    onUnsaved(!unsavedList ? null : { name: output.bundle ? `${output.caseId}.hashwing.zip` : output.log.name, requested: startedAll(output), files: output.bundle ? [{ name: `${output.caseId}.hashwing.zip`, blob: output.bundle }] : [{ name: output.log.name, blob: output.log }, { name: `${output.base}.receipt.txt`, bytes: new TextEncoder().encode(output.handover) }], markSaved: () => { // only this exact result, never a newer one
+      setOutput((current) => (current?.log === output.log ? { ...current, saved: { file: true, receipt: true } } : current)); onUnsaved((current) => (current?.files?.[0]?.blob === (output.bundle || output.log) ? null : current)); } });
   }, [output, unsavedList, onUnsaved]); // eslint-disable-line react-hooks/exhaustive-deps
   const reset = () => { controllerRef.current?.abort(); setOutput(null); setMessage(''); setCopyStatus(''); setError(''); };
   useEffect(() => { // a file too large for Small file arrives already chosen, ready for "Seal the list"
@@ -2581,6 +2611,11 @@ function ManifestSeal({ hidden, output, setOutput, carry, common, jobRef, signin
     reset();
     // Same length as the real payload, so a long note or name fails now rather than after hours of hashing.
     try { encodeManifest({ salt: '0'.repeat(64), items: itemsFor(null) }); } catch (cause) { fail(cause?.code === 'note-tag' ? cause.message : friendlyLimit(cause)); return; }
+    const proofCase = caseId.trim();
+    if (proofCase && (!validCaseId(proofCase) || files.length > 99)) {
+      fail('Use a case ID with 1–64 letters, digits, periods, underscores or hyphens, and select up to 99 files.');
+      return;
+    }
     const controller = new AbortController(); controllerRef.current = controller;
     const sealStart = __REGISTRY_URL__ && onSealed ? registrySealStart() : null; // hashing can take hours: bind to the owner signed in now
     const scope = jobScope; // the job belongs to whoever was signed in when sealing began
@@ -2588,7 +2623,18 @@ function ManifestSeal({ hidden, output, setOutput, carry, common, jobRef, signin
     try {
       const hashed = await hashAll(files, controller.signal, setProgress, keptRef.current);
       keptRef.current = new WeakMap(); // kept only across a Cancel or a failure: a later Seal reads the files again
-      const items = itemsFor(hashed);
+      const sealedAt = new Date().toISOString();
+      const inspectionFile = proofCase && carry?.files?.[1];
+      const inspectionIndex = inspectionFile ? files.indexOf(inspectionFile) : -1;
+      // The handoff report preserves inspection findings. The original capture stays separate.
+      const inspection = inspectionIndex < 0 ? undefined : JSON.parse(await inspectionFile.text());
+      const report = proofCase ? makeProofReport({ caseId: proofCase, flightEnded: toIsoFromLocal(landingLocal) || null, sealedAt,
+        inspection: inspection && { schema: inspection.schema, parserRevision: inspection.parserRevision, frames: inspection.frames, checksumFailures: inspection.checksumFailures, unsupported: inspection.unsupported, sequenceGaps: inspection.sequenceGaps, findings: inspection.findings, omitted: inspection.omitted } }) : null;
+      const items = itemsFor(hashed).filter((_, index) => index !== inspectionIndex);
+      if (report) {
+        if (!items.length) throw new Error('Choose at least one original for the proof bundle.');
+        items.push(await proofReportItem(report));
+      }
       const payload = encodeManifest({ salt: newSalt(), items });
       setPhase('sealing'); setProgress(null);
       let sealed, check;
@@ -2604,17 +2650,21 @@ function ManifestSeal({ hidden, output, setOutput, carry, common, jobRef, signin
       const base = `hashwing-${stamp()}`;
       const fingerprint = await fingerprintHex(sealed.publicKey);
       const jobId = newJobId();
-      let handover = manifestHandoverText({ items: items.length, receipts: sealed.receipts, publicKey: sealed.publicKey, sealedAt: new Date().toISOString() });
+      let handover = manifestHandoverText({ items: items.length - Number(Boolean(report)), receipts: sealed.receipts, publicKey: sealed.publicKey, sealedAt });
       if (__REGISTRY_URL__ && pilotLine) handover = withPilotLine(handover.split('\n'), pilotLine).join('\n');
-      const total = hashed.reduce((sum, item) => sum + item.bytes, 0);
+      const originals = files.filter((_, index) => index !== inspectionIndex);
+      const total = originals.reduce((sum, file) => sum + file.size, 0);
+      const bundle = report ? await createProofBundle(sealed.log, handover, report) : null;
+      if (controller.signal.aborted) return;
       setOutput({
-        jobId, base, publicKey: sealed.publicKey, fingerprint, items: items.length, total, savedKey: !!signingKey?.privateKeyPem, saved: { file: false, receipt: false }, names: files.map((file) => file.name), jobRef: jobRef.trim(),
+        bundle, caseId: proofCase,
+        jobId, base, publicKey: sealed.publicKey, fingerprint, items: originals.length, total, savedKey: !!signingKey?.privateKeyPem, saved: { file: false, receipt: false }, names: originals.map((file) => file.name), jobRef: jobRef.trim(),
         log: new File([sealed.log], `${base}.manifest.fseal`, { type: 'application/octet-stream' }),
         handover,
       });
-      onJob({ id: jobId, jobRef: jobRef.trim(), name: `${base}.manifest.fseal`, mode: 'large', items: items.length, bytes: total, receipt: handover, sealedAt: Date.now() }, scope);
-      setMessage(`Sealed ${items.length} file${items.length === 1 ? '' : 's'}.`);
-      onSealed?.(sealed.receipts, `${items.length} file${items.length === 1 ? '' : 's'}`, sealStart);
+      onJob({ id: jobId, jobRef: jobRef.trim(), name: bundle ? `${proofCase}.hashwing.zip` : `${base}.manifest.fseal`, mode: 'large', items: originals.length, bytes: total, receipt: handover, sealedAt: Date.now() }, scope);
+      setMessage(`Sealed ${originals.length} file${originals.length === 1 ? '' : 's'}.`);
+      onSealed?.(sealed.receipts, `${originals.length} file${originals.length === 1 ? '' : 's'}`, sealStart);
     } catch (cause) {
       if (cause?.name === 'AbortError') { setMessage(`Sealing cancelled. Your files are still chosen.${files.some((file) => keptRef.current.has(file)) ? ' Files already read are reused; choose them again to re-read everything.' : ''}`); requestAnimationFrame(() => document.getElementById('manifest-seal')?.focus()); }
       else fail(cause?.message || 'Something went wrong. Press Seal the list again.');
@@ -2629,8 +2679,8 @@ function ManifestSeal({ hidden, output, setOutput, carry, common, jobRef, signin
   // "Seal more files" after the list was downloaded, or "Discard it": this result and its selection go, and so does its
   // place in the unsaved work (only this exact result), so a discarded list never blocks a logout.
   const sealMore = () => {
-    const log = output?.log;
-    reset(); setFiles([]); setNotes({}); setEdited({}); setDerived({}); setLandingLocal('');
+    const log = output?.bundle || output?.log;
+    reset(); setCaseId(''); setFiles([]); setNotes({}); setEdited({}); setDerived({}); setLandingLocal('');
     if (log) onUnsaved((current) => (current?.files?.[0]?.blob === log ? null : current));
     onSealMore();
   };
@@ -2641,6 +2691,24 @@ function ManifestSeal({ hidden, output, setOutput, carry, common, jobRef, signin
   const sizes = `${fmtBytes(doneBytes)} of ${fmtBytes(total)}`;
   if (hidden) return null;
   const live = <p className="visually-hidden" role="status">{phase === 'hashing' ? (quarter > 0 ? `${quarter * 25}% read · ${sizes}` : '') : phase === 'sealing' ? 'Sealing…' : output ? message : ''}</p>;
+  if (output?.bundle) return <>{live}<div className="handover handoff">
+    <h2 id="manifest-handoff-title" ref={headingRef} tabIndex={-1}>Proof bundle ready</h2>
+    <p>Case <strong>{output.caseId}</strong> · {output.names.length} original files</p>
+    <button id="seal-more-ask-action" className="button primary" type="button" onClick={() => {
+      download(`${output.caseId}.hashwing.zip`, output.bundle);
+      setOutput((current) => current?.bundle === output.bundle ? { ...current, requested: { file: true, receipt: true } } : current);
+    }}><Download size={16} aria-hidden="true" />Download proof bundle</button>
+    {output.requested?.file && !output.saved.file && <button className="button secondary" type="button" onClick={() => {
+      setOutput((current) => current?.bundle === output.bundle ? { ...current, saved: { file: true, receipt: true } } : current);
+    }}>Confirm download saved</button>}
+    <p>Send the ZIP with the originals through your existing delivery channel.</p>
+    {output.savedKey && <SenderFingerprint fingerprint={output.fingerprint} />}
+    {__REGISTRY_URL__ && shareNote && <p className="field-hint">The registry can record this receipt. Send the ZIP and originals to the recipient.</p>}
+    {ask ? <div className="actions-row">
+      <button className="button secondary" type="button" onClick={onKeep}>Keep this bundle open</button>
+      <button className="button secondary" type="button" onClick={sealMore}>{unsavedList ? 'Discard and open other job' : 'Open other job'}</button>
+    </div> : <button className="button secondary" type="button" disabled={unsavedList} onClick={sealMore}>Seal more files</button>}
+  </div></>;
   if (output) return <>{live}<Handoff headingRef={headingRef} headingId="manifest-handoff-title"
     summary={`Sealed · ${output.items} file${output.items === 1 ? '' : 's'} · ${exactBytes(output.total)}${output.jobRef ? ` · ${output.jobRef}` : ''}`}
     kind="list" fileName={output.log.name} receiptName={`${output.base}.receipt.txt`} unsaved={unsavedList} downloaded={output.saved.file} receiptSaved={output.saved.receipt} requested={output.requested} originals={output.names}
@@ -2662,6 +2730,9 @@ function ManifestSeal({ hidden, output, setOutput, carry, common, jobRef, signin
     {error && <p id="manifest-error" className="field-hint receipt-error">{error}</p>}
     {files.length > 0 && <><FileProgressList files={files} progress={progress} idPrefix="manifest-seal" label="Selected files" /><FileTotals rows={files} /></>}
     {common}
+    <label className="field-label" htmlFor="proof-case-id">Case ID <span>(for a proof bundle)</span></label>
+    <input id="proof-case-id" aria-describedby={caseId.trim() ? "proof-case-hint" : undefined} value={caseId} maxLength={64} disabled={busy} onChange={(e) => { setError(''); setCaseId(e.target.value); }} />
+    {caseId.trim() && <p id="proof-case-hint" className="field-hint">Use an opaque case reference. Include file names under More options to identify changed copies by name.</p>}
     <details className="report-details manifest-options"><summary>More options <ChevronDown size={17} aria-hidden="true" /></summary><div className="manifest-options-body">
       <label className="check-row"><input id="manifest-include-names" type="checkbox" checked={includeNames} disabled={busy} onChange={(e) => { reset(); setIncludeNames(e.target.checked); }} />Include file names</label>
       <label className="field-label" htmlFor="manifest-landing">Reported landing time <span>(optional, for all files, this computer's time zone)</span></label>
@@ -2686,7 +2757,7 @@ function ItemNote({ note, showLanding }) {
 }
 // The list (manifest) half of Verify's files form. The sealed file, message and key come from the form in App;
 // this holds the originals, the hashing and the result, and stays mounted so a running check survives navigation.
-function ManifestCheck({ sealed, text, fromLink, recordCheck, anchor, keyConflict, company, companyFingerprint, options, fieldError, onFieldError, trustHref, onTrust, onActiveChange }) {
+function ManifestCheck({ bundleReport, sealed, text, fromLink, recordCheck, anchor, keyConflict, company, companyFingerprint, options, fieldError, onFieldError, trustHref, onTrust, onActiveChange }) {
   const [locals, setLocals] = useState([]);
   const [progress, setProgress] = useState(null);
   const [running, setRunning] = useState(false);
@@ -2702,7 +2773,7 @@ function ManifestCheck({ sealed, text, fromLink, recordCheck, anchor, keyConflic
   useEffect(() => { if (firstRender.current) { firstRender.current = false; return; } clear(); }, [sealed, text, anchor, company]); // stale results go when an input changes
   const pinsVersion = usePinsVersion();
   const pinsRef = useRef(pinsVersion); pinsRef.current = pinsVersion;
-  const reportFor = (trust, o, registry = null) => manifestReport({ sealedName: o.sealedName, trust, sources: SOURCES, keyFingerprint: o.fingerprint, head: o.head, sealedAt: o.sealedAt, items: o.comparison.items, extras: o.comparison.extras, locals: o.locals, registry, applyRecord: __REGISTRY_URL__ ? recordCheck?.apply : null });
+  const reportFor = (trust, o, registry = null) => manifestReport({ sealedName: o.sealedName, trust, sources: SOURCES, keyFingerprint: o.fingerprint, head: o.head, sealedAt: o.sealedAt, proofReport: o.proofReport, items: o.comparison.items, extras: o.comparison.extras, locals: o.locals, registry, applyRecord: __REGISTRY_URL__ ? recordCheck?.apply : null });
   const registryLine = __REGISTRY_URL__ ? useRegistryTimeField(outcome?.verified ? parseHandover(text).receipts : '', { fromLink }) : null; // eslint-disable-line react-hooks/rules-of-hooks -- a build-time constant
   // The registry row follows this device's outbox live (queued, then Registered), so the report is rebuilt with it.
   // Rebuilt with the share record too, so a report never says Verified under a lowered headline (AC-37).
@@ -2730,7 +2801,7 @@ function ManifestCheck({ sealed, text, fromLink, recordCheck, anchor, keyConflic
     const revision = ++revisionRef.current;
     const controller = new AbortController(); controllerRef.current = controller;
     setOutcome(null); setMessage('');
-    if (keyConflict) { onFieldError('check-text', 'This message names more than one public key. Paste only the receipt message you received when the files were sealed.'); return; }
+    if (keyConflict) { onFieldError(bundleReport ? 'check-file' : 'check-text', 'This message names more than one public key. Paste only the receipt message you received when the files were sealed.'); return; }
     setRunning(true);
     try {
       let key = anchor;
@@ -2750,14 +2821,23 @@ function ManifestCheck({ sealed, text, fromLink, recordCheck, anchor, keyConflic
           return;
         }
       }
+      let proofReport;
+      if (bundleReport) {
+        try { proofReport = await readSignedReport(bundleReport, verified.manifest); }
+        catch (cause) {
+          if (revision === revisionRef.current) onFieldError('check-file', cause.message);
+          return;
+        }
+      }
+      const originals = proofReport ? { ...verified.manifest, items: verified.manifest.items.slice(0, -1) } : verified.manifest;
       const hashed = await hashAll(locals, controller.signal, setProgress);
       if (revision !== revisionRef.current) return;
       let comparison;
-      try { comparison = pairFiles(verified.manifest, hashed); } catch (cause) { onFieldError('check-originals', cause.message); return; }
+      try { comparison = pairFiles(originals, hashed); } catch (cause) { onFieldError('check-originals', cause.message); return; }
       const seenPins = pinsRef.current; // trust is read after hashing, so a pin changed meanwhile is never missed
       const trust = await (PILOT_AUTHORIZATION_ACCEPTED ? trustForProof(verified.publicKey, text) : trustForKey(verified.publicKey)).catch(() => ({ status: 'untrusted' }));
       if (revision !== revisionRef.current) return;
-      const facts = { sealedName: sealed.name, fingerprint, head: verified.head, sealedAt: parseSealedLine(text), comparison, locals: hashed, publicKey: verified.publicKey };
+      const facts = { sealedName: sealed.name, fingerprint, head: verified.head, sealedAt: proofReport ? null : parseSealedLine(text), proofReport, comparison, locals: hashed, publicKey: verified.publicKey };
       setOutcome({ verified: true, run: revision, focus: {}, ...facts, manifest: verified.manifest, trust, pinsVersion: seenPins, report: reportFor(trust, facts), base: sealed.name.replace(/\.manifest\.fseal$|\.fseal$/, '') || 'hashwing-manifest' });
     } catch (cause) {
       if (revision !== revisionRef.current && cause?.name === 'AbortError') return;
@@ -2784,7 +2864,7 @@ function ManifestCheck({ sealed, text, fromLink, recordCheck, anchor, keyConflic
       const local = item.local == null ? null : outcome.locals[item.local];
       return { key: `item-${item.id}`, name: item.name || `Item ${item.id} (sealed without a name)`, status: item.status, bytes: item.status === 'missing' ? null : item.bytes, sha256: item.sha256,
         note: <><ItemNote note={item.note} showLanding={showLanding} />{local && local.name !== item.name && <span className="manifest-note">Your file: {local.name}</span>}</>,
-        extra: item.status === 'bytes-differ' && result?.key !== 'differ' && <span className="manifest-note">{BYTES_DIFFER.text}</span> }; // the Files differ verdict already says it
+        extra: outcome.proofReport && item.status === 'missing' ? <span className="manifest-note">Request the sealed original for this item.</span> : item.status === 'bytes-differ' && (outcome.proofReport || result?.key !== 'differ') && <span className="manifest-note">{outcome.proofReport ? 'Request the exact sealed copy. An export or re-encode can change its bytes.' : BYTES_DIFFER.text}</span> }; // the Files differ verdict already says it
     }),
     ...comparison.extras.map((extra) => ({ key: `extra-${extra.local}`, name: extra.name, status: 'not-in-manifest', bytes: extra.bytes, sha256: extra.sha256 })),
   ] : [];
@@ -2802,8 +2882,11 @@ function ManifestCheck({ sealed, text, fromLink, recordCheck, anchor, keyConflic
     {message && <p className="field-hint" role="status">{message}</p>}
     {__REGISTRY_URL__ && outcome && recordPending && <p className="field-hint" role="status">Checking the share link…</p>}
     {result && <div className="manifest-outcome"><VerdictBlock result={result} focusKey={outcome.focus} trustHref={trustHref} onTrust={onTrust} downloads={outcome.verified ? downloads : []}
-      lines={outcome.mismatch ? [['Signature', 'Valid'], ['Trusted company', `Not signed by ${outcome.mismatch}'s key`], ...(TRUST_KIND[outcome.trust.status] === 'bad' ? [['Key trust', <TrustLine trust={outcome.trust} />]] : []), ...recordLines] : outcome.verified ? [['Signature', 'Valid'], ['Key trust', <TrustLine trust={outcome.trust} />], ['Files', <span className="mono-values">{countsLine(comparison.items, comparison.extras)}</span>], ['Receipt coverage', 'All items covered'], ...(registryLine ? [['Registry', registryLine.value]] : []), ...recordLines] : [['Signature', 'Not valid'], ...recordLines]}>
+      lines={outcome.mismatch ? [['Signature', 'Valid'], ['Trusted company', `Not signed by ${outcome.mismatch}'s key`], ...(TRUST_KIND[outcome.trust.status] === 'bad' ? [['Key trust', <TrustLine trust={outcome.trust} />]] : []), ...recordLines] : outcome.verified ? [['Signature', 'Valid'], [outcome.proofReport ? 'Signer trust' : 'Key trust', <TrustLine trust={outcome.trust} />], [outcome.proofReport ? 'File integrity' : 'Files', <span className="mono-values">{countsLine(comparison.items, comparison.extras)}</span>], ['Receipt coverage', 'All items covered'], ...(registryLine ? [['Registry', registryLine.value]] : []), ...recordLines] : [['Signature', 'Not valid'], ...recordLines]}>
       {outcome.verified && <>
+        {outcome.proofReport && <dl className="verdict-lines">
+          <div><dt>Case ID</dt><dd>{outcome.proofReport.caseId}</dd></div>
+        </dl>}
         <TimeFields fields={report.fields} />
         <CompareTable rows={rows} label="Files compared with the list" />
         {comparison.items.some((item) => item.status === 'missing' && !item.name) && <p className="field-hint">Files sealed without a name can only match or be missing.</p>}

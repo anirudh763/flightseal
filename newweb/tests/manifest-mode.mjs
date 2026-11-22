@@ -103,7 +103,8 @@ try {
         return path;
       };
       const capture = await saveDownload(captureLink);
-      const report = await saveDownload(pilot.getByRole('button', { name: 'Prepare evidence package' }));
+      const report = await saveDownload(pilot.getByRole('button', { name: 'Download inspection report' }));
+      await pilot.getByRole('button', { name: 'Prepare evidence package' }).click();
       await pilot.getByRole('button', { name: 'Seal the list', exact: true }).click();
       const manifest = await saveDownload(pilot.getByRole('button', { name: 'Download sealed list' }));
       const receipt = await saveDownload(pilot.getByRole('button', { name: 'Download receipt', exact: true }));
@@ -120,6 +121,63 @@ try {
       assert.match(await recipient.locator('.manifest-outcome .trust-line').innerText(), /isn't in your trusted list/);
     } finally {
       await Promise.all([pilotContext.close(), recipientContext.close()]);
+    }
+  });
+
+  await check('one proof ZIP authenticates case details and compares only the external originals', async () => {
+    const pilot = await browser.newPage({ acceptDownloads: true });
+    const recipient = await browser.newPage();
+    try {
+      await pilot.goto(`${url}#/app/protect`);
+      await pilot.getByRole('button', { name: 'Inspect flight sample' }).click();
+      const [capture] = await Promise.all([pilot.waitForEvent('download'), pilot.getByRole('link', { name: 'Download sample capture' }).click()]);
+      const original = join(dir, capture.suggestedFilename());
+      await capture.saveAs(original);
+      await pilot.getByRole('button', { name: 'Prepare evidence package' }).click();
+      await pilot.getByLabel('Case ID').fill('CLAIM-1048');
+      await pilot.locator('.manifest-options summary').click();
+      await pilot.locator('#manifest-include-names').check();
+      await pilot.locator('#manifest-landing').fill('2026-11-22T12:15');
+      await pilot.getByRole('button', { name: 'Seal the list', exact: true }).click();
+      const [bundle] = await Promise.all([pilot.waitForEvent('download'), pilot.getByRole('button', { name: 'Download proof bundle' }).click()]);
+      assert.equal(bundle.suggestedFilename(), 'CLAIM-1048.hashwing.zip');
+      const zip = join(dir, bundle.suggestedFilename());
+      await bundle.saveAs(zip);
+      await recipient.goto(`${url}#/app/verify`);
+      await recipient.locator('#check-file').setInputFiles(zip);
+      await recipient.locator('#check-originals').waitFor();
+      await recipient.getByRole('button', { name: 'Check files' }).click();
+      await recipient.waitForSelector('.manifest-table');
+      assert.deepEqual(await recipient.locator('.manifest-table .status-label').allTextContents(), ['Missing']);
+      assert.match(await recipient.locator('.manifest-table').innerText(), /Request the sealed original/);
+      assert.match(await recipient.locator('.manifest-outcome').innerText(), /CLAIM-1048/);
+      await recipient.locator('#check-originals').setInputFiles(original);
+      await recipient.getByRole('button', { name: 'Check files' }).click();
+      await recipient.waitForSelector('.manifest-table');
+      assert.deepEqual(await recipient.locator('.manifest-table .status-label').allTextContents(), ['Matches']);
+      const outcome = await recipient.locator('.manifest-outcome').innerText();
+      assert.match(outcome, /Signer trust/);
+      assert.match(outcome, /isn't in your trusted list/);
+      assert.match(outcome, /Flight ended · operator reported/);
+      assert.match(outcome, /Sealed · device clock/);
+      await recipient.locator('#check-originals').setInputFiles({
+        name: capture.suggestedFilename(), mimeType: 'application/octet-stream', buffer: Buffer.from('changed'),
+      });
+      await recipient.getByRole('button', { name: 'Check files' }).click();
+      await recipient.waitForSelector('.manifest-table');
+      assert.deepEqual(await recipient.locator('.manifest-table .status-label').allTextContents(), ['Bytes differ']);
+      assert.match(await recipient.locator('.manifest-table').innerText(), /Request the exact sealed copy/);
+      const { createProofBundle, openProofBundle } = await import('../src/proof-bundle.mjs');
+      const proof = await openProofBundle(new Blob([readFileSync(zip)]));
+      const forged = await createProofBundle(proof.log, proof.text, new Blob([(await proof.report.text()).replace('CLAIM-1048', 'CLAIM-1049')]));
+      await recipient.locator('#check-file').setInputFiles([
+        { name: 'substituted.zip', mimeType: 'application/zip', buffer: Buffer.from(await forged.arrayBuffer()) },
+      ]);
+      await recipient.getByRole('button', { name: 'Check files' }).click();
+      await recipient.getByText('The bundled report does not match the signed list. Request the original proof ZIP.').waitFor();
+      assert.equal(await recipient.locator('.manifest-table').count(), 0);
+    } finally {
+      await Promise.all([pilot.close(), recipient.close()]);
     }
   });
 
