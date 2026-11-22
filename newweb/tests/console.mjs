@@ -790,10 +790,10 @@ try {
     await page.setViewportSize({ width: 1440, height: 900 });
   });
 
-  await check('page shell: workbench strip only on Verify and More tools, one profile menu, full-height rail, 44px shell targets', async () => {
+  await check('page shell: workbench strip on evidence screens, one profile menu, full-height rail, 44px shell targets', async () => {
     await page.setViewportSize({ width: 1440, height: 900 });
     // AC-66
-    for (const [screen, shown] of [['protect', false], ['jobs', false], ['help', false], ['verify', true], ['records', true], ['receipts', true], ['sandbox', true], ['video', true], ['benchmarks', true], ['system', true]]) {
+    for (const [screen, shown] of [['protect', false], ['jobs', false], ['help', false], ['verify', true], ['records', true], ['receipts', true], ['sandbox', true], ['video', true], ['benchmarks', false], ['system', true]]) {
       await page.goto(`${url}#/app/${screen}`); await page.waitForSelector(`#page-${screen}`);
       assert.equal(await page.locator('.session-strip').isVisible(), shown, `${screen}: session strip ${shown ? 'shown' : 'hidden'}`);
       assert.equal(await page.locator('.source-actions').isVisible(), shown, `${screen}: Source and report actions ${shown ? 'shown' : 'hidden'}`);
@@ -838,14 +838,12 @@ try {
       assert.deepEqual(small, [], `${width}px: undersized shell targets ${JSON.stringify(small)}`);
     }
     await page.setViewportSize({ width: 1440, height: 900 });
-    // At 768px and below "Other apps" is part of the Menu panel, after More tools, not a row of its own under the brand.
     for (const width of [375, 768]) {
       await page.setViewportSize({ width, height: 900 });
       await page.goto(`${url}#/app/help`); await page.waitForSelector('#page-help');
-      assert.equal(await page.locator('.workbench-rail .workspace-tools-menu:visible').count(), 0, `${width}px: Other apps is hidden while the menu is closed`);
       await page.locator('.rail-menu').click();
-      assert.equal(await page.locator('#primary-nav > :last-child').evaluate((el) => el.matches('.workspace-tools-menu') && !!el.getClientRects().length && el.previousElementSibling.matches('.nav-more')), true, `${width}px: Other apps is inside the open menu, after More tools`);
-      assert.equal(await page.locator('.workbench-rail .workspace-tools-menu:visible').count(), 1);
+      assert.equal(await page.getByText('Other apps', { exact: true }).count(), 0);
+      assert.equal(await page.locator('#primary-nav .nav-more').isVisible(), true);
       await page.locator('.rail-menu').click();
     }
     await page.setViewportSize({ width: 1440, height: 900 });
