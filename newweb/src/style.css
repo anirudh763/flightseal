@@ -1154,19 +1154,6 @@ input[type=datetime-local] { width: 100%; max-width: 320px; min-width: 0; min-he
 .handoff-step-title { font-weight: 700; }
 .handoff-original-list { margin: 4px 0; padding-left: 1.2em; }
 
-/* At phone and tablet width "Other apps" belongs in the Menu panel, after More tools, not on a row of its own. */
-.workbench-rail .nav-apps { display: none; }
-@media (max-width: 768px) {
-  .workbench-rail .rail-apps { display: none; }
-  .workbench-rail .nav .nav-apps { display: block; grid-column: 1 / -1; justify-self: stretch; flex-basis: 100%; margin: 0; padding-top: 6px; border-top: 1px solid var(--line); }
-  .workbench-rail .nav .nav-apps summary { min-height: 44px; padding: 8px 10px; border: 0; color: #25364b; font-size: 13px; }
-  .workbench-rail .nav .nav-apps summary { list-style: none; }
-  .workbench-rail .nav .nav-apps summary::-webkit-details-marker { display: none; }
-  .workbench-rail .nav .nav-apps summary::after { content: "▸"; margin-left: auto; color: #2355ba; }
-  .workbench-rail .nav .nav-apps[open] summary::after { content: "▾"; }
-  .workbench-rail .nav .nav-apps > div { position: static; min-width: 0; box-shadow: none; border: 0; }
-}
-
 /* Verify (release layout): the opening choice, one form, the verdict and the file comparison. */
 .verify-chooser { margin: 0 0 16px; padding: 0; border: 0; min-width: 0; }
 .verify-chooser legend { padding: 0; margin-bottom: 8px; font-weight: 700; color: var(--ink); }
@@ -1303,3 +1290,16 @@ table.jobs-table { min-width: 0; width: 100%; table-layout: auto; }
   .jobs-detail-row .actions-row .button, .jobs-detail-row .registry-delete > .button { width: 100%; }
 }
 @media (forced-colors: active) { .jobs-status { border: 1px solid CanvasText; } }
+
+.capture-inspection input { min-height: 44px; max-width: 100%; }
+.capture-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 12px; }
+.capture-result { border-top: 1px solid var(--line); padding-top: 16px; overflow-wrap: anywhere; }
+.capture-result dl { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 12rem), 1fr)); gap: 12px; }
+.capture-result dd { margin: 0; font-size: 1.4rem; font-variant-numeric: tabular-nums; }
+.flight-view { margin-block: 24px; }
+.flight-view canvas { display: block; inline-size: 100%; block-size: auto; max-inline-size: 640px; background: #edf3fa; border-radius: 8px; margin-block: 12px; }
+.capture-inspection h4 { margin-block: 0 12px; font-size: 1.15rem; }
+.review-queue-list { padding: 0; list-style: none; }
+.review-queue-list li { display: grid; gap: 8px; border-top: 1px solid var(--line); padding-block: 12px; justify-items: start; min-width: 0; }
+.review-queue-list code { overflow-wrap: anywhere; }
+#review-digest { display: block; width: min(100%, 42rem); min-height: 44px; margin-bottom: 8px; }

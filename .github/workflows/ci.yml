@@ -236,4 +236,4 @@ jobs:
       - name: Install HTTP runtime test dependencies
         run: python -m pip install -r requirements-web.txt pytest
       - name: HTTP runtime security, routing and lifecycle regressions
-        run: python -m pytest -q tests/http_server_regression.py
+        run: python -m pytest -q tests/http_server_regression.py tests/review_queue_regression.py

@@ -357,7 +357,7 @@ class Persistence:
         parsed = urlsplit(path_with_query)
         if not parsed.path.startswith('/api/'):
             return None
-        routes = ('/api/session', '/api/workspaces', '/api/runs', '/api/exports', '/api/artifacts', '/api/sync', '/api/samples')
+        routes = ('/api/session', '/api/workspaces', '/api/runs', '/api/exports', '/api/artifacts', '/api/sync', '/api/samples', '/api/review-queue')
         if not any(parsed.path == route or parsed.path.startswith(route + '/') for route in routes):
             return None
         headers = {str(key).lower(): value for key, value in headers_dict.items()}
@@ -487,6 +487,32 @@ class Persistence:
         if mutation and not hmac.compare_digest(str(headers.get('x-csrf-token', '')).encode(), session['csrf'].encode()):
             fail(403, 'csrf', 'A valid CSRF token is required')
         owner = session['principal']
+        if self.app == 'hashwing' and path == '/api/review-queue':
+            if method == 'POST':
+                data = self._json(raw)
+                digest = data.get('digest')
+                if set(data) != {'digest'} or not isinstance(digest, str) or len(digest) != 64 or any(c not in '0123456789abcdef' for c in digest):
+                    fail(400, 'invalid_digest', 'A lowercase SHA-256 fingerprint is required')
+                existing = db.execute('SELECT id FROM review_queue WHERE owner=? AND digest=?', (owner, digest)).fetchone()
+                if existing:
+                    return self._response(200, {'id': existing['id']})
+                if db.execute('SELECT COUNT(*) FROM review_queue WHERE owner=?', (owner,)).fetchone()[0] >= 100:
+                    fail(409, 'quota', 'Review queue limit reached')
+                job_id = str(uuid.uuid4())
+                db.execute('INSERT INTO review_queue VALUES (?,?,?,?,NULL)', (job_id, owner, digest, now()))
+                return self._response(201, {'id': job_id})
+            if method == 'GET':
+                rows = db.execute('SELECT id,digest,created_at,processed_at FROM review_queue WHERE owner=? ORDER BY processed_at IS NOT NULL, created_at, id LIMIT 100', (owner,))
+                return self._response(200, {'items': [dict(row) for row in rows]})
+        if self.app == 'hashwing' and path == '/api/review-queue/complete' and method == 'POST':
+            data = self._json(raw)
+            job_id = data.get('id')
+            if not isinstance(job_id, str) or len(job_id) != 36:
+                fail(400, 'invalid_job', 'A queue item identifier is required')
+            updated = db.execute('UPDATE review_queue SET processed_at=coalesce(processed_at,?) WHERE id=? AND owner=?', (now(), job_id, owner))
+            if updated.rowcount != 1:
+                fail(404, 'not_found', 'Queue item not found')
+            return self._response(200, {'id': job_id})
         if path == '/api/session' and method == 'GET':
             return self._response(200, self._session_data(db, session))
         if path == '/api/session/workspace' and method == 'POST':

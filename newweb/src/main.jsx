@@ -1,3 +1,4 @@
+import { ReviewQueue } from './review-queue.jsx';
 import React, { useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { createRoot } from 'react-dom/client';
 import { Activity, ArrowRight, Building2, Check, Copy, Download, Gauge, ChevronDown, CircleHelp, ClipboardList, FileCheck2, FileLock2, KeyRound, Mail, FlaskConical, List, MapPin, Menu, ShieldCheck, Stamp, UserRound, Video } from 'lucide-react';
@@ -15,7 +16,7 @@ import './style.css';
 import './server-workspace.js';
 import './server-workspace.css';
 import { BenchmarkPage, SystemPage } from './product-pages.jsx';
-import { SUITE_LINKS } from './suite.mjs';
+import { CaptureInspection } from './mavlink/inspection.jsx';
 import { FeedbackDialog, FooterLinks, InstallGuide, LegalPage, QuickStart, ShareDialog } from './pwa-ui.jsx';
 import { detectInstallKind, invokeInstallPrompt, invokeNativeShare } from './platform.mjs';
 import { convertTelemetryFile, inspectCsvFile } from './telemetry-import.mjs';
@@ -47,7 +48,7 @@ function closeDisclosure(event) {
 const PRIMARY_NAV = [['protect', 'Seal & send', FileLock2], ['verify', 'Verify', ShieldCheck], ['jobs', 'Jobs', ClipboardList], ['help', 'Trust', CircleHelp]];
 const MORE_NAV = [['records', 'Records', List], ['receipts', 'Receipts', Stamp], ['sandbox', 'Samples', FlaskConical], ['video', 'Video', Video], ['benchmarks', 'Benchmarks', Gauge], ['system', 'System', Activity]];
 const NAV = [...PRIMARY_NAV, ...MORE_NAV];
-const WORKBENCH_SCREENS = new Set(['verify', ...MORE_NAV.map(([key]) => key)]);
+const WORKBENCH_SCREENS = new Set(['verify', ...MORE_NAV.map(([key]) => key).filter((key) => key !== 'benchmarks')]);
 const CANONICAL_NAV = [['overview','Overview',Gauge],['workbench','Workbench',FlaskConical],['reports','Reports',List],['settings','Settings',Activity]];
 const asBig = (value) => typeof value === 'bigint' ? value : BigInt(value ?? 0);
 const csvMappingSummary = (mapping) => Object.entries(mapping || {}).filter(([key, value]) => key.endsWith('Column') && value).map(([key, value]) => {
@@ -1817,8 +1818,6 @@ function App() {
   // AC-66: the session strip and source actions belong to Verify and the More tools pages only.
   const hideWorkbenchStrip = canonicalPage ? canonicalPage !== 'workbench' || screen === 'protect' : !WORKBENCH_SCREENS.has(screen);
   const navLink = ([key, label, Icon]) => <a key={key} href={workspaceHref(key, { sample: currentSample, record: selectedRecord })} aria-current={(productMode ? canonicalPage : screen) === key ? 'page' : undefined} onClick={(e) => { if (e.button !== 0 || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return; e.preventDefault(); navigate(key); }}><Icon size={16} strokeWidth={1.8} aria-hidden="true" />{productMode && key === 'sandbox' ? 'Upload and seal' : label}</a>;
-  // "Other apps": at the foot of the rail on wide screens, inside the Menu panel after More tools at 768px and below (CSS shows one).
-  const otherApps = (className) => <details className={className} onKeyDown={closeDisclosure}><summary>Other apps</summary><div>{SUITE_LINKS.map((tool) => tool.state === 'unavailable' ? <span key={tool.name} aria-disabled="true">{tool.name} · unavailable (HTTP 404)</span> : <a key={tool.name} href={tool.href} target="_blank" rel="noreferrer">{tool.name}</a>)}</div></details>;
   return <div className={`app-shell${canonicalPage ? ` canonical-page canonical-${canonicalPage}` : ''}`}>
     <a className="skip-link" href="#main" onClick={(event) => { event.preventDefault(); document.getElementById('main')?.focus(); }}>Skip to content</a>
     <aside className="workbench-rail" aria-label="HashWing">
@@ -1827,10 +1826,8 @@ function App() {
       <nav id="primary-nav" className={`nav${menuOpen ? ' open' : ''}`} aria-label="Primary navigation">
         {(productMode ? CANONICAL_NAV : PRIMARY_NAV).map(navLink)}
         {!productMode && <details ref={moreRef} className="nav-more" onKeyDown={closeDisclosure}><summary>More tools</summary>{MORE_NAV.map(navLink)}</details>}
-        {otherApps('workspace-tools-menu nav-apps')}
       </nav>
       <div className="rail-foot"><span className="local-dot" aria-hidden="true" />Local files</div>
-        {otherApps('workspace-tools-menu rail-apps')}
     </aside>
     <div className="workspace">
     <header className="topbar commandbar">
@@ -1874,7 +1871,7 @@ function App() {
       </section>}
       {screen === 'settings' && <section aria-label="Workspace settings"><server-workspace view="settings" /><details className="report-details"><summary>Browser profiles and encrypted backups</summary>{profileControls}</details><details className="report-details trusted-companies-details"><summary>Trusted companies <ChevronDown size={17} aria-hidden="true" /></summary><TrustedCompanies /></details><SystemPage /></section>}
       {canonicalPage === 'workbench' && <server-workspace view="workbench" />}
-      {screen === 'system' && <><SystemPage /><p className="system-handoff">Raw MAVLink v1/v2 streams open in Mavframe, a separate tool. No file is sent. <a href="https://anirudh763.github.io/mavframe/" target="_blank" rel="noreferrer">Open Mavframe</a></p></>}
+      {screen === 'system' && <SystemPage />}
       {screen === 'benchmarks' && <BenchmarkPage />}
       {screen === 'not-found' && <section className="screen"><section className="panel empty-state" aria-labelledby="not-found-title"><h2 id="not-found-title">Page not found</h2><p>The address does not match a HashWing page.</p><button className="button primary" type="button" onClick={() => navigate('sandbox')}>Return to samples</button></section></section>}
 
@@ -1928,7 +1925,9 @@ function App() {
         </div></section>
       </section>
       {/* Every build lists jobs here (AC-60); the flag-on build keeps registry-ui's list here (assign, retry, export/import, share, delete) and shows registry statuses on Jobs. */}
+      {screen === 'protect' && <div className="screen"><CaptureInspection onPackage={(files) => { setCarryToLarge({ files }); setProtectMode('manifest'); }} packageBlocked={sealRunning || !!manifestOutput || !!protectSealed || !!protectFile || !!resumedJob} /></div>}
       {!__REGISTRY_URL__ && screen === 'protect' && <div className="screen"><SealedRecent rows={jobs.rows} storage={jobs.storage} notice={jobsNotice || jobs.error} allJobsHref={workspaceHref('jobs')} onAllJobs={(e) => { if (e.button !== 0 || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return; e.preventDefault(); navigate('jobs'); }} /></div>}
+      {screen === 'jobs' && document.querySelector('meta[name="server-persistence"][content="enabled"]') && <div className="screen"><ReviewQueue key={localScope} /></div>}
       {screen === 'jobs' && <JobsPage rows={jobs.rows} loaded={jobsState.scope === localScope && (jobsRegistry?.ready ?? true)} resumeBlocked={sealRunning} storage={jobs.storage} error={jobs.error || jobsNotice} q={route.params.get('q') || ''} page={Number(route.params.get('page')) || 1}
         {...(jobsRegistry && { statusOf: jobsRegistry.statusOf, filters: jobsRegistry.filters, detailLabel: jobsRegistry.detailLabel, detailActions: jobsRegistry.detailActions, status: route.params.get('status') || '' })}
         onUrl={setJobsUrl} onResume={resumeJob} onRemove={removeJob} onDownload={(name, text) => download(name, text, 'application/json')}
@@ -2563,7 +2562,7 @@ function ManifestSeal({ hidden, output, setOutput, carry, common, jobRef, signin
   const reset = () => { controllerRef.current?.abort(); setOutput(null); setMessage(''); setCopyStatus(''); setError(''); };
   useEffect(() => { // a file too large for Small file arrives already chosen, ready for "Seal the list"
     if (!carry || output || phase) return;
-    choose([carry.file]); carriedRef.current = true;
+    choose(carry.files || [carry.file]); carriedRef.current = true;
   }, [carry]); // eslint-disable-line react-hooks/exhaustive-deps
   useEffect(() => { // enabled now; the native field names the carried file too, instead of "No file chosen"
     if (!carriedRef.current || !files.length) return;
