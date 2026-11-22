@@ -7,7 +7,11 @@ async function request(path, body, csrf) {
     body: JSON.stringify(body),
   });
   const data = await response.json();
-  if (!response.ok) throw new Error(data.error?.message || 'The queue is unavailable.');
+  if (!response.ok) {
+    const error = new Error(data.error?.message || 'The queue is unavailable.');
+    error.status = response.status;
+    throw error;
+  }
   return data;
 }
 
@@ -16,16 +20,19 @@ export function ReviewQueue() {
   const [digest, setDigest] = useState('');
   const [status, setStatus] = useState('');
   const [busy, setBusy] = useState(true);
+  const [needsSession, setNeedsSession] = useState(false);
   async function run(action) {
     setBusy(true);
     setStatus('');
     try {
       if (action) await action();
       setRows((await request('review-queue')).items);
+      setNeedsSession(false);
       if (action) setStatus('Review queue updated.');
     } catch (error) {
       setRows([]);
-      setStatus(error.message);
+      setNeedsSession(error.status === 401);
+      setStatus(error.status === 401 ? 'Start a review session to use the queue.' : error.message);
     } finally {
       setBusy(false);
     }
@@ -39,14 +46,14 @@ export function ReviewQueue() {
     <div className="panel-head"><h2 id="review-queue-title">Evidence review queue</h2></div>
     <div className="panel-body">
       <p>Queue a SHA-256 fingerprint for follow-up. Review and verify the original files separately.</p>
-      <form onSubmit={event => {
+      {needsSession ? <button type="button" className="button primary" disabled={busy} onClick={() => void run(() => request('session/guest', {}))}>Start review session</button> : <form onSubmit={event => {
         event.preventDefault();
         void run(async () => { await submit('review-queue', { digest: digest.trim().toLowerCase() }); setDigest(''); });
       }}>
         <label className="field-label" htmlFor="review-digest">SHA-256 fingerprint</label>
         <input id="review-digest" className="mono-input" value={digest} maxLength={64} onChange={e => setDigest(e.target.value)} />
         <button className="button primary" disabled={busy || !/^[a-f0-9]{64}$/i.test(digest.trim())}>Queue for review</button>
-      </form>
+      </form>}
       <button className="button secondary" disabled={busy} type="button" onClick={() => void run()}>Refresh queue</button>
       <p role="status">{busy ? 'Loading review queue…' : status}</p>
       {!busy && !status && !rows.length && <p>No evidence queued.</p>}
