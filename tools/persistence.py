@@ -39,6 +39,8 @@ TOTAL_LIMIT = 256 * 1024 * 1024
 SNAPSHOT_LIMIT = 32 * 1024 * 1024
 RECORD_LIMIT = 64 * 1024 * 1024
 MAX_ACTIVE_GUEST_SESSIONS = 1000
+REVIEW_QUEUE_LIMIT = 100
+REVIEW_HISTORY_LIMIT = 100
 KINDS = {
     'hashwing': {'verification', 'sealing'},
     'mavframe': {'capture', 'analysis'},
@@ -456,6 +458,36 @@ class Persistence:
         if stored_bytes > RECORD_LIMIT:
             fail(409, 'quota', 'Application record storage limit reached')
 
+    @staticmethod
+    def _pending_review_count(db, owner):
+        return db.execute(
+            'SELECT count(*) FROM review_queue WHERE owner=? AND processed_at IS NULL', (owner,),
+        ).fetchone()[0]
+
+    @staticmethod
+    def _trim_review_history(db, owner):
+        db.execute(
+            'DELETE FROM review_queue WHERE rowid IN ('
+            'SELECT rowid FROM review_queue WHERE owner=? AND processed_at IS NOT NULL '
+            'ORDER BY processed_at DESC,rowid DESC LIMIT -1 OFFSET ?)', (owner, REVIEW_HISTORY_LIMIT),
+        )
+
+    def _transfer_guest_reviews(self, db, guest, account):
+        # Keep the account's ID on duplicates and preserve a completed review from either session.
+        db.execute(
+            'UPDATE review_queue AS target SET processed_at=coalesce(target.processed_at, ('
+            'SELECT source.processed_at FROM review_queue AS source WHERE source.owner=? AND source.digest=target.digest'
+            ')) WHERE target.owner=? AND target.processed_at IS NULL', (guest, account),
+        )
+        db.execute(
+            'DELETE FROM review_queue WHERE owner=? AND digest IN (SELECT digest FROM review_queue WHERE owner=?)',
+            (guest, account),
+        )
+        db.execute('UPDATE review_queue SET owner=? WHERE owner=?', (account, guest))
+        if self._pending_review_count(db, account) > REVIEW_QUEUE_LIMIT:
+            fail(409, 'quota', 'Review pending guest items before moving this queue into the account')
+        self._trim_review_history(db, account)
+
     def _handle(self, db, method, path, query, headers, raw, ip):
         mutation = method not in {'GET', 'HEAD'}
         if method == 'HEAD':
@@ -496,14 +528,23 @@ class Persistence:
                 existing = db.execute('SELECT id FROM review_queue WHERE owner=? AND digest=?', (owner, digest)).fetchone()
                 if existing:
                     return self._response(200, {'id': existing['id']})
-                if db.execute('SELECT COUNT(*) FROM review_queue WHERE owner=?', (owner,)).fetchone()[0] >= 100:
-                    fail(409, 'quota', 'Review queue limit reached')
+                if self._pending_review_count(db, owner) >= REVIEW_QUEUE_LIMIT:
+                    fail(409, 'quota', 'Review pending items before adding more to this queue')
                 job_id = str(uuid.uuid4())
                 db.execute('INSERT INTO review_queue VALUES (?,?,?,?,NULL)', (job_id, owner, digest, now()))
                 return self._response(201, {'id': job_id})
             if method == 'GET':
-                rows = db.execute('SELECT id,digest,created_at,processed_at FROM review_queue WHERE owner=? ORDER BY processed_at IS NOT NULL, created_at, id LIMIT 100', (owner,))
-                return self._response(200, {'items': [dict(row) for row in rows]})
+                pending = db.execute(
+                    'SELECT id,digest,created_at,processed_at FROM review_queue WHERE owner=? AND processed_at IS NULL '
+                    'ORDER BY created_at,id LIMIT ?', (owner, REVIEW_QUEUE_LIMIT),
+                )
+                items = [dict(row) for row in pending]
+                completed = db.execute(
+                    'SELECT id,digest,created_at,processed_at FROM review_queue WHERE owner=? AND processed_at IS NOT NULL '
+                    'ORDER BY processed_at DESC,rowid DESC LIMIT ?', (owner, REVIEW_HISTORY_LIMIT),
+                )
+                items.extend(dict(row) for row in completed)
+                return self._response(200, {'items': items})
         if self.app == 'hashwing' and path == '/api/review-queue/complete' and method == 'POST':
             data = self._json(raw)
             job_id = data.get('id')
@@ -512,6 +553,7 @@ class Persistence:
             updated = db.execute('UPDATE review_queue SET processed_at=coalesce(processed_at,?) WHERE id=? AND owner=?', (now(), job_id, owner))
             if updated.rowcount != 1:
                 fail(404, 'not_found', 'Queue item not found')
+            self._trim_review_history(db, owner)
             return self._response(200, {'id': job_id})
         if path == '/api/session' and method == 'GET':
             return self._response(200, self._session_data(db, session))
@@ -601,6 +643,8 @@ class Persistence:
             self.auth_slots.release()
         migrated_from = None
         if old['role'] == 'guest':
+            if self.app == 'hashwing':
+                self._transfer_guest_reviews(db, old['principal'], principal)
             for table in ('workspaces', 'runs', 'artifacts', 'exports', 'snapshots'):
                 updated = db.execute(f'UPDATE {table} SET owner=? WHERE owner=?', (principal, old['principal']))
                 if table == 'workspaces' and updated.rowcount:

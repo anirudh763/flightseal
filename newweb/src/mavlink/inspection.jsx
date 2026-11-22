@@ -12,6 +12,7 @@ export function CaptureInspection({ onPackage, packageBlocked }) {
   const original = useRef(null);
   const active = useRef(null);
   const [result, setResult] = useState(null);
+  const [sampleDownload, setSampleDownload] = useState(null);
   const [status, setStatus] = useState('');
   const [busy, setBusy] = useState(false);
   useEffect(() => () => {
@@ -32,6 +33,7 @@ export function CaptureInspection({ onPackage, packageBlocked }) {
     const task = { stop: () => controller.abort() };
     active.current = task;
     setResult(null);
+    setSampleDownload(null);
     setBusy(true);
     setStatus('Inspecting capture…');
     function finish(message, report = null) {
@@ -43,6 +45,7 @@ export function CaptureInspection({ onPackage, packageBlocked }) {
       setStatus(message);
     }
     try {
+      const isSample = !file;
       if (!file) {
         const response = await fetch(sampleUrl, { signal: controller.signal });
         if (!response.ok) throw new Error('The sample could not load. Choose a local capture or try again.');
@@ -56,6 +59,7 @@ export function CaptureInspection({ onPackage, packageBlocked }) {
         if (data.error) finish(data.error);
         else if (active.current === task) {
           original.current = file;
+          if (isSample) setSampleDownload(sampleUrl);
           finish('Inspection complete.', { ...data.result, name: file.name });
         }
       };
@@ -94,16 +98,19 @@ export function CaptureInspection({ onPackage, packageBlocked }) {
           <li key={i}>{labels[kind] || kind} at byte {offset}</li>)}</ul>}
         {result.omitted > 0 && <p>{result.omitted} additional findings omitted.</p>}
         <FlightView tracks={result.tracks} partial={result.unlistedFrames} />
-        <button className="button secondary" type="button" disabled={packageBlocked} onClick={() => {
-          const report = new File([JSON.stringify(result, null, 2) + '\n'], 'hashwing-flight-report.json', { type: 'application/json' });
-          const url = URL.createObjectURL(report);
-          const link = document.createElement('a');
-          link.href = url;
-          link.download = report.name;
-          link.click();
-          setTimeout(() => URL.revokeObjectURL(url), 1000);
-          onPackage([original.current, report]);
-        }}>Prepare evidence package</button>
+        <div className="capture-actions">
+          {sampleDownload && <a className="button secondary" href={sampleDownload} download={result.name}>Download sample capture</a>}
+          <button className="button secondary" type="button" disabled={packageBlocked} onClick={() => {
+            const report = new File([JSON.stringify(result, null, 2) + '\n'], 'hashwing-flight-report.json', { type: 'application/json' });
+            const url = URL.createObjectURL(report);
+            const link = document.createElement('a');
+            link.href = url;
+            link.download = report.name;
+            link.click();
+            setTimeout(() => URL.revokeObjectURL(url), 1000);
+            onPackage([original.current, report]);
+          }}>Prepare evidence package</button>
+        </div>
         <p>Packet sender authentication was skipped. Use Seal &amp; send to preserve the original capture.</p>
       </div>}
     </div>

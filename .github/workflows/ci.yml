@@ -165,6 +165,8 @@ jobs:
       - name: Console flows, mobile layouts and accessibility
         working-directory: newweb
         run: npm run test:browser
+      - name: MAVLink inspection and report contracts
+        run: node --test newweb/tests/mavlink-inspection.test.mjs
       - name: Nine real-engine edge cases and tampered report exports
         run: node newweb/tests/edge-matrix.mjs
       - name: Root-hosted keyboard, offline updates and production routes

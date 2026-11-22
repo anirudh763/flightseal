@@ -86,6 +86,43 @@ try {
   };
 
 
+  await check('sample capture and report can be downloaded, sealed and checked by a fresh recipient', async () => {
+    const pilotContext = await browser.newContext({ acceptDownloads: true });
+    const recipientContext = await browser.newContext();
+    try {
+      const pilot = await pilotContext.newPage();
+      const recipient = await recipientContext.newPage();
+      await pilot.goto(`${url}#/app/protect`);
+      await pilot.getByRole('button', { name: 'Inspect flight sample' }).click();
+      const captureLink = pilot.getByRole('link', { name: 'Download sample capture' });
+      await captureLink.waitFor({ timeout: 5000 });
+      const saveDownload = async (control) => {
+        const [download] = await Promise.all([pilot.waitForEvent('download'), control.click()]);
+        const path = join(dir, download.suggestedFilename());
+        await download.saveAs(path);
+        return path;
+      };
+      const capture = await saveDownload(captureLink);
+      const report = await saveDownload(pilot.getByRole('button', { name: 'Prepare evidence package' }));
+      await pilot.getByRole('button', { name: 'Seal the list', exact: true }).click();
+      const manifest = await saveDownload(pilot.getByRole('button', { name: 'Download sealed list' }));
+      const receipt = await saveDownload(pilot.getByRole('button', { name: 'Download receipt', exact: true }));
+      const handover = readFileSync(receipt, 'utf8');
+
+      await recipient.goto(`${url}#/app/verify`);
+      await recipient.locator('#check-file').setInputFiles(manifest);
+      await recipient.locator('#check-text').fill(handover);
+      await recipient.locator('#check-originals').setInputFiles([capture, report]);
+      await fillKey(recipient, /Public key: ([0-9a-f]{64})/.exec(handover)[1]);
+      await recipient.getByRole('button', { name: 'Check files' }).click();
+      await recipient.waitForSelector('.manifest-table');
+      assert.deepEqual(await recipient.locator('.manifest-table .status-label').allTextContents(), ['Matches', 'Matches']);
+      assert.match(await recipient.locator('.manifest-outcome .trust-line').innerText(), /isn't in your trusted list/);
+    } finally {
+      await Promise.all([pilotContext.close(), recipientContext.close()]);
+    }
+  });
+
   await check('Small file (embedded) is the default and keeps its controls', async () => {
     assert.equal(await page.getByLabel('Small file: seal the whole file, up to 45 MiB').isChecked(), true);
     assert.equal(await page.locator('#protect-file').count(), 1);
